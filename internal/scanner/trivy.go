@@ -142,7 +142,8 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 
 	jobs := make(chan int)
 	results := make([]scanResult, len(images))
-	ctx, cancel := context.WithCancel(ctx)
+	parentCtx := ctx
+	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -185,6 +186,9 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	wg.Wait()
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		if parentErr := parentCtx.Err(); parentErr != nil {
+			return nil, nil, parentErr
+		}
 		for _, result := range results {
 			if result.err != nil && !isContextError(result.err) {
 				return nil, nil, result.err
@@ -201,6 +205,9 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	var cleanupWarnings []Warning
 	if options.CacheCleanup != CleanupNever && options.CacheCleaner != nil && completedScanCount(results) > 0 {
 		if cleanupErr := options.CacheCleaner.Cleanup(ctx); cleanupErr != nil {
+			if parentErr := parentCtx.Err(); parentErr != nil {
+				return nil, nil, parentErr
+			}
 			if isContextError(cleanupErr) {
 				return nil, nil, cleanupErr
 			}
@@ -212,6 +219,9 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 			})
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			if parentErr := parentCtx.Err(); parentErr != nil {
+				return nil, nil, parentErr
+			}
 			return nil, nil, ctxErr
 		}
 	}
