@@ -12,12 +12,15 @@ func TestParseDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	cfg, err := Parse([]string{})
+	cfg, err := Parse([]string{"k8s"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
 
-	wantCacheDir := filepath.Join(home, ".cache", "trivy", "k8s-vdr")
+	wantCacheDir := filepath.Join(home, ".cache", "trivy", "vdr")
+	if cfg.Source != "k8s" {
+		t.Fatalf("Source = %q, want k8s", cfg.Source)
+	}
 	if cfg.AllNamespaces != true {
 		t.Fatalf("AllNamespaces = %v, want true", cfg.AllNamespaces)
 	}
@@ -48,7 +51,7 @@ func TestParseDefaults(t *testing.T) {
 }
 
 func TestParseNamespaceFlags(t *testing.T) {
-	cfg, err := Parse([]string{"--namespace", "prod", "--namespace", "dev"})
+	cfg, err := Parse([]string{"k8s", "--namespace", "prod", "--namespace", "dev"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -61,8 +64,52 @@ func TestParseNamespaceFlags(t *testing.T) {
 	}
 }
 
+func TestParseAllowsGlobalFlagsBeforeAndAfterK8sSource(t *testing.T) {
+	cfg, err := Parse([]string{"--format", "table", "k8s", "--view", "resources", "--timeout", "45s"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if cfg.Source != "k8s" {
+		t.Fatalf("Source = %q, want k8s", cfg.Source)
+	}
+	if cfg.Format != "table" {
+		t.Fatalf("Format = %q, want table", cfg.Format)
+	}
+	if cfg.View != "resources" {
+		t.Fatalf("View = %q, want resources", cfg.View)
+	}
+	if cfg.Timeout != 45*time.Second {
+		t.Fatalf("Timeout = %v, want 45s", cfg.Timeout)
+	}
+}
+
+func TestParseRequiresSource(t *testing.T) {
+	_, err := Parse([]string{})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want source required error")
+	}
+	if !strings.Contains(err.Error(), "source") {
+		t.Fatalf("error = %q, want source context", err.Error())
+	}
+}
+
+func TestParseReservedSourcesReturnNotImplemented(t *testing.T) {
+	for _, source := range []string{"ecs", "image"} {
+		t.Run(source, func(t *testing.T) {
+			_, err := Parse([]string{source})
+			if err == nil {
+				t.Fatal("Parse returned nil error, want not implemented error")
+			}
+			if !strings.Contains(err.Error(), `source "`+source+`" is not implemented yet`) {
+				t.Fatalf("error = %q, want not implemented source context", err.Error())
+			}
+		})
+	}
+}
+
 func TestParseRejectsConflictingNamespaceScope(t *testing.T) {
-	_, err := Parse([]string{"--namespace", "prod", "--all-namespaces"})
+	_, err := Parse([]string{"k8s", "--namespace", "prod", "--all-namespaces"})
 	if err == nil {
 		t.Fatal("Parse returned nil error, want conflicting namespace scope error")
 	}
@@ -72,7 +119,7 @@ func TestParseRejectsConflictingNamespaceScope(t *testing.T) {
 }
 
 func TestParseNamespaceRejectsInvalidNames(t *testing.T) {
-	_, err := Parse([]string{"--namespace", "bad/name"})
+	_, err := Parse([]string{"k8s", "--namespace", "bad/name"})
 	if err == nil {
 		t.Fatal("Parse returned nil error, want invalid namespace error")
 	}
@@ -82,7 +129,7 @@ func TestParseNamespaceRejectsInvalidNames(t *testing.T) {
 }
 
 func TestParseNamespaceRejectsNamesLongerThan63Characters(t *testing.T) {
-	_, err := Parse([]string{"--namespace", strings.Repeat("a", 64)})
+	_, err := Parse([]string{"k8s", "--namespace", strings.Repeat("a", 64)})
 	if err == nil {
 		t.Fatal("Parse returned nil error, want namespace length error")
 	}
@@ -92,28 +139,28 @@ func TestParseNamespaceRejectsNamesLongerThan63Characters(t *testing.T) {
 }
 
 func TestParseRejectsInvalidFormat(t *testing.T) {
-	_, err := Parse([]string{"--format", "yaml"})
+	_, err := Parse([]string{"k8s", "--format", "yaml"})
 	if err == nil {
 		t.Fatal("Parse returned nil error, want invalid format error")
 	}
 }
 
 func TestParseRejectsInvalidView(t *testing.T) {
-	_, err := Parse([]string{"--view", "clusters"})
+	_, err := Parse([]string{"k8s", "--view", "clusters"})
 	if err == nil {
 		t.Fatal("Parse returned nil error, want invalid view error")
 	}
 }
 
 func TestParseRejectsInvalidSeverity(t *testing.T) {
-	_, err := Parse([]string{"--min-severity", "SEVERE"})
+	_, err := Parse([]string{"k8s", "--min-severity", "SEVERE"})
 	if err == nil {
 		t.Fatal("Parse returned nil error, want invalid severity error")
 	}
 }
 
 func TestParseTimeout(t *testing.T) {
-	cfg, err := Parse([]string{"--timeout", "45s"})
+	cfg, err := Parse([]string{"k8s", "--timeout", "45s"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -121,14 +168,14 @@ func TestParseTimeout(t *testing.T) {
 		t.Fatalf("Timeout = %v, want 45s", cfg.Timeout)
 	}
 
-	_, err = Parse([]string{"--timeout", "eventually"})
+	_, err = Parse([]string{"k8s", "--timeout", "eventually"})
 	if err == nil {
 		t.Fatal("Parse returned nil error, want invalid timeout error")
 	}
 
 	for _, value := range []string{"0s", "-1s"} {
 		t.Run(value, func(t *testing.T) {
-			_, err := Parse([]string{"--timeout", value})
+			_, err := Parse([]string{"k8s", "--timeout", value})
 			if err == nil {
 				t.Fatal("Parse returned nil error, want non-positive timeout error")
 			}
@@ -137,7 +184,7 @@ func TestParseTimeout(t *testing.T) {
 }
 
 func TestParseMinEPSS(t *testing.T) {
-	cfg, err := Parse([]string{"--min-epss", "0.72"})
+	cfg, err := Parse([]string{"k8s", "--min-epss", "0.72"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -147,7 +194,7 @@ func TestParseMinEPSS(t *testing.T) {
 
 	for _, value := range []string{"-0.2", "1.2", "not-a-number", "NaN", "+Inf", "-Inf"} {
 		t.Run(value, func(t *testing.T) {
-			_, err := Parse([]string{"--min-epss", value})
+			_, err := Parse([]string{"k8s", "--min-epss", value})
 			if err == nil {
 				t.Fatal("Parse returned nil error, want invalid min EPSS error")
 			}

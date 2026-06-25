@@ -1,14 +1,14 @@
 .PHONY: build test install-local
 
-BINARY := k8s-vdr
+BINARY := vdr
 
 build:
-	go build -o $(BINARY) ./cmd/k8s-vdr
+	go build -o $(BINARY) ./cmd/vdr
 
 test:
 	go test ./...
 
 install-local: build
-	mkdir -p $(HOME)/.trivy/plugins/k8s-vdr
-	cp plugin.yaml $(HOME)/.trivy/plugins/k8s-vdr/plugin.yaml
-	cp $(BINARY) $(HOME)/.trivy/plugins/k8s-vdr/$(BINARY)
+	mkdir -p $(HOME)/.trivy/plugins/vdr
+	cp plugin.yaml $(HOME)/.trivy/plugins/vdr/plugin.yaml
+	cp $(BINARY) $(HOME)/.trivy/plugins/vdr/$(BINARY)

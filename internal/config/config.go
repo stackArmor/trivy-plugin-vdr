@@ -10,10 +10,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const (
+	SourceK8s   = "k8s"
+	SourceECS   = "ecs"
+	SourceImage = "image"
+
 	FormatJSON  = "json"
 	FormatTable = "table"
 
@@ -24,6 +29,7 @@ const (
 var namespacePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 type Config struct {
+	Source                string
 	Namespaces            []string
 	AllNamespaces         bool
 	IncludeZeroDaemonSets bool
@@ -69,8 +75,18 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	timeout := cfg.Timeout.String()
 	minEPSS := strconv.FormatFloat(cfg.MinEPSS, 'f', -1, 64)
 
-	fs := flag.NewFlagSet("k8s-vdr", flag.ContinueOnError)
+	source, flagArgs, err := splitSource(args)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Source = source
+
+	fs := flag.NewFlagSet("vdr", flag.ContinueOnError)
 	fs.SetOutput(output)
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n\nSources:\n  k8s\n  ecs (not implemented yet)\n  image (not implemented yet)\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
 	fs.Var(&namespaces, "namespace", "Kubernetes namespace to scan; may be repeated")
 	fs.BoolVar(&cfg.AllNamespaces, "all-namespaces", cfg.AllNamespaces, "scan all namespaces")
 	fs.BoolVar(&cfg.IncludeZeroDaemonSets, "include-zero-daemonsets", cfg.IncludeZeroDaemonSets, "include DaemonSets with zero desired pods")
@@ -85,7 +101,20 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.SkipExposure, "skip-exposure", cfg.SkipExposure, "skip exposure analysis")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
 
-	if err := fs.Parse(args); err != nil {
+	if source == "" {
+		if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+			return Config{}, fs.Parse(args)
+		}
+		return Config{}, errors.New("source is required; expected one of: k8s, ecs, image")
+	}
+	if source == SourceECS || source == SourceImage {
+		return Config{}, fmt.Errorf("source %q is not implemented yet", source)
+	}
+	if source != SourceK8s {
+		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, ecs, image", source)
+	}
+
+	if err := fs.Parse(flagArgs); err != nil {
 		return Config{}, err
 	}
 	allNamespacesSet := false
@@ -143,10 +172,52 @@ func Default() Config {
 		IncludeZeroDaemonSets: false,
 		Format:                FormatJSON,
 		View:                  ViewFindings,
-		CacheDir:              filepath.Join(home, ".cache", "trivy", "k8s-vdr"),
+		CacheDir:              filepath.Join(home, ".cache", "trivy", "vdr"),
 		Timeout:               30 * time.Minute,
 		MinEPSS:               -1,
 	}
+}
+
+func splitSource(args []string) (string, []string, error) {
+	valueFlags := map[string]bool{
+		"namespace":    true,
+		"format":       true,
+		"view":         true,
+		"output":       true,
+		"cache-dir":    true,
+		"timeout":      true,
+		"min-severity": true,
+		"min-epss":     true,
+	}
+	flagArgs := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			if i+1 >= len(args) {
+				return "", flagArgs, nil
+			}
+			return args[i+1], append(flagArgs, args[i+2:]...), nil
+		}
+		if arg == "-h" || arg == "--help" {
+			flagArgs = append(flagArgs, arg)
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+			name, hasValue := strings.CutPrefix(arg, "--")
+			if !hasValue {
+				name, hasValue = strings.CutPrefix(arg, "-")
+			}
+			name, _, hasInlineValue := strings.Cut(name, "=")
+			if valueFlags[name] && !hasInlineValue && i+1 < len(args) {
+				i++
+				flagArgs = append(flagArgs, args[i])
+			}
+			continue
+		}
+		return arg, append(flagArgs, args[i+1:]...), nil
+	}
+	return "", flagArgs, nil
 }
 
 func validateFormat(value string) error {
