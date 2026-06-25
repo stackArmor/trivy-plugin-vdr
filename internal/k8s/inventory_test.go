@@ -108,6 +108,90 @@ func TestCapturesInitContainerRestartPolicyAlways(t *testing.T) {
 	})
 }
 
+func TestCapturesPrivilegedCapabilitiesAndReadOnlyRootFilesystem(t *testing.T) {
+	privileged := true
+	readOnlyRootFilesystem := true
+	client := fake.NewSimpleClientset(pod("default", "hardened", podSpec(corev1.Container{
+		Name:  "app",
+		Image: "registry.example.com/app:v1",
+		SecurityContext: &corev1.SecurityContext{
+			Privileged:             &privileged,
+			ReadOnlyRootFilesystem: &readOnlyRootFilesystem,
+			Capabilities: &corev1.Capabilities{
+				Add:  []corev1.Capability{"NET_ADMIN", "SYS_TIME"},
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+	})))
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireContainerSecurity(t, inv, "hardened", "app", model.ContainerSecurity{
+		Privileged:             boolPtr(true),
+		CapabilitiesAdd:        []string{"NET_ADMIN", "SYS_TIME"},
+		CapabilitiesDrop:       []string{"ALL"},
+		ReadOnlyRootFilesystem: boolPtr(true),
+	})
+}
+
+func TestCapturesContainerSeccompProfile(t *testing.T) {
+	profile := "profiles/audit.json"
+	client := fake.NewSimpleClientset(pod("default", "seccomp", podSpec(corev1.Container{
+		Name:  "app",
+		Image: "registry.example.com/app:v1",
+		SecurityContext: &corev1.SecurityContext{
+			SeccompProfile: &corev1.SeccompProfile{
+				Type:             corev1.SeccompProfileTypeLocalhost,
+				LocalhostProfile: &profile,
+			},
+		},
+	})))
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireContainerSecurity(t, inv, "seccomp", "app", model.ContainerSecurity{
+		SeccompProfile: &model.SecurityProfile{Type: "Localhost", LocalhostProfile: "profiles/audit.json"},
+	})
+}
+
+func TestCapturesPodSeccompProfileFallback(t *testing.T) {
+	spec := podSpec(container("app", "registry.example.com/app:v1"))
+	spec.SecurityContext = &corev1.PodSecurityContext{
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+	client := fake.NewSimpleClientset(pod("default", "pod-seccomp", spec))
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireContainerSecurity(t, inv, "pod-seccomp", "app", model.ContainerSecurity{
+		SeccompProfile: &model.SecurityProfile{Type: "RuntimeDefault"},
+	})
+}
+
+func TestCapturesAppArmorAnnotationForContainer(t *testing.T) {
+	client := fake.NewSimpleClientset(podWithAnnotations("default", "apparmor", map[string]string{
+		"container.apparmor.security.beta.kubernetes.io/app": "localhost/k8s-apparmor-example-deny-write",
+	}, podSpec(container("app", "registry.example.com/app:v1"))))
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireContainerSecurity(t, inv, "apparmor", "app", model.ContainerSecurity{
+		AppArmorProfile: &model.SecurityProfile{Type: "Localhost", LocalhostProfile: "k8s-apparmor-example-deny-write"},
+	})
+}
+
 func TestExcludesZeroDesiredDaemonSetsByDefault(t *testing.T) {
 	client := fake.NewSimpleClientset(daemonSet("kube-system", "agent", 0, podSpec(
 		container("agent", "example.com/agent:v1"),
@@ -365,6 +449,10 @@ func pod(namespace, name string, spec corev1.PodSpec) *corev1.Pod {
 	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}, Spec: spec}
 }
 
+func podWithAnnotations(namespace, name string, annotations map[string]string, spec corev1.PodSpec) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Annotations: annotations}, Spec: spec}
+}
+
 func deployment(namespace, name string, spec corev1.PodSpec) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
@@ -443,4 +531,74 @@ func requireRef(t *testing.T, img model.ImageInventory, want model.ResourceRef) 
 		}
 	}
 	t.Fatalf("missing ref %#v in %#v", want, img.Resources)
+}
+
+func requireContainerSecurity(t *testing.T, inv *model.Inventory, resourceName, containerName string, want model.ContainerSecurity) {
+	t.Helper()
+	for _, resource := range inv.Resources {
+		if resource.Resource.Name != resourceName {
+			continue
+		}
+		for _, image := range resource.Images {
+			if image.Name == containerName {
+				if image.Security == nil {
+					t.Fatalf("Security = nil for container %q", containerName)
+				}
+				requireSecurity(t, *image.Security, want)
+				return
+			}
+		}
+	}
+	t.Fatalf("missing container %q on resource %q", containerName, resourceName)
+}
+
+func requireSecurity(t *testing.T, got, want model.ContainerSecurity) {
+	t.Helper()
+	if got.Privileged == nil != (want.Privileged == nil) {
+		t.Fatalf("Privileged = %v, want %v", got.Privileged, want.Privileged)
+	}
+	if got.Privileged != nil && *got.Privileged != *want.Privileged {
+		t.Fatalf("Privileged = %v, want %v", *got.Privileged, *want.Privileged)
+	}
+	if got.ReadOnlyRootFilesystem == nil != (want.ReadOnlyRootFilesystem == nil) {
+		t.Fatalf("ReadOnlyRootFilesystem = %v, want %v", got.ReadOnlyRootFilesystem, want.ReadOnlyRootFilesystem)
+	}
+	if got.ReadOnlyRootFilesystem != nil && *got.ReadOnlyRootFilesystem != *want.ReadOnlyRootFilesystem {
+		t.Fatalf("ReadOnlyRootFilesystem = %v, want %v", *got.ReadOnlyRootFilesystem, *want.ReadOnlyRootFilesystem)
+	}
+	if !stringSlicesEqual(got.CapabilitiesAdd, want.CapabilitiesAdd) {
+		t.Fatalf("CapabilitiesAdd = %#v, want %#v", got.CapabilitiesAdd, want.CapabilitiesAdd)
+	}
+	if !stringSlicesEqual(got.CapabilitiesDrop, want.CapabilitiesDrop) {
+		t.Fatalf("CapabilitiesDrop = %#v, want %#v", got.CapabilitiesDrop, want.CapabilitiesDrop)
+	}
+	if !profilesEqual(got.SeccompProfile, want.SeccompProfile) {
+		t.Fatalf("SeccompProfile = %#v, want %#v", got.SeccompProfile, want.SeccompProfile)
+	}
+	if !profilesEqual(got.AppArmorProfile, want.AppArmorProfile) {
+		t.Fatalf("AppArmorProfile = %#v, want %#v", got.AppArmorProfile, want.AppArmorProfile)
+	}
+}
+
+func profilesEqual(got, want *model.SecurityProfile) bool {
+	if got == nil || want == nil {
+		return got == want
+	}
+	return got.Type == want.Type && got.LocalhostProfile == want.LocalhostProfile
+}
+
+func stringSlicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

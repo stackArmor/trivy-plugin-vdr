@@ -121,7 +121,7 @@ func (c *Collector) collectPods(ctx context.Context, namespace string, builder *
 	}
 	for _, pod := range pods.Items {
 		ref := model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
-		builder.addResource(ref, pod.Spec)
+		builder.addResource(ref, pod.Spec, pod.Annotations)
 	}
 	return nil
 }
@@ -133,7 +133,7 @@ func (c *Collector) collectDeployments(ctx context.Context, namespace string, bu
 	}
 	for _, deployment := range deployments.Items {
 		ref := workloadRef("apps/v1", "Deployment", deployment.Namespace, deployment.Name)
-		builder.addResource(ref, deployment.Spec.Template.Spec)
+		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations)
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func (c *Collector) collectStatefulSets(ctx context.Context, namespace string, b
 	}
 	for _, statefulSet := range statefulSets.Items {
 		ref := workloadRef("apps/v1", "StatefulSet", statefulSet.Namespace, statefulSet.Name)
-		builder.addResource(ref, statefulSet.Spec.Template.Spec)
+		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations)
 	}
 	return nil
 }
@@ -160,7 +160,7 @@ func (c *Collector) collectDaemonSets(ctx context.Context, namespace string, inc
 			continue
 		}
 		ref := workloadRef("apps/v1", "DaemonSet", daemonSet.Namespace, daemonSet.Name)
-		builder.addResource(ref, daemonSet.Spec.Template.Spec)
+		builder.addResource(ref, daemonSet.Spec.Template.Spec, daemonSet.Spec.Template.Annotations)
 	}
 	return nil
 }
@@ -172,7 +172,7 @@ func (c *Collector) collectJobs(ctx context.Context, namespace string, builder *
 	}
 	for _, job := range jobs.Items {
 		ref := workloadRef("batch/v1", "Job", job.Namespace, job.Name)
-		builder.addResource(ref, job.Spec.Template.Spec)
+		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations)
 	}
 	return nil
 }
@@ -184,7 +184,7 @@ func (c *Collector) collectCronJobs(ctx context.Context, namespace string, build
 	}
 	for _, cronJob := range cronJobs.Items {
 		ref := workloadRef("batch/v1", "CronJob", cronJob.Namespace, cronJob.Name)
-		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec)
+		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec, cronJob.Spec.JobTemplate.Spec.Template.Annotations)
 	}
 	return nil
 }
@@ -203,20 +203,20 @@ type inventoryBuilder struct {
 	images    map[string]*model.ImageInventory
 }
 
-func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec) {
+func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations map[string]string) {
 	resourceInventory := model.ResourceInventory{Resource: resource}
 	for _, c := range spec.Containers {
-		b.addContainer(&resourceInventory, resource, c, "container")
+		b.addContainer(&resourceInventory, resource, spec, annotations, c, "container")
 	}
 	for _, c := range spec.InitContainers {
-		b.addContainer(&resourceInventory, resource, c, "initContainer")
+		b.addContainer(&resourceInventory, resource, spec, annotations, c, "initContainer")
 	}
 	if len(resourceInventory.Images) > 0 {
 		b.inventory.Resources = append(b.inventory.Resources, resourceInventory)
 	}
 }
 
-func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, c corev1.Container, containerType string) {
+func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, spec corev1.PodSpec, annotations map[string]string, c corev1.Container, containerType string) {
 	if c.Image == "" {
 		return
 	}
@@ -231,6 +231,7 @@ func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInvento
 		ImageRef:        c.Image,
 		NormalizedImage: normalized,
 		RestartPolicy:   restartPolicy,
+		Security:        containerSecurity(spec, annotations, c),
 	}
 	resourceInventory.Images = append(resourceInventory.Images, containerImage)
 
@@ -247,6 +248,103 @@ func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInvento
 		b.images[c.Image] = image
 	}
 	image.Resources = append(image.Resources, ref)
+}
+
+func containerSecurity(spec corev1.PodSpec, annotations map[string]string, c corev1.Container) *model.ContainerSecurity {
+	security := model.ContainerSecurity{}
+	if c.SecurityContext != nil {
+		security.Privileged = copyBool(c.SecurityContext.Privileged)
+		security.ReadOnlyRootFilesystem = copyBool(c.SecurityContext.ReadOnlyRootFilesystem)
+		if c.SecurityContext.Capabilities != nil {
+			security.CapabilitiesAdd = capabilitiesToStrings(c.SecurityContext.Capabilities.Add)
+			security.CapabilitiesDrop = capabilitiesToStrings(c.SecurityContext.Capabilities.Drop)
+		}
+		security.SeccompProfile = seccompProfile(c.SecurityContext.SeccompProfile)
+		security.AppArmorProfile = appArmorProfile(c.SecurityContext.AppArmorProfile)
+	}
+	if security.SeccompProfile == nil && spec.SecurityContext != nil {
+		security.SeccompProfile = seccompProfile(spec.SecurityContext.SeccompProfile)
+	}
+	if security.AppArmorProfile == nil && spec.SecurityContext != nil {
+		security.AppArmorProfile = appArmorProfile(spec.SecurityContext.AppArmorProfile)
+	}
+	if security.AppArmorProfile == nil {
+		security.AppArmorProfile = appArmorAnnotationProfile(annotations, c.Name)
+	}
+	if isZeroContainerSecurity(security) {
+		return nil
+	}
+	return &security
+}
+
+func copyBool(v *bool) *bool {
+	if v == nil {
+		return nil
+	}
+	copied := *v
+	return &copied
+}
+
+func capabilitiesToStrings(capabilities []corev1.Capability) []string {
+	if len(capabilities) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		values = append(values, string(capability))
+	}
+	return values
+}
+
+func seccompProfile(profile *corev1.SeccompProfile) *model.SecurityProfile {
+	if profile == nil {
+		return nil
+	}
+	securityProfile := &model.SecurityProfile{Type: string(profile.Type)}
+	if profile.LocalhostProfile != nil {
+		securityProfile.LocalhostProfile = *profile.LocalhostProfile
+	}
+	return securityProfile
+}
+
+func appArmorProfile(profile *corev1.AppArmorProfile) *model.SecurityProfile {
+	if profile == nil {
+		return nil
+	}
+	securityProfile := &model.SecurityProfile{Type: string(profile.Type)}
+	if profile.LocalhostProfile != nil {
+		securityProfile.LocalhostProfile = *profile.LocalhostProfile
+	}
+	return securityProfile
+}
+
+func appArmorAnnotationProfile(annotations map[string]string, containerName string) *model.SecurityProfile {
+	value := annotations["container.apparmor.security.beta.kubernetes.io/"+containerName]
+	if value == "" {
+		return nil
+	}
+	switch {
+	case value == "runtime/default":
+		return &model.SecurityProfile{Type: string(corev1.AppArmorProfileTypeRuntimeDefault)}
+	case value == "unconfined":
+		return &model.SecurityProfile{Type: string(corev1.AppArmorProfileTypeUnconfined)}
+	case strings.HasPrefix(value, "localhost/"):
+		return &model.SecurityProfile{
+			Type:             string(corev1.AppArmorProfileTypeLocalhost),
+			LocalhostProfile: strings.TrimPrefix(value, "localhost/"),
+		}
+	default:
+		return &model.SecurityProfile{Type: value}
+	}
+}
+
+func isZeroContainerSecurity(security model.ContainerSecurity) bool {
+	return security.Privileged == nil &&
+		len(security.CapabilitiesAdd) == 0 &&
+		len(security.CapabilitiesDrop) == 0 &&
+		security.ReadOnlyRootFilesystem == nil &&
+		security.SeccompProfile == nil &&
+		security.AppArmorProfile == nil
 }
 
 func (b *inventoryBuilder) finish() *model.Inventory {
