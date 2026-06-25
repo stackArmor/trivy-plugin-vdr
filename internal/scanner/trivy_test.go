@@ -29,7 +29,7 @@ func TestTrivyRunnerBuildsImageScanCommand(t *testing.T) {
 	if fake.name != "trivy-test" {
 		t.Fatalf("command name = %q, want trivy-test", fake.name)
 	}
-	wantArgs := []string{"image", "--image-src", "registry", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
+	wantArgs := []string{"image", "--image-src", "remote", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
 	}
@@ -71,7 +71,7 @@ func TestTrivyRunnerBuildsImageScanCommandWithCacheDir(t *testing.T) {
 		t.Fatalf("ScanImage returned error: %v", err)
 	}
 
-	wantArgs := []string{"image", "--cache-dir", "/tmp/trivy-cache", "--image-src", "registry", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
+	wantArgs := []string{"image", "--cache-dir", "/tmp/trivy-cache", "--image-src", "remote", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
 	}
@@ -442,23 +442,59 @@ func TestScanInventoryWithOptionsRunsCleanupAfterAllScansComplete(t *testing.T) 
 	}
 }
 
-func TestScanInventoryWithOptionsReturnsRootScanErrorOverSiblingCancellation(t *testing.T) {
-	rootErr := errors.New("scan failed")
+func TestTrivyRunnerDockerEnv(t *testing.T) {
+	if env := (TrivyRunner{}).dockerEnv(); env != nil {
+		t.Fatalf("dockerEnv() = %v, want nil when no dir set", env)
+	}
+	env := (TrivyRunner{DockerConfigDir: "/tmp/x"}).dockerEnv()
+	if len(env) != 1 || env[0] != "DOCKER_CONFIG=/tmp/x" {
+		t.Fatalf("dockerEnv() = %v, want [DOCKER_CONFIG=/tmp/x]", env)
+	}
+}
+
+func TestExecCommandRunnerPropagatesExtraEnv(t *testing.T) {
+	runner := execCommandRunner{extraEnv: []string{"DOCKER_CONFIG=/tmp/vdr-test-cfg"}}
+	stdout, _, err := runner.Run(context.Background(), "sh", "-c", `printf %s "$DOCKER_CONFIG"`)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if got := string(stdout); got != "/tmp/vdr-test-cfg" {
+		t.Fatalf("DOCKER_CONFIG = %q, want /tmp/vdr-test-cfg", got)
+	}
+}
+
+func TestScanInventoryWithOptionsConvertsImageErrorToWarningAndContinues(t *testing.T) {
 	inventory := &model.Inventory{
 		Images: []model.ImageInventory{
 			{ImageRef: "registry.example.com/a:v1"},
 			{ImageRef: "registry.example.com/z:v1"},
 		},
 	}
-	runner := &cancellingImageRunner{err: rootErr}
+	runner := &errImageRunner{
+		findings: map[string][]model.Finding{
+			"registry.example.com/a:v1": {{ID: "CVE-A"}},
+		},
+		errs: map[string]error{
+			"registry.example.com/z:v1": errors.New("signal: killed"),
+		},
+	}
 
-	_, _, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+	findings, warnings, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
 		Timeout:       time.Minute,
 		ParallelScans: 2,
 		CacheCleanup:  CleanupNever,
 	})
-	if !errors.Is(err, rootErr) {
-		t.Fatalf("error = %v, want root scan error %v", err, rootErr)
+	if err != nil {
+		t.Fatalf("error = %v, want nil (failures become warnings)", err)
+	}
+	if len(findings) != 1 || findings[0].ID != "CVE-A" {
+		t.Fatalf("findings = %#v, want the successful image's findings", findings)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want 1 per-image warning", warnings)
+	}
+	if warnings[0].ImageRef != "registry.example.com/z:v1" || !strings.Contains(warnings[0].Message, "signal: killed") {
+		t.Fatalf("warning = %#v, want failing image ref and message", warnings[0])
 	}
 }
 
@@ -619,16 +655,21 @@ func (f *activeCheckingCacheCleaner) didOverlap() bool {
 	return f.overlapped
 }
 
-type cancellingImageRunner struct {
-	err error
+type errImageRunner struct {
+	mu       sync.Mutex
+	images   []string
+	findings map[string][]model.Finding
+	errs     map[string]error
 }
 
-func (r *cancellingImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
-	if strings.Contains(image, "/z:") {
-		return nil, r.err
+func (r *errImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
+	r.mu.Lock()
+	r.images = append(r.images, image)
+	r.mu.Unlock()
+	if err, ok := r.errs[image]; ok {
+		return nil, err
 	}
-	<-ctx.Done()
-	return nil, ctx.Err()
+	return r.findings[image], nil
 }
 
 type parentCancelingImageRunner struct {

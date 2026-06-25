@@ -53,6 +53,10 @@ type Config struct {
 	SkipEnrichment        bool
 	RefreshEnrichment     bool
 	SkipExposure          bool
+	SkipRegistryAuth      bool
+	NoGcloudAuth          bool
+	NoECRAuth             bool
+	Quiet                 bool
 	Debug                 bool
 }
 
@@ -112,6 +116,10 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")
 	fs.BoolVar(&cfg.RefreshEnrichment, "refresh-enrichment", cfg.RefreshEnrichment, "force EPSS and Vulnrichment enrichment refresh")
 	fs.BoolVar(&cfg.SkipExposure, "skip-exposure", cfg.SkipExposure, "skip exposure analysis")
+	fs.BoolVar(&cfg.SkipRegistryAuth, "skip-registry-auth", cfg.SkipRegistryAuth, "skip automatic private registry authentication")
+	fs.BoolVar(&cfg.NoGcloudAuth, "no-gcloud-auth", cfg.NoGcloudAuth, "skip gcloud authentication for Google Artifact Registry/GCR images")
+	fs.BoolVar(&cfg.NoECRAuth, "no-ecr-auth", cfg.NoECRAuth, "skip aws CLI authentication for ECR images")
+	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "suppress progress logging (warnings and errors only)")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
 
 	if err := fs.Parse(args); err != nil {
@@ -205,7 +213,7 @@ func Default() Config {
 		View:                  ViewFindings,
 		CacheDir:              filepath.Join(home, ".cache", "trivy", "vdr"),
 		Timeout:               30 * time.Minute,
-		ImageSrc:              "registry",
+		ImageSrc:              "remote",
 		ParallelScans:         5,
 		CacheCleanup:          CacheCleanupAuto,
 		CacheMinFreeGB:        10,
