@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -75,12 +74,6 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	timeout := cfg.Timeout.String()
 	minEPSS := strconv.FormatFloat(cfg.MinEPSS, 'f', -1, 64)
 
-	source, flagArgs, err := splitSource(args)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.Source = source
-
 	fs := flag.NewFlagSet("vdr", flag.ContinueOnError)
 	fs.SetOutput(output)
 	fs.Usage = func() {
@@ -101,10 +94,12 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.SkipExposure, "skip-exposure", cfg.SkipExposure, "skip exposure analysis")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
 
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	source := fs.Arg(0)
+	cfg.Source = source
 	if source == "" {
-		if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
-			return Config{}, fs.Parse(args)
-		}
 		return Config{}, errors.New("source is required; expected one of: k8s, ecs, image")
 	}
 	if source == SourceECS || source == SourceImage {
@@ -114,8 +109,12 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, ecs, image", source)
 	}
 
+	flagArgs := fs.Args()[1:]
 	if err := fs.Parse(flagArgs); err != nil {
 		return Config{}, err
+	}
+	if fs.NArg() > 0 {
+		return Config{}, fmt.Errorf("unexpected argument %q for source %q", fs.Arg(0), source)
 	}
 	allNamespacesSet := false
 	fs.Visit(func(f *flag.Flag) {
@@ -176,48 +175,6 @@ func Default() Config {
 		Timeout:               30 * time.Minute,
 		MinEPSS:               -1,
 	}
-}
-
-func splitSource(args []string) (string, []string, error) {
-	valueFlags := map[string]bool{
-		"namespace":    true,
-		"format":       true,
-		"view":         true,
-		"output":       true,
-		"cache-dir":    true,
-		"timeout":      true,
-		"min-severity": true,
-		"min-epss":     true,
-	}
-	flagArgs := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			if i+1 >= len(args) {
-				return "", flagArgs, nil
-			}
-			return args[i+1], append(flagArgs, args[i+2:]...), nil
-		}
-		if arg == "-h" || arg == "--help" {
-			flagArgs = append(flagArgs, arg)
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
-			flagArgs = append(flagArgs, arg)
-			name, hasValue := strings.CutPrefix(arg, "--")
-			if !hasValue {
-				name, hasValue = strings.CutPrefix(arg, "-")
-			}
-			name, _, hasInlineValue := strings.Cut(name, "=")
-			if valueFlags[name] && !hasInlineValue && i+1 < len(args) {
-				i++
-				flagArgs = append(flagArgs, args[i])
-			}
-			continue
-		}
-		return arg, append(flagArgs, args[i+1:]...), nil
-	}
-	return "", flagArgs, nil
 }
 
 func validateFormat(value string) error {

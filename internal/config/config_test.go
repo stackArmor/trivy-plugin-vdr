@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"flag"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -91,6 +93,36 @@ func TestParseRequiresSource(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "source") {
 		t.Fatalf("error = %q, want source context", err.Error())
+	}
+}
+
+func TestParseShowsHelpAfterRootFlags(t *testing.T) {
+	_, err := Parse([]string{"--debug", "--help"})
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("Parse error = %v, want flag.ErrHelp", err)
+	}
+}
+
+func TestParseRejectsExtraK8sPositionalArguments(t *testing.T) {
+	_, err := Parse([]string{"k8s", "positional"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want unexpected positional argument error")
+	}
+	if !strings.Contains(err.Error(), "unexpected argument") || !strings.Contains(err.Error(), "positional") {
+		t.Fatalf("error = %q, want unexpected argument context", err.Error())
+	}
+}
+
+func TestParseUnknownRootFlagReportsFlagError(t *testing.T) {
+	_, err := Parse([]string{"--unknown", "value", "k8s"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want unknown flag error")
+	}
+	if !strings.Contains(err.Error(), "flag provided but not defined") || !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("error = %q, want unknown flag context", err.Error())
+	}
+	if strings.Contains(err.Error(), `unknown source "value"`) {
+		t.Fatalf("error = %q, want flag error instead of source misclassification", err.Error())
 	}
 }
 
