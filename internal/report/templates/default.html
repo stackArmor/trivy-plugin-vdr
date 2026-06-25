@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VDR Kubernetes Report</title>
+  <style>
+    :root { color-scheme: light; --bg: #f8fafc; --panel: #ffffff; --ink: #172033; --muted: #5b6475; --line: #d9dee8; --accent: #0f766e; --danger: #b42318; --warn: #b54708; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+    header { padding: 24px 28px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    h1 { margin: 0 0 8px; font-size: 24px; line-height: 1.2; font-weight: 650; }
+    main { padding: 20px 28px 32px; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+    .metric span { display: block; color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; font-size: 24px; margin-top: 4px; }
+    .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin-bottom: 16px; }
+    label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+    select, input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px; background: #fff; color: var(--ink); font: inherit; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
+    th { color: var(--muted); font-size: 12px; background: #f1f5f9; }
+    tr:last-child td { border-bottom: 0; }
+    .sev-CRITICAL { color: var(--danger); font-weight: 700; }
+    .sev-HIGH { color: var(--warn); font-weight: 650; }
+    .muted { color: var(--muted); }
+    .empty { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>VDR Kubernetes Report</h1>
+    <div class="muted">Generated {{ .Report.GeneratedAt }}</div>
+  </header>
+  <main>
+    <section class="summary" aria-label="Summary">
+      <div class="metric"><span>Resources</span><strong>{{ .Report.Summary.Resources }}</strong></div>
+      <div class="metric"><span>Images</span><strong>{{ .Report.Summary.Images }}</strong></div>
+      <div class="metric"><span>Findings</span><strong>{{ .Report.Summary.Findings }}</strong></div>
+      <div class="metric"><span>Internet exposed</span><strong>{{ .Report.Summary.InternetAccessible }}</strong></div>
+    </section>
+
+    <section class="filters" aria-label="Filters">
+      <label>Namespace<select id="namespace"><option value="">All</option></select></label>
+      <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
+      <label>Automatable<select id="automatable"><option value="">All</option></select></label>
+      <label>Exploitation<select id="exploitation"><option value="">All</option></select></label>
+      <label>EPSS score<input id="epss" type="number" min="0" max="1" step="0.01" placeholder="Minimum"></label>
+      <label>Technical impact<select id="impact"><option value="">All</option></select></label>
+    </section>
+
+    <table id="findings">
+      <thead>
+        <tr>
+          <th>CVE</th>
+          <th>Severity</th>
+          <th>EPSS</th>
+          <th>Namespace</th>
+          <th>Resource</th>
+          <th>Image</th>
+          <th>Exposure</th>
+          <th>Security</th>
+          <th>Automatable</th>
+          <th>Exploitation</th>
+          <th>Technical impact</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="empty" class="empty" hidden>No findings match the current filters.</div>
+  </main>
+  <script>
+    window.__VDR_REPORT__ = {{ .ReportJSON }};
+    const report = window.__VDR_REPORT__;
+    const rows = [];
+    const resources = report.resources || [];
+    const findings = report.findings || [];
+    function addFinding(finding, resource, exposure, resourceReport) {
+      const vuln = finding.vulnrichment || {};
+      const epss = finding.epss || {};
+      const ref = resource || (finding.affectedResources && finding.affectedResources[0]) || {};
+      const images = resourceReport && resourceReport.images ? resourceReport.images : [];
+      rows.push({
+        id: finding.id || "",
+        severity: finding.severity || "",
+        epss: typeof epss.score === "number" ? epss.score : null,
+        namespace: ref.namespace || "",
+        resource: [ref.kind, ref.name, ref.containerName].filter(Boolean).join("/"),
+        image: finding.imageRef || images.map(image => image.imageRef).filter(Boolean).join(","),
+        exposed: !!(exposure && exposure.internetAccessible),
+        security: securitySummary(images),
+        automatable: vuln.automatable || "",
+        exploitation: vuln.exploitation || "",
+        impact: vuln.technicalImpact || ""
+      });
+    }
+    function securitySummary(images) {
+      const values = [];
+      images.forEach(image => {
+        const security = image.security || {};
+        if (security.privileged === true) values.push("privileged");
+        if (security.readOnlyRootFilesystem === true) values.push("read-only rootfs");
+        if (security.readOnlyRootFilesystem === false) values.push("writable rootfs");
+        if (security.capabilitiesAdd && security.capabilitiesAdd.length) values.push("cap add: " + security.capabilitiesAdd.join(","));
+        if (security.capabilitiesDrop && security.capabilitiesDrop.length) values.push("cap drop: " + security.capabilitiesDrop.join(","));
+        if (security.seccompProfile && security.seccompProfile.type) values.push("seccomp: " + security.seccompProfile.type);
+        if (security.appArmorProfile && security.appArmorProfile.type) values.push("apparmor: " + security.appArmorProfile.type);
+      });
+      return [...new Set(values)].join("; ");
+    }
+    if (resources.length) {
+      resources.forEach(resource => {
+        const resourceFindings = resource.findings || [];
+        if (resourceFindings.length === 0) {
+          addFinding({}, resource.resource, resource.exposure, resource);
+          return;
+        }
+        resourceFindings.forEach(finding => addFinding(finding, resource.resource, resource.exposure || finding.exposure, resource));
+      });
+    } else {
+      findings.forEach(finding => {
+        const exposure = finding.exposure;
+        const affected = finding.affectedResources || [{}];
+        affected.forEach(ref => addFinding(finding, ref, exposure, null));
+      });
+    }
+    function fillSelect(id, values) {
+      const select = document.getElementById(id);
+      [...new Set(values.filter(Boolean))].sort().forEach(value => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      });
+    }
+    fillSelect("namespace", rows.map(row => row.namespace));
+    fillSelect("automatable", rows.map(row => row.automatable));
+    fillSelect("exploitation", rows.map(row => row.exploitation));
+    fillSelect("impact", rows.map(row => row.impact));
+    const controls = ["namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
+    controls.forEach(control => control.addEventListener("input", render));
+    controls.forEach(control => control.addEventListener("change", render));
+    function render() {
+      const filters = Object.fromEntries(controls.map(control => [control.id, control.value]));
+      const minEPSS = filters.epss === "" ? null : Number(filters.epss);
+      const filtered = rows.filter(row =>
+        (!filters.namespace || row.namespace === filters.namespace) &&
+        (!filters.exposed || String(row.exposed) === filters.exposed) &&
+        (!filters.automatable || row.automatable === filters.automatable) &&
+        (!filters.exploitation || row.exploitation === filters.exploitation) &&
+        (!filters.impact || row.impact === filters.impact) &&
+        (minEPSS === null || (row.epss !== null && row.epss >= minEPSS))
+      );
+      const tbody = document.querySelector("#findings tbody");
+      tbody.textContent = "";
+      filtered.forEach(row => {
+        const tr = document.createElement("tr");
+        [row.id, row.severity, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.security, row.automatable, row.exploitation, row.impact].forEach((value, index) => {
+          const td = document.createElement("td");
+          td.textContent = value;
+          if (index === 1) td.className = "sev-" + row.severity;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      document.getElementById("empty").hidden = filtered.length !== 0;
+      document.getElementById("findings").hidden = filtered.length === 0;
+    }
+    render();
+  </script>
+</body>
+</html>

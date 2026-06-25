@@ -3,14 +3,22 @@ package k8s
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	clientgotesting "k8s.io/client-go/testing"
 )
 
 func TestCollectsDeploymentImages(t *testing.T) {
@@ -426,6 +434,99 @@ func TestRequiresNamespaceOrAllNamespaces(t *testing.T) {
 	}
 }
 
+func TestCollectExposureObjectsCollectsTypedAndUnstructuredResources(t *testing.T) {
+	ingressClassName := "gce"
+	client := fake.NewSimpleClientset(
+		serviceForExposure("default", "web-svc"),
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web-ing"},
+			Spec:       networkingv1.IngressSpec{IngressClassName: &ingressClassName},
+		},
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "gce"}},
+	)
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		exposureListKinds(),
+	)
+	if _, err := dynamicClient.Resource(schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}).Namespace("default").Create(
+		context.Background(),
+		unstructuredExposureObject("gateway.networking.k8s.io/v1", "Gateway", "default", "public-gw"),
+		metav1.CreateOptions{},
+	); err != nil {
+		t.Fatalf("create gateway fixture: %v", err)
+	}
+	if _, err := dynamicClient.Resource(schema.GroupVersionResource{Group: "cloud.google.com", Version: "v1", Resource: "backendconfigs"}).Namespace("default").Create(
+		context.Background(),
+		unstructuredExposureObject("cloud.google.com/v1", "BackendConfig", "default", "web-backend"),
+		metav1.CreateOptions{},
+	); err != nil {
+		t.Fatalf("create backendconfig fixture: %v", err)
+	}
+
+	objects, err := (&Collector{Client: client, Dynamic: dynamicClient}).CollectExposureObjects(context.Background(), Options{Namespaces: []string{"default"}})
+	if err != nil {
+		t.Fatalf("CollectExposureObjects() error = %v", err)
+	}
+
+	if len(objects.Services) != 1 || objects.Services[0].Name != "web-svc" {
+		t.Fatalf("Services = %#v, want web-svc", objects.Services)
+	}
+	if len(objects.Ingresses) != 1 || objects.Ingresses[0].Name != "web-ing" {
+		t.Fatalf("Ingresses = %#v, want web-ing", objects.Ingresses)
+	}
+	if len(objects.IngressClasses) != 1 || objects.IngressClasses[0].Name != "gce" {
+		t.Fatalf("IngressClasses = %#v, want gce", objects.IngressClasses)
+	}
+	if len(objects.Unstructured) != 2 {
+		t.Fatalf("Unstructured len = %d, want 2: %#v", len(objects.Unstructured), objects.Unstructured)
+	}
+}
+
+func TestCollectExposureObjectsWarnsAndContinuesOnOptionalDynamicErrors(t *testing.T) {
+	client := fake.NewSimpleClientset(serviceForExposure("default", "web-svc"))
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), exposureListKinds())
+	dynamicClient.PrependReactor("list", "gateways", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "gateways"},
+			"",
+			nil,
+		)
+	})
+
+	objects, warnings, err := (&Collector{Client: client, Dynamic: dynamicClient}).CollectExposureObjectsWithWarnings(context.Background(), Options{Namespaces: []string{"default"}})
+	if err != nil {
+		t.Fatalf("CollectExposureObjectsWithWarnings() error = %v, want nil for optional dynamic error", err)
+	}
+
+	if len(objects.Services) != 1 || objects.Services[0].Name != "web-svc" {
+		t.Fatalf("Services = %#v, want typed resources retained", objects.Services)
+	}
+	if len(warnings) == 0 {
+		t.Fatal("warnings len = 0, want optional resource warning")
+	}
+	if !strings.Contains(warnings[0], "gateway.networking.k8s.io") || !strings.Contains(warnings[0], "forbidden") {
+		t.Fatalf("warning = %q, want forbidden Gateway context", warnings[0])
+	}
+}
+
+func TestCollectExposureObjectsWarnsAndContinuesOnTypedRBACErrors(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "services", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "", nil)
+	})
+
+	_, warnings, err := (&Collector{Client: client}).CollectExposureObjectsWithWarnings(context.Background(), Options{Namespaces: []string{"default"}})
+	if err != nil {
+		t.Fatalf("CollectExposureObjectsWithWarnings() error = %v, want nil for typed exposure RBAC error", err)
+	}
+	if len(warnings) == 0 {
+		t.Fatal("warnings len = 0, want typed exposure warning")
+	}
+	if !strings.Contains(warnings[0], "Services") || !strings.Contains(warnings[0], "forbidden") {
+		t.Fatalf("warning = %q, want forbidden Services context", warnings[0])
+	}
+}
+
 func TestSameImageHasMultipleResourceRefs(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		deployment("default", "web", podSpec(container("app", "example.com/shared:v1"))),
@@ -687,4 +788,54 @@ func stringSlicesEqual(got, want []string) bool {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func serviceForExposure(namespace, name string) *corev1.Service {
+	return &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}}
+}
+
+func unstructuredExposureObject(apiVersion, kind, namespace, name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": apiVersion,
+		"kind":       kind,
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+	}}
+}
+
+func exposureListKinds() map[schema.GroupVersionResource]string {
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, resource := range exposureResources {
+		listKinds[resource.gvr] = resourceListKind(resource.gvr.Resource)
+	}
+	return listKinds
+}
+
+func resourceListKind(resource string) string {
+	switch resource {
+	case "gateways":
+		return "GatewayList"
+	case "httproutes":
+		return "HTTPRouteList"
+	case "grpcroutes":
+		return "GRPCRouteList"
+	case "tcproutes":
+		return "TCPRouteList"
+	case "tlsroutes":
+		return "TLSRouteList"
+	case "referencegrants":
+		return "ReferenceGrantList"
+	case "gcpbackendpolicies":
+		return "GCPBackendPolicyList"
+	case "backendconfigs":
+		return "BackendConfigList"
+	case "ingressclassparams":
+		return "IngressClassParamsList"
+	case "loadbalancerconfigurations":
+		return "LoadBalancerConfigurationList"
+	default:
+		return "UnstructuredList"
+	}
 }
