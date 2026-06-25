@@ -34,6 +34,9 @@ internal/exposure/exposure.go
 internal/exposure/exposure_test.go
 internal/report/report.go
 internal/report/report_test.go
+internal/report/html.go
+internal/report/html_test.go
+internal/report/templates/default.html
 internal/model/model.go
 README.md
 testdata/
@@ -104,6 +107,7 @@ testdata/
 - [ ] Add Kubernetes dependencies: `k8s.io/client-go`, `k8s.io/api`, and `k8s.io/apimachinery`.
 - [ ] Write tests using fake clients for Pods, Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs.
 - [ ] Collect regular containers and init containers.
+- [ ] Collect container security metadata for every regular and init container: privileged, Linux capabilities add/drop, seccomp profile, AppArmor profile, and readOnlyRootFilesystem.
 - [ ] Store `containerType` as `container` or `initContainer`.
 - [ ] Store init-container `restartPolicy` when present. Kubernetes sidecar-style init containers use `restartPolicy: Always`.
 - [ ] Exclude DaemonSets with `status.desiredNumberScheduled == 0` by default.
@@ -115,6 +119,26 @@ testdata/
 
 ---
 
+### Task 2A: Workload Container Security Metadata
+
+**Files:**
+- Modify: `internal/model/model.go`
+- Modify: `internal/k8s/inventory.go`
+- Modify: `internal/k8s/inventory_test.go`
+
+- [ ] Add a `ContainerSecurity` model attached to `ContainerImage` and/or `ResourceRef`.
+- [ ] Capture `securityContext.privileged`.
+- [ ] Capture `securityContext.capabilities.add` and `securityContext.capabilities.drop`.
+- [ ] Capture `securityContext.readOnlyRootFilesystem`.
+- [ ] Capture seccomp profile from container `securityContext.seccompProfile`, falling back to pod `securityContext.seccompProfile` when container value is unset.
+- [ ] Capture AppArmor profile from container-level AppArmor fields when available in the Kubernetes API version, and from pod annotations such as `container.apparmor.security.beta.kubernetes.io/<container-name>`.
+- [ ] Keep this metadata available to exposure/reporting so internet-exposed vulnerable resources can show container hardening context.
+- [ ] Add tests for privileged containers, capabilities, readOnlyRootFilesystem, container seccomp, pod-level seccomp fallback, and AppArmor annotation lookup.
+- [ ] Verify with `go test ./internal/k8s/...` and `go test ./...`.
+- [ ] Commit with `git commit -m "feat: collect container security metadata"`.
+
+---
+
 ### Task 3: Trivy Image Scanner and Result Normalization
 
 **Files:**
@@ -123,13 +147,40 @@ testdata/
 - Create: `internal/scanner/trivy_test.go`
 
 - [ ] Write tests with a fake command runner.
-- [ ] Verify command arguments include `image --format json --scanners vuln --timeout <timeout> <image>`.
+- [ ] Verify command arguments include `image --image-src registry --format json --scanners vuln --timeout <timeout> <image>` by default.
 - [ ] Parse Trivy JSON vulnerabilities into internal findings.
 - [ ] Preserve image ref, package name, installed version, fixed version, severity, title, description, references, and status.
 - [ ] Return useful errors on non-zero Trivy exits.
 - [ ] Implement scan fanout over the deduped inventory image keys.
 - [ ] Verify with `go test ./internal/scanner/...` and `go test ./...`.
 - [ ] Commit with `git commit -m "feat: scan unique inventory images with trivy"`.
+
+---
+
+### Task 3A: Parallel Scanning and Disk-Pressure Cache Cleanup
+
+**Files:**
+- Modify: `internal/config/config.go`
+- Modify: `internal/config/config_test.go`
+- Modify: `internal/scanner/trivy.go`
+- Modify: `internal/scanner/trivy_test.go`
+- Create: `internal/scanner/cache.go`
+- Create: `internal/scanner/cache_test.go`
+- Modify: `README.md`
+
+- [ ] Add flags: `--image-src`, `--parallel-scans`, `--cache-cleanup`, `--cache-min-free-gb`, and `--cache-min-free-percent`.
+- [ ] Defaults: `--image-src registry`, `--parallel-scans 5`, `--cache-cleanup auto`, `--cache-min-free-gb 10`, `--cache-min-free-percent 10`.
+- [ ] Validate `parallel-scans > 0`, `cache-cleanup` in `auto|always|never`, `cache-min-free-gb >= 0`, and `cache-min-free-percent` between 0 and 100.
+- [ ] Pass `--image-src <value>` to `trivy image`; default must force registry scanning.
+- [ ] Update `ScanInventory` or add an options-based scanner to scan up to `parallel-scans` unique images concurrently while preserving deterministic final finding order by image ref.
+- [ ] After each image scan completes, run cache cleanup only when policy says so:
+  - `never`: do nothing.
+  - `always`: run `trivy clean --scan-cache`.
+  - `auto`: inspect free disk space for the configured Trivy cache directory or nearest existing parent; run `trivy clean --scan-cache` only when free space is below either configured threshold.
+- [ ] Cache cleanup must be tested with fake disk-space and fake command runners; tests must not invoke real `trivy clean`.
+- [ ] If cleanup fails after a successful image scan, surface a warning/diagnostic in a testable way without discarding the scan result. A later report task may expose warnings.
+- [ ] Verify with `go test ./internal/scanner/...`, `go test ./internal/config/...`, and `go test ./...`.
+- [ ] Commit with `git commit -m "feat: scan images concurrently with cache cleanup"`.
 
 ---
 
@@ -149,8 +200,35 @@ testdata/
 - [ ] Fetch raw files from `https://raw.githubusercontent.com/cisagov/vulnrichment/develop/<year>/<bucket>/CVE-YYYY-NNNN.json` on cache miss.
 - [ ] Extract CISA ADP SSVC options: `Exploitation`, `Automatable`, and `Technical Impact`.
 - [ ] Treat missing Vulnrichment files as non-fatal.
+- [ ] Add a 7-day TTL for cached Vulnrichment CVE JSON files; refresh files older than 7 days.
+- [ ] Add a global `--refresh-enrichment` flag that forces both EPSS and Vulnrichment to refetch regardless of TTL.
+- [ ] Forced refresh must still use safe temp-file validation and atomic rename, and must keep usable existing cache data when a refresh fails.
 - [ ] Verify with `go test ./internal/enrich/...` and `go test ./...`.
 - [ ] Commit with `git commit -m "feat: enrich findings with epss and vulnrichment"`.
+
+---
+
+### Task 4A: Enrichment TTL and Forced Refresh
+
+**Files:**
+- Modify: `internal/config/config.go`
+- Modify: `internal/config/config_test.go`
+- Modify: `internal/enrich/epss/epss.go`
+- Modify: `internal/enrich/epss/epss_test.go`
+- Modify: `internal/enrich/vulnrichment/vulnrichment.go`
+- Modify: `internal/enrich/vulnrichment/vulnrichment_test.go`
+- Modify: `README.md`
+
+- [ ] Add config flag `--refresh-enrichment`.
+- [ ] EPSS keeps 24-hour TTL unless `--refresh-enrichment` is set.
+- [ ] Vulnrichment gets 7-day TTL unless `--refresh-enrichment` is set.
+- [ ] Existing Vulnrichment cache files younger than 7 days are used without network fetch.
+- [ ] Existing Vulnrichment cache files older than 7 days are refreshed.
+- [ ] `--refresh-enrichment` forces EPSS and Vulnrichment refresh attempts even when cache files are fresh.
+- [ ] Failed forced refresh keeps and uses existing valid cache where possible.
+- [ ] Tests must use local/httptest servers and must not hit real network.
+- [ ] Verify with `go test ./internal/enrich/...`, `go test ./internal/config/...`, and `go test ./...`.
+- [ ] Commit with `git commit -m "feat: add enrichment refresh controls"`.
 
 ---
 
@@ -188,13 +266,23 @@ testdata/
 - Modify: `README.md`
 - Create: `internal/report/report.go`
 - Create: `internal/report/report_test.go`
+- Create: `internal/report/html.go`
+- Create: `internal/report/html_test.go`
+- Create: `internal/report/templates/default.html`
 
 - [ ] Write report tests for finding-centric JSON.
 - [ ] Write report tests for resource-centric JSON.
 - [ ] Write report tests for severity and EPSS filters.
 - [ ] Write table output tests.
+- [ ] Write HTML report tests.
 - [ ] Implement default finding-centric output with `affectedResources`.
 - [ ] Implement `--view resources`.
+- [ ] Add optional HTML output flags: `--html-output` and `--html-template`.
+- [ ] Embed a default HTML template in the Go package.
+- [ ] Custom template path overrides the embedded template when `--html-template` is supplied.
+- [ ] The HTML report should summarize the entire scan and include filter controls for namespace, internet exposed, automatable, exploitation status, EPSS score, and technical impact.
+- [ ] Use `/Users/matthewvenne/Downloads/rally-security-dashboard.html` only as a visual/functionality guide; do not require that file at runtime.
+- [ ] HTML generation must be standalone with embedded JSON data and no required remote CDN dependency.
 - [ ] Wire main orchestration: config, inventory, scan, enrichment, exposure, report.
 - [ ] Document cache behavior, exposure rules, init-container exposure rules, and known limits.
 - [ ] Verify with `go test ./...`, `go build -o vdr ./cmd/vdr`, `./vdr --help`, and `./vdr k8s --help`.
@@ -212,15 +300,20 @@ go build -o vdr ./cmd/vdr
 trivy plugin install .
 trivy vdr --help
 trivy vdr k8s --help
-trivy vdr k8s --namespace default --skip-enrichment --skip-exposure --format json --output /tmp/vdr-k8s.json
+trivy vdr k8s --namespace default --skip-enrichment --skip-exposure --format json --output /tmp/vdr-k8s.json --html-output /tmp/vdr-k8s.html
 ```
 
 Expected:
 
 - Each unique image is scanned once.
+- Images are scanned with `--image-src registry` by default and up to 5 image scans run concurrently by default.
+- Trivy scan cache is cleaned only under configured disk-pressure policy unless cleanup is disabled or forced.
 - Findings list every Kubernetes workload/container using that image.
+- Workload metadata includes privileged status, Linux capabilities, seccomp/AppArmor profile, and readOnlyRootFilesystem when configured.
 - EPSS fields are present when available.
+- EPSS cache uses a 24-hour TTL, Vulnrichment cache uses a 7-day TTL, and `--refresh-enrichment` forces both refresh paths.
 - Vulnrichment fields are present when available.
+- HTML report generation works with the embedded default template and optional custom template.
 - Public exposure is set only for public route paths without provider-specific access protection.
 - Normal init containers are not internet accessible.
 - Init containers with `restartPolicy: Always` can inherit parent workload exposure as Kubernetes sidecars.
