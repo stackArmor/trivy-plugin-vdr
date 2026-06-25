@@ -2,7 +2,7 @@
 
 `vdr` is a Trivy plugin for vulnerability detection and response workflows. The first source is Kubernetes: `trivy vdr k8s` will inventory workload images from the current Kubernetes context, scan each unique full image reference once, and report findings back against the resources and containers that use each image.
 
-This scaffold includes the plugin manifest, CLI configuration, shared report models, and local build targets. Kubernetes collection, Trivy scan orchestration, enrichment, exposure analysis, and report rendering are implemented in later tasks.
+The Kubernetes source collects workload image inventory, scans each unique image with Trivy, enriches CVEs with EPSS and CISA Vulnrichment data, analyzes public ingress/gateway exposure, and emits JSON, table, and optional standalone HTML reports.
 
 ## Features
 
@@ -11,6 +11,7 @@ This scaffold includes the plugin manifest, CLI configuration, shared report mod
 - Reserved future source subcommands named `ecs` and `image`.
 - JSON and table output mode flags.
 - Finding-centric and resource-centric view flags.
+- Optional standalone HTML report with filter controls for namespace, internet exposure, automatable, exploitation status, EPSS score, and technical impact.
 - Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
 - Shared JSON model for inventory, findings, EPSS, CISA Vulnrichment, exposure, access protection, reports, and summaries.
 
@@ -25,6 +26,8 @@ trivy vdr k8s --view resources --output vdr-k8s.json
 trivy vdr k8s --image-src registry --parallel-scans 5
 trivy vdr k8s --skip-enrichment --skip-exposure --debug
 trivy vdr k8s --refresh-enrichment
+trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.html
+trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
 ```
 
 Future source commands are reserved but not implemented yet: `trivy vdr ecs` and `trivy vdr image`.
@@ -56,6 +59,32 @@ Cache cleanup runs once after the image scan phase completes:
 - `--cache-cleanup auto` checks free disk space for the configured Trivy cache directory, or the nearest existing parent directory, and runs `trivy clean --scan-cache` when free space is below either `--cache-min-free-gb` or `--cache-min-free-percent`.
 
 If cleanup fails after an image scan succeeds, the scan result is kept and a warning is recorded for later reporting.
+
+## Reporting
+
+JSON output defaults to a finding-centric report. Each finding includes `affectedResources` so a deduplicated image scan can still be traced back to every Kubernetes resource and container using that image.
+
+Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
+
+Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
+
+## Exposure rules
+
+Exposure analysis is intentionally conservative:
+
+- GKE Gateway is public only for known external GKE Gateway classes.
+- GKE Gateway backends protected by `GCPBackendPolicy.spec.default.iap.enabled=true` are not marked internet accessible.
+- GKE Ingress is public for `gce` and not public for `gce-internal`.
+- GKE Ingress BackendConfig IAP is resolved through the Service port selected by the Ingress backend. Per-port BackendConfig mappings override `default`.
+- AWS ALB Ingress and Gateway are public only when the ALB scheme/load balancer configuration is internet-facing.
+- AWS ALB `oidc` and `cognito` auth are recorded as AWS access protection. They are not reported as GCP IAP.
+- Gateway cross-namespace backend references require a matching `ReferenceGrant`.
+
+Normal init containers do not inherit internet exposure. Sidecar-style init containers inherit exposure only when their container restart policy is `Always`.
+
+## Known limits
+
+The Kubernetes source currently supports Kubernetes workload image inventory, Trivy image vulnerability scans, EPSS/Vulnrichment enrichment, GKE exposure metadata, and AWS ALB exposure metadata. The `ecs` and `image` sources are reserved for future implementation.
 
 Run the standalone binary during development:
 

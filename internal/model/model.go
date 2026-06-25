@@ -74,6 +74,7 @@ type Finding struct {
 	Vulnrichment      *Vulnrichment `json:"vulnrichment,omitempty"`
 	Exposure          *Exposure     `json:"exposure,omitempty"`
 	AffectedResources []ResourceRef `json:"affectedResources,omitempty"`
+	Affected          []Affected    `json:"affected,omitempty"`
 }
 
 type EPSS struct {
@@ -106,16 +107,25 @@ type AccessProtection struct {
 	Evidence string `json:"evidence,omitempty"`
 }
 
+type Affected struct {
+	Resource ResourceRef `json:"resource"`
+	Exposure *Exposure   `json:"exposure,omitempty"`
+}
+
 type Report struct {
 	GeneratedAt time.Time        `json:"generatedAt"`
 	Summary     Summary          `json:"summary"`
 	Findings    []Finding        `json:"findings,omitempty"`
 	Resources   []ResourceReport `json:"resources,omitempty"`
+	Warnings    []string         `json:"warnings,omitempty"`
 }
 
 type ResourceReport struct {
-	Resource ResourceRef `json:"resource"`
-	Findings []Finding   `json:"findings"`
+	Resource ResourceRef       `json:"resource"`
+	Images   []ContainerImage  `json:"images,omitempty"`
+	Exposure *Exposure         `json:"exposure,omitempty"`
+	Findings []Finding         `json:"findings"`
+	Labels   map[string]string `json:"labels,omitempty"`
 }
 
 type Summary struct {

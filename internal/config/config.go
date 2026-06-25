@@ -46,6 +46,8 @@ type Config struct {
 	CacheCleanup          string
 	CacheMinFreeGB        int
 	CacheMinFreePercent   int
+	HTMLOutput            string
+	HTMLTemplate          string
 	MinSeverity           string
 	MinEPSS               float64
 	SkipEnrichment        bool
@@ -103,6 +105,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.CacheCleanup, "cache-cleanup", cfg.CacheCleanup, "Trivy scan cache cleanup policy: auto, always, or never")
 	fs.IntVar(&cfg.CacheMinFreeGB, "cache-min-free-gb", cfg.CacheMinFreeGB, "minimum free disk space in GB before auto cache cleanup")
 	fs.IntVar(&cfg.CacheMinFreePercent, "cache-min-free-percent", cfg.CacheMinFreePercent, "minimum free disk percentage before auto cache cleanup")
+	fs.StringVar(&cfg.HTMLOutput, "html-output", cfg.HTMLOutput, "write optional standalone HTML report to file")
+	fs.StringVar(&cfg.HTMLTemplate, "html-template", cfg.HTMLTemplate, "custom HTML report template path")
 	fs.StringVar(&cfg.MinSeverity, "min-severity", cfg.MinSeverity, "minimum severity")
 	fs.StringVar(&minEPSS, "min-epss", minEPSS, "minimum EPSS score from 0 to 1")
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")

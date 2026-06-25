@@ -10,6 +10,7 @@ import (
 	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -22,6 +23,7 @@ type Options struct {
 
 type Collector struct {
 	Client      kubernetes.Interface
+	Dynamic     dynamic.Interface
 	ContextName string
 }
 
@@ -44,9 +46,13 @@ func NewForCurrentContext() (*Collector, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, "", err
+	}
 
 	contextName := rawConfig.CurrentContext
-	return &Collector{Client: client, ContextName: contextName}, contextName, nil
+	return &Collector{Client: client, Dynamic: dynamicClient, ContextName: contextName}, contextName, nil
 }
 
 func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory, error) {

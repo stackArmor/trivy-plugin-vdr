@@ -62,6 +62,9 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.CacheMinFreePercent != 10 {
 		t.Fatalf("CacheMinFreePercent = %d, want 10", cfg.CacheMinFreePercent)
 	}
+	if cfg.HTMLOutput != "" || cfg.HTMLTemplate != "" {
+		t.Fatalf("HTMLOutput/HTMLTemplate = %q/%q, want empty", cfg.HTMLOutput, cfg.HTMLTemplate)
+	}
 	if cfg.SkipEnrichment || cfg.RefreshEnrichment || cfg.SkipExposure || cfg.Debug {
 		t.Fatalf("SkipEnrichment/RefreshEnrichment/SkipExposure/Debug = %v/%v/%v/%v, want all false", cfg.SkipEnrichment, cfg.RefreshEnrichment, cfg.SkipExposure, cfg.Debug)
 	}
@@ -104,6 +107,19 @@ func TestParseRefreshEnrichment(t *testing.T) {
 	}
 	if !cfg.RefreshEnrichment {
 		t.Fatal("RefreshEnrichment = false, want true")
+	}
+}
+
+func TestParseHTMLReportFlags(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--html-output", "report.html", "--html-template", "template.html"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.HTMLOutput != "report.html" {
+		t.Fatalf("HTMLOutput = %q, want report.html", cfg.HTMLOutput)
+	}
+	if cfg.HTMLTemplate != "template.html" {
+		t.Fatalf("HTMLTemplate = %q, want template.html", cfg.HTMLTemplate)
 	}
 }
 
