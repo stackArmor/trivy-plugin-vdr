@@ -493,6 +493,32 @@ func TestScanInventoryWithOptionsReturnsParentCancellationDuringCleanup(t *testi
 	}
 }
 
+func TestScanInventoryWithOptionsReturnsParentCancellationOverProcessKillError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	processErr := errors.New("signal: killed")
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{
+			{ImageRef: "registry.example.com/app:v1"},
+		},
+	}
+	runner := &parentCancelingImageRunner{
+		cancel: cancel,
+		err:    processErr,
+	}
+
+	_, _, err := ScanInventoryWithOptions(ctx, inventory, runner, ScanOptions{
+		Timeout:       time.Minute,
+		ParallelScans: 1,
+		CacheCleanup:  CleanupNever,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if errors.Is(err, processErr) {
+		t.Fatalf("error = %v, want parent cancellation to take precedence over process kill error", err)
+	}
+}
+
 func TestScanInventoryWithOptionsReturnsContextErrorWhenCanceledBeforeScheduling(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -603,6 +629,16 @@ func (r *cancellingImageRunner) ScanImage(ctx context.Context, image string, tim
 	}
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+type parentCancelingImageRunner struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (r *parentCancelingImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
+	r.cancel()
+	return nil, r.err
 }
 
 type blockingImageRunner struct {
