@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -185,6 +186,11 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		for _, result := range results {
+			if result.err != nil && !isContextError(result.err) {
+				return nil, nil, result.err
+			}
+		}
+		for _, result := range results {
 			if result.err != nil {
 				return nil, nil, result.err
 			}
@@ -199,9 +205,18 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	var cleanupWarnings []Warning
 	if options.CacheCleanup != CleanupNever && options.CacheCleaner != nil && completedScanCount(results) > 0 {
 		if cleanupErr := options.CacheCleaner.Cleanup(ctx); cleanupErr != nil {
+			if isContextError(cleanupErr) {
+				return nil, nil, cleanupErr
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, ctxErr
+			}
 			cleanupWarnings = append(cleanupWarnings, Warning{
 				Message: fmt.Sprintf("trivy cache cleanup failed after scanning inventory: %v", cleanupErr),
 			})
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, ctxErr
 		}
 	}
 
@@ -226,6 +241,10 @@ func completedScanCount(results []scanResult) int {
 		}
 	}
 	return count
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 type scanResult struct {
