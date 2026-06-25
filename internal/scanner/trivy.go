@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
@@ -151,6 +153,7 @@ type ScanOptions struct {
 	CacheMinFreeGB      int
 	CacheMinFreePercent int
 	CacheCleaner        CacheCleaner
+	Logger              *log.Logger
 }
 
 func ScanInventory(ctx context.Context, inventory *model.Inventory, runner Runner, timeout time.Duration) ([]model.Finding, error) {
@@ -208,6 +211,9 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
+	total := len(images)
+	var done atomic.Int64
+
 	var wg sync.WaitGroup
 	for worker := 0; worker < parallelScans; worker++ {
 		wg.Add(1)
@@ -215,6 +221,7 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 			defer wg.Done()
 			for index := range jobs {
 				image := images[index]
+				options.Logger.Info("scanning %s", image.ImageRef)
 				findings, err := runner.ScanImage(ctx, image.ImageRef, options.Timeout)
 				result := scanResult{findings: findings, err: err, completed: err == nil}
 				if err == nil {
@@ -229,6 +236,12 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 				results[index] = result
 				// A single image failure is recorded and surfaced as a
 				// warning; it does not cancel sibling scans or abort the run.
+				n := done.Add(1)
+				if err != nil {
+					options.Logger.Warn("[%d/%d] %s: scan failed", n, total, image.ImageRef)
+				} else {
+					options.Logger.Info("[%d/%d] %s: %d findings", n, total, image.ImageRef, len(findings))
+				}
 			}
 		}()
 	}
