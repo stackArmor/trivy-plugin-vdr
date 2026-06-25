@@ -129,6 +129,46 @@ func TestLookupFailedRefreshLeavesStaleCacheUsable(t *testing.T) {
 	}
 }
 
+func TestLookupEmptyRefreshLeavesStaleCacheUsable(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	cachePath := filepath.Join(t.TempDir(), "epss", "epss.csv")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staleCSV := []byte("cve,epss,percentile\nCVE-2026-0011,0.55,0.66\n")
+	if err := os.WriteFile(cachePath, staleCSV, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(cachePath, now.Add(-48*time.Hour), now.Add(-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(gzipBytes(t, "# model_version:empty,score_date:2026-06-25\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(filepath.Dir(filepath.Dir(cachePath)), WithURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }))
+	enrichment, ok, err := store.Lookup("CVE-2026-0011")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true from stale cache")
+	}
+	if enrichment.Score != 0.55 {
+		t.Fatalf("score = %v, want stale cache score 0.55", enrichment.Score)
+	}
+	got, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(staleCSV) {
+		t.Fatalf("cache was modified after empty refresh: %q", string(got))
+	}
+}
+
 func TestLookupContextCanceledReturnsErrorWithoutNetworkCall(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
