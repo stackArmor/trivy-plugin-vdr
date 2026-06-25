@@ -14,6 +14,7 @@ import (
 )
 
 const defaultTrivyBinary = "trivy"
+const defaultParallelScans = 5
 
 type Runner interface {
 	ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error)
@@ -135,7 +136,7 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 
 	parallelScans := options.ParallelScans
 	if parallelScans <= 0 {
-		parallelScans = 1
+		parallelScans = defaultParallelScans
 	}
 
 	jobs := make(chan int)
@@ -195,17 +196,12 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 		}
 	}
 
-	if options.CacheCleanup != CleanupNever && options.CacheCleaner != nil {
-		for index, result := range results {
-			if !result.completed {
-				continue
-			}
-			if cleanupErr := options.CacheCleaner.Cleanup(ctx); cleanupErr != nil {
-				results[index].warnings = append(results[index].warnings, Warning{
-					ImageRef: images[index].ImageRef,
-					Message:  fmt.Sprintf("trivy cache cleanup failed after scanning %q: %v", images[index].ImageRef, cleanupErr),
-				})
-			}
+	var cleanupWarnings []Warning
+	if options.CacheCleanup != CleanupNever && options.CacheCleaner != nil && completedScanCount(results) > 0 {
+		if cleanupErr := options.CacheCleaner.Cleanup(ctx); cleanupErr != nil {
+			cleanupWarnings = append(cleanupWarnings, Warning{
+				Message: fmt.Sprintf("trivy cache cleanup failed after scanning inventory: %v", cleanupErr),
+			})
 		}
 	}
 
@@ -218,7 +214,18 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 		findings = append(findings, result.findings...)
 		warnings = append(warnings, result.warnings...)
 	}
+	warnings = append(warnings, cleanupWarnings...)
 	return findings, warnings, nil
+}
+
+func completedScanCount(results []scanResult) int {
+	var count int
+	for _, result := range results {
+		if result.completed {
+			count++
+		}
+	}
+	return count
 }
 
 type scanResult struct {

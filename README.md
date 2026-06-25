@@ -49,7 +49,7 @@ Scan defaults:
 
 The Trivy image command uses `trivy image --image-src <value> --format json --scanners vuln --timeout <timeout> <image>`. The default `--image-src registry` forces registry scanning.
 
-Cache cleanup runs after each successful image scan:
+Cache cleanup runs once after the image scan phase completes:
 
 - `--cache-cleanup never` skips cleanup.
 - `--cache-cleanup always` runs `trivy clean --scan-cache`.
