@@ -1,0 +1,207 @@
+package vulnrichment
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/matthewvenne/trivy-plugin-k8s-vdr/internal/model"
+)
+
+func TestBucketForCVE(t *testing.T) {
+	tests := map[string]string{
+		"CVE-2026-0001":   "2026/CVE-2026-0xxx/CVE-2026-0001.json",
+		"CVE-2026-9999":   "2026/CVE-2026-9xxx/CVE-2026-9999.json",
+		"CVE-2026-10000":  "2026/CVE-2026-10xxx/CVE-2026-10000.json",
+		"CVE-2026-25999":  "2026/CVE-2026-25xxx/CVE-2026-25999.json",
+		"CVE-2026-123456": "2026/CVE-2026-123xxx/CVE-2026-123456.json",
+	}
+	for cve, want := range tests {
+		t.Run(cve, func(t *testing.T) {
+			got, err := CacheRelativePath(cve)
+			if err != nil {
+				t.Fatalf("CacheRelativePath returned error: %v", err)
+			}
+			if got != want {
+				t.Fatalf("CacheRelativePath = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestLookupFetchesCachesAndExtractsCISAADPSSVC(t *testing.T) {
+	cacheDir := t.TempDir()
+	var requestedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"containers": {
+				"adp": [
+					{
+						"title": "CISA ADP Vulnrichment",
+						"metrics": [
+							{
+								"other": {
+									"type": "ssvc",
+									"content": {
+										"options": [
+											{"Exploitation": "active"},
+											{"Automatable": "yes"},
+											{"Technical Impact": "total"}
+										]
+									}
+								}
+							}
+						]
+					}
+				]
+			}
+		}`))
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	enrichment, ok, err := store.Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true")
+	}
+	if enrichment.Exploitation != "active" || enrichment.Automatable != "yes" || enrichment.TechnicalImpact != "total" {
+		t.Fatalf("enrichment = %+v, want extracted SSVC values", enrichment)
+	}
+	if enrichment.SourceURL == "" {
+		t.Fatal("SourceURL empty, want URL")
+	}
+	if requestedPath != "/2026/CVE-2026-12xxx/CVE-2026-12345.json" {
+		t.Fatalf("requested path = %q, want Vulnrichment raw path", requestedPath)
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, "vulnrichment", "2026", "CVE-2026-12xxx", "CVE-2026-12345.json")); err != nil {
+		t.Fatalf("cache file missing: %v", err)
+	}
+}
+
+func TestLookup404ReturnsNoEnrichmentWithoutError(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(), WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	_, ok, err := store.Lookup("CVE-2026-4040")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("Lookup ok = true, want false")
+	}
+}
+
+func TestLookupMissingSSVCReturnsNoEnrichmentWithoutError(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "vulnrichment", "2026", "CVE-2026-0xxx", "CVE-2026-0005.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{"containers":{"adp":[{"title":"CISA ADP Vulnrichment"}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(strings.TrimSuffix(cachePath, filepath.Join("vulnrichment", "2026", "CVE-2026-0xxx", "CVE-2026-0005.json")))
+	_, ok, err := store.Lookup("CVE-2026-0005")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("Lookup ok = true, want false")
+	}
+}
+
+func TestLookupIgnoresNonADPSSVCData(t *testing.T) {
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "CVE-2026-0xxx", "CVE-2026-0007.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{
+		"containers": {
+			"cna": {
+				"metrics": [{
+					"other": {
+						"type": "ssvc",
+						"content": {
+							"options": [
+								{"Exploitation": "active"},
+								{"Automatable": "yes"},
+								{"Technical Impact": "total"}
+							]
+						}
+					}
+				}]
+			}
+		}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok, err := NewStore(cacheDir).Lookup("CVE-2026-0007")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("Lookup ok = true, want false")
+	}
+}
+
+func TestEnrichFindingsIgnoresMissingCVEAndPreservesFields(t *testing.T) {
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "CVE-2026-0xxx", "CVE-2026-0006.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{
+		"containers": {
+			"adp": [{
+				"metrics": [{
+					"other": {
+						"type": "ssvc",
+						"content": {
+							"options": [
+								{"Exploitation": "poc"},
+								{"Automatable": "no"},
+								{"Technical Impact": "partial"}
+							]
+						}
+					}
+				}]
+			}]
+		}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+
+	findings := []model.Finding{
+		{ID: "CVE-2026-0006", ImageRef: "repo/app:1", Severity: "HIGH"},
+		{ID: "CVE-2026-7777", ImageRef: "repo/app:1", Severity: "LOW"},
+	}
+	enriched, err := EnrichFindings(findings, NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client())))
+	if err != nil {
+		t.Fatalf("EnrichFindings returned error: %v", err)
+	}
+	if enriched[0].Vulnrichment == nil {
+		t.Fatal("first finding Vulnrichment = nil, want enrichment")
+	}
+	if enriched[0].Vulnrichment.Exploitation != "poc" {
+		t.Fatalf("Exploitation = %q, want poc", enriched[0].Vulnrichment.Exploitation)
+	}
+	if enriched[0].ImageRef != findings[0].ImageRef || enriched[0].Severity != findings[0].Severity {
+		t.Fatalf("finding fields were not preserved: %+v", enriched[0])
+	}
+	if enriched[1].Vulnrichment != nil {
+		t.Fatalf("second finding Vulnrichment = %+v, want nil", enriched[1].Vulnrichment)
+	}
+}
