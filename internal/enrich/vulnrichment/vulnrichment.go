@@ -160,6 +160,9 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 			}
 			return nil, "", false, fetchErr
 		}
+		if !ok && json.Valid(data) {
+			return data, sourceURL, true, nil
+		}
 		return refreshedData, sourceURL, ok, nil
 	}
 	if !os.IsNotExist(err) {

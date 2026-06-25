@@ -239,6 +239,43 @@ func TestLookupFailedForcedRefreshLeavesFreshCacheUsable(t *testing.T) {
 	}
 }
 
+func TestLookupForcedRefresh404LeavesCacheUsable(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cachedJSON := vulnrichmentJSON("cached")
+	if err := os.WriteFile(cachePath, cachedJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(cachePath, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+
+	enrichment, ok, err := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }), WithForceRefresh(true)).Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true from existing cache")
+	}
+	if enrichment.Exploitation != "cached" {
+		t.Fatalf("Exploitation = %q, want cached", enrichment.Exploitation)
+	}
+	got, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(cachedJSON) {
+		t.Fatalf("cache was modified after 404 forced refresh: %q", string(got))
+	}
+}
+
 func TestLookupDoesNotPublishInvalidFetchedJSON(t *testing.T) {
 	cacheDir := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
