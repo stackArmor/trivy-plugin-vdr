@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Trivy plugin named `k8s-vdr` that inventories images from the current Kubernetes context, scans each unique image once, and reports resource-level vulnerability findings enriched with EPSS, CISA Vulnrichment, and internet exposure metadata.
+**Goal:** Build a Trivy plugin named `vdr` with a `k8s` subcommand that inventories images from the current Kubernetes context, scans each unique image once, and reports resource-level vulnerability findings enriched with EPSS, CISA Vulnrichment, and internet exposure metadata.
 
-**Architecture:** The plugin is a standalone Go executable invoked by Trivy as `trivy k8s-vdr`. It uses client-go to collect workload image inventory, invokes `trivy image --format json --scanners vuln` per unique image, enriches CVE findings from local EPSS and Vulnrichment caches, analyzes Ingress/Gateway exposure, and emits normalized JSON or table output. The implementation intentionally does not call `trivy k8s`, because Trivy Kubernetes summary output is not optimized for exact image-to-workload fanout.
+**Architecture:** The plugin is a standalone Go executable invoked by Trivy as `trivy vdr`. It dispatches source subcommands such as `trivy vdr k8s`; future sources will include `trivy vdr ecs` and `trivy vdr image`. The `k8s` source uses client-go to collect workload image inventory, invokes `trivy image --format json --scanners vuln` per unique image, enriches CVE findings from local EPSS and Vulnrichment caches, analyzes Ingress/Gateway exposure, and emits normalized JSON or table output. The implementation intentionally does not call `trivy k8s`, because Trivy Kubernetes summary output is not optimized for exact image-to-workload fanout.
 
 **Tech Stack:** Go 1.23+, Trivy CLI subprocesses, Kubernetes client-go/dynamic client, JSON/YAML fixtures, Go unit tests, Trivy plugin manifest.
 
@@ -19,7 +19,7 @@ plugin.yaml
 Makefile
 go.mod
 go.sum
-cmd/k8s-vdr/main.go
+cmd/vdr/main.go
 internal/config/config.go
 internal/config/config_test.go
 internal/k8s/inventory.go
@@ -41,7 +41,7 @@ testdata/
 
 ---
 
-### Task 1: Plugin Scaffold, Shared Model, CLI Config
+### Task 1: Initial Plugin Scaffold, Shared Model, CLI Config
 
 **Files:**
 - Create: `plugin.yaml`
@@ -63,6 +63,33 @@ testdata/
 - [ ] Add README usage examples.
 - [ ] Verify with `go test ./...`, `go run ./cmd/k8s-vdr --help`, and `go build -o k8s-vdr ./cmd/k8s-vdr`.
 - [ ] Commit with `git commit -m "feat: scaffold k8s-vdr plugin"`.
+
+---
+
+### Task 1A: Pivot Scaffold to `trivy vdr k8s`
+
+**Files:**
+- Modify: `plugin.yaml`
+- Modify: `Makefile`
+- Modify: `README.md`
+- Modify: `internal/config/config.go`
+- Modify: `internal/config/config_test.go`
+- Rename: `cmd/k8s-vdr/main.go` to `cmd/vdr/main.go`
+- Modify: `docs/superpowers/plans/2026-06-25-k8s-vdr-plugin.md`
+
+- [ ] Rename the executable package path from `cmd/k8s-vdr` to `cmd/vdr`.
+- [ ] Change the plugin manifest name from `k8s-vdr` to `vdr`.
+- [ ] Change the plugin usage to `trivy vdr <source> [flags]`.
+- [ ] Change the binary name and Makefile build target from `k8s-vdr` to `vdr`.
+- [ ] Change the default cache directory from `$HOME/.cache/trivy/k8s-vdr` to `$HOME/.cache/trivy/vdr`.
+- [ ] Refactor config parsing so root/global flags are shared and `k8s` is the first source subcommand.
+- [ ] Keep current Kubernetes flags under `trivy vdr k8s`: `--namespace`, `--all-namespaces`, `--include-zero-daemonsets`, `--skip-exposure`.
+- [ ] Keep global flags available to `trivy vdr k8s`: `--format`, `--view`, `--output`, `--cache-dir`, `--timeout`, `--min-severity`, `--min-epss`, `--skip-enrichment`, `--debug`.
+- [ ] Reserve but do not implement future source subcommands `ecs` and `image`; they should return clear errors like `source "ecs" is not implemented yet` if invoked.
+- [ ] Update README examples to use `trivy vdr k8s`.
+- [ ] Update this implementation plan so future tasks refer to `cmd/vdr`, binary `vdr`, and `trivy vdr k8s`.
+- [ ] Verify with `go test ./...`, `go run ./cmd/vdr --help`, `go run ./cmd/vdr k8s --help`, and `go build -o vdr ./cmd/vdr`.
+- [ ] Commit with `git commit -m "feat: pivot plugin to vdr subcommands"`.
 
 ---
 
@@ -157,7 +184,7 @@ testdata/
 ### Task 6: Report Output, Orchestration, Integration Docs
 
 **Files:**
-- Modify: `cmd/k8s-vdr/main.go`
+- Modify: `cmd/vdr/main.go`
 - Modify: `README.md`
 - Create: `internal/report/report.go`
 - Create: `internal/report/report_test.go`
@@ -170,7 +197,7 @@ testdata/
 - [ ] Implement `--view resources`.
 - [ ] Wire main orchestration: config, inventory, scan, enrichment, exposure, report.
 - [ ] Document cache behavior, exposure rules, init-container exposure rules, and known limits.
-- [ ] Verify with `go test ./...`, `go build -o k8s-vdr ./cmd/k8s-vdr`, and `./k8s-vdr --help`.
+- [ ] Verify with `go test ./...`, `go build -o vdr ./cmd/vdr`, `./vdr --help`, and `./vdr k8s --help`.
 - [ ] Commit with `git commit -m "feat: emit enriched k8s vdr reports"`.
 
 ---
@@ -181,10 +208,11 @@ Run:
 
 ```bash
 go test ./...
-go build -o k8s-vdr ./cmd/k8s-vdr
+go build -o vdr ./cmd/vdr
 trivy plugin install .
-trivy k8s-vdr --help
-trivy k8s-vdr --namespace default --skip-enrichment --skip-exposure --format json --output /tmp/k8s-vdr.json
+trivy vdr --help
+trivy vdr k8s --help
+trivy vdr k8s --namespace default --skip-enrichment --skip-exposure --format json --output /tmp/vdr-k8s.json
 ```
 
 Expected:
