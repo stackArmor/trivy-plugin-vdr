@@ -30,6 +30,12 @@ type serviceKey struct {
 	name      string
 }
 
+type ingressServiceRef struct {
+	name       string
+	portName   string
+	portNumber int32
+}
+
 type gatewayInfo struct {
 	provider string
 	public   bool
@@ -55,10 +61,11 @@ func Analyze(inventory *model.Inventory, objects Objects) map[model.ResourceRef]
 	ingressClassParams := indexIngressClassParams(objects.Unstructured)
 	gateways := indexGateways(objects.Unstructured)
 	awsGatewayPublic := indexAWSGatewayLoadBalancers(objects.Unstructured)
+	referenceGrants := indexReferenceGrants(objects.Unstructured)
 
 	serviceExposures := make([]serviceExposure, 0)
 	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, backendConfigs)...)
-	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, gateways, awsGatewayPublic, gcpBackendPolicies)...)
+	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, gateways, awsGatewayPublic, gcpBackendPolicies, referenceGrants)...)
 
 	result := map[model.ResourceRef]model.Exposure{}
 	for _, item := range serviceExposures {
@@ -124,8 +131,8 @@ func analyzeIngresses(
 		if !public {
 			continue
 		}
-		for _, serviceName := range ingressServiceNames(ingress) {
-			key := serviceKey{namespace: ingress.Namespace, name: serviceName}
+		for _, serviceRef := range ingressServiceRefs(ingress) {
+			key := serviceKey{namespace: ingress.Namespace, name: serviceRef.name}
 			if _, ok := services[key]; !ok {
 				continue
 			}
@@ -137,7 +144,7 @@ func analyzeIngresses(
 				Evidence:           []string{evidence},
 			}
 			if provider == "gke" {
-				if protection, ok := backendConfigProtection(services[key], backendConfigs); ok {
+				if protection, ok := backendConfigProtection(services[key], serviceRef, backendConfigs); ok {
 					exposure.InternetAccessible = false
 					exposure.Protection = copyProtection(protection.protection)
 					exposure.Evidence = append(exposure.Evidence, protection.evidence)
@@ -196,18 +203,23 @@ func ingressClassParamsName(class networkingv1.IngressClass) string {
 	return class.Spec.Parameters.Name
 }
 
-func ingressServiceNames(ingress networkingv1.Ingress) []string {
-	seen := map[string]struct{}{}
-	var names []string
+func ingressServiceRefs(ingress networkingv1.Ingress) []ingressServiceRef {
+	seen := map[ingressServiceRef]struct{}{}
+	var refs []ingressServiceRef
 	add := func(backend networkingv1.IngressBackend) {
 		if backend.Service == nil || backend.Service.Name == "" {
 			return
 		}
-		if _, ok := seen[backend.Service.Name]; ok {
+		ref := ingressServiceRef{
+			name:       backend.Service.Name,
+			portName:   backend.Service.Port.Name,
+			portNumber: backend.Service.Port.Number,
+		}
+		if _, ok := seen[ref]; ok {
 			return
 		}
-		seen[backend.Service.Name] = struct{}{}
-		names = append(names, backend.Service.Name)
+		seen[ref] = struct{}{}
+		refs = append(refs, ref)
 	}
 	if ingress.Spec.DefaultBackend != nil {
 		add(*ingress.Spec.DefaultBackend)
@@ -220,8 +232,16 @@ func ingressServiceNames(ingress networkingv1.Ingress) []string {
 			add(path.Backend)
 		}
 	}
-	sort.Strings(names)
-	return names
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].name != refs[j].name {
+			return refs[i].name < refs[j].name
+		}
+		if refs[i].portName != refs[j].portName {
+			return refs[i].portName < refs[j].portName
+		}
+		return refs[i].portNumber < refs[j].portNumber
+	})
+	return refs
 }
 
 func indexIngressClasses(classes []networkingv1.IngressClass) map[string]networkingv1.IngressClass {
@@ -235,7 +255,7 @@ func indexIngressClasses(classes []networkingv1.IngressClass) map[string]network
 func indexIngressClassParams(objects []unstructured.Unstructured) map[string]string {
 	index := map[string]string{}
 	for _, object := range objects {
-		if object.GetKind() != "IngressClassParams" {
+		if !hasGroupKind(object, "elbv2.k8s.aws", "IngressClassParams") {
 			continue
 		}
 		scheme, _, _ := unstructured.NestedString(object.Object, "spec", "scheme")
@@ -249,6 +269,10 @@ func indexIngressClassParams(objects []unstructured.Unstructured) map[string]str
 func awsALBProtection(ingress networkingv1.Ingress) (protectionInfo, bool) {
 	authType := strings.ToLower(ingress.Annotations["alb.ingress.kubernetes.io/auth-type"])
 	if authType != "oidc" && authType != "cognito" {
+		return protectionInfo{}, false
+	}
+	unauthenticatedAction := strings.ToLower(ingress.Annotations["alb.ingress.kubernetes.io/auth-on-unauthenticated-request"])
+	if unauthenticatedAction != "" && unauthenticatedAction != "authenticate" && unauthenticatedAction != "deny" {
 		return protectionInfo{}, false
 	}
 	evidence := fmt.Sprintf("AWS ALB Ingress %s/%s uses %s authentication", ingress.Namespace, ingress.Name, authType)
@@ -266,7 +290,7 @@ func awsALBProtection(ingress networkingv1.Ingress) (protectionInfo, bool) {
 func indexBackendConfigs(objects []unstructured.Unstructured) map[serviceKey]protectionInfo {
 	configs := map[serviceKey]protectionInfo{}
 	for _, object := range objects {
-		if object.GetKind() != "BackendConfig" {
+		if !hasGroupKind(object, "cloud.google.com", "BackendConfig") {
 			continue
 		}
 		enabled, _, _ := unstructured.NestedBool(object.Object, "spec", "iap", "enabled")
@@ -282,8 +306,8 @@ func indexBackendConfigs(objects []unstructured.Unstructured) map[serviceKey]pro
 	return configs
 }
 
-func backendConfigProtection(service corev1.Service, configs map[serviceKey]protectionInfo) (protectionInfo, bool) {
-	for _, configName := range backendConfigForService(service) {
+func backendConfigProtection(service corev1.Service, ref ingressServiceRef, configs map[serviceKey]protectionInfo) (protectionInfo, bool) {
+	for _, configName := range backendConfigForServicePort(service, ref) {
 		configKey := serviceKey{namespace: service.Namespace, name: configName}
 		protection, ok := configs[configKey]
 		if !ok {
@@ -300,7 +324,7 @@ func backendConfigProtection(service corev1.Service, configs map[serviceKey]prot
 func indexGCPBackendPolicies(objects []unstructured.Unstructured) map[serviceKey]protectionInfo {
 	index := map[serviceKey]protectionInfo{}
 	for _, object := range objects {
-		if object.GetKind() != "GCPBackendPolicy" {
+		if !hasGroupKind(object, "networking.gke.io", "GCPBackendPolicy") {
 			continue
 		}
 		enabled, _, _ := unstructured.NestedBool(object.Object, "spec", "default", "iap", "enabled")
@@ -329,11 +353,12 @@ func analyzeGatewayRoutes(
 	gateways map[serviceKey]gatewayInfo,
 	awsGatewayPublic map[serviceKey]string,
 	gcpBackendPolicies map[serviceKey]protectionInfo,
+	referenceGrants map[string][]referenceGrantInfo,
 ) []serviceExposure {
 	exposures := make([]serviceExposure, 0)
 	for _, route := range objects {
 		routeKind := route.GetKind()
-		if !isGatewayRouteKind(routeKind) {
+		if !hasAPIGroup(route, "gateway.networking.k8s.io") || !isGatewayRouteKind(routeKind) {
 			continue
 		}
 		for _, parent := range routeParentRefs(route) {
@@ -361,6 +386,9 @@ func analyzeGatewayRoutes(
 				if serviceNamespace == "" {
 					serviceNamespace = route.GetNamespace()
 				}
+				if serviceNamespace != route.GetNamespace() && !referenceGrantAllows(referenceGrants[serviceNamespace], route, backend) {
+					continue
+				}
 				key := serviceKey{namespace: serviceNamespace, name: backend.name}
 				exposure := model.Exposure{
 					InternetAccessible: true,
@@ -386,7 +414,7 @@ func analyzeGatewayRoutes(
 func indexGateways(objects []unstructured.Unstructured) map[serviceKey]gatewayInfo {
 	index := map[serviceKey]gatewayInfo{}
 	for _, object := range objects {
-		if object.GetKind() != "Gateway" {
+		if !hasGroupKind(object, "gateway.networking.k8s.io", "Gateway") {
 			continue
 		}
 		className, _, _ := unstructured.NestedString(object.Object, "spec", "gatewayClassName")
@@ -418,7 +446,7 @@ func classifyGatewayClass(className string) (string, bool) {
 func indexAWSGatewayLoadBalancers(objects []unstructured.Unstructured) map[serviceKey]string {
 	index := map[serviceKey]string{}
 	for _, object := range objects {
-		if object.GetKind() != "LoadBalancerConfiguration" {
+		if !hasGroupKind(object, "gateway.k8s.aws", "LoadBalancerConfiguration") {
 			continue
 		}
 		scheme, _, _ := unstructured.NestedString(object.Object, "spec", "scheme")
@@ -444,9 +472,118 @@ func isGatewayRouteKind(kind string) bool {
 	}
 }
 
+func indexReferenceGrants(objects []unstructured.Unstructured) map[string][]referenceGrantInfo {
+	index := map[string][]referenceGrantInfo{}
+	for _, object := range objects {
+		if !hasGroupKind(object, "gateway.networking.k8s.io", "ReferenceGrant") {
+			continue
+		}
+		grant := referenceGrantInfo{
+			from: referenceGrantFromRefs(object),
+			to:   referenceGrantToRefs(object),
+		}
+		if len(grant.from) == 0 || len(grant.to) == 0 {
+			continue
+		}
+		index[object.GetNamespace()] = append(index[object.GetNamespace()], grant)
+	}
+	return index
+}
+
+func referenceGrantFromRefs(object unstructured.Unstructured) []referenceGrantFrom {
+	items, _, _ := unstructured.NestedSlice(object.Object, "spec", "from")
+	refs := make([]referenceGrantFrom, 0, len(items))
+	for _, item := range items {
+		ref, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		group, _ := ref["group"].(string)
+		kind, _ := ref["kind"].(string)
+		namespace, _ := ref["namespace"].(string)
+		if group == "" || kind == "" || namespace == "" {
+			continue
+		}
+		refs = append(refs, referenceGrantFrom{group: group, kind: kind, namespace: namespace})
+	}
+	return refs
+}
+
+func referenceGrantToRefs(object unstructured.Unstructured) []referenceGrantTo {
+	items, _, _ := unstructured.NestedSlice(object.Object, "spec", "to")
+	refs := make([]referenceGrantTo, 0, len(items))
+	for _, item := range items {
+		ref, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		group, _ := ref["group"].(string)
+		kind, _ := ref["kind"].(string)
+		name, _ := ref["name"].(string)
+		if kind == "" {
+			continue
+		}
+		refs = append(refs, referenceGrantTo{group: group, kind: kind, name: name})
+	}
+	return refs
+}
+
+func referenceGrantAllows(grants []referenceGrantInfo, route unstructured.Unstructured, backend objectRef) bool {
+	for _, grant := range grants {
+		if !referenceGrantAllowsFrom(grant, route) {
+			continue
+		}
+		if referenceGrantAllowsTo(grant, backend) {
+			return true
+		}
+	}
+	return false
+}
+
+func referenceGrantAllowsFrom(grant referenceGrantInfo, route unstructured.Unstructured) bool {
+	routeGroup := apiGroup(route.GetAPIVersion())
+	for _, from := range grant.from {
+		if from.group == routeGroup && from.kind == route.GetKind() && from.namespace == route.GetNamespace() {
+			return true
+		}
+	}
+	return false
+}
+
+func referenceGrantAllowsTo(grant referenceGrantInfo, backend objectRef) bool {
+	for _, to := range grant.to {
+		if to.group != backend.group || to.kind != backend.kind {
+			continue
+		}
+		if to.name == "" || to.name == backend.name {
+			return true
+		}
+	}
+	return false
+}
+
 type objectRef struct {
 	namespace string
 	name      string
+	group     string
+	kind      string
+}
+
+type referenceGrantInfo struct {
+	from []referenceGrantFrom
+	to   []referenceGrantTo
+}
+
+type referenceGrantFrom struct {
+	group     string
+	kind      string
+	namespace string
+}
+
+type referenceGrantTo struct {
+	group string
+	kind  string
+	name  string
 }
 
 func routeParentRefs(route unstructured.Unstructured) []objectRef {
@@ -483,7 +620,11 @@ func routeBackendRefs(route unstructured.Unstructured) []objectRef {
 				continue
 			}
 			kind, _ := backend["kind"].(string)
-			if kind != "" && kind != "Service" {
+			if kind == "" {
+				kind = "Service"
+			}
+			group, _ := backend["group"].(string)
+			if group != "" || kind != "Service" {
 				continue
 			}
 			name, _ := backend["name"].(string)
@@ -491,7 +632,7 @@ func routeBackendRefs(route unstructured.Unstructured) []objectRef {
 				continue
 			}
 			namespace, _ := backend["namespace"].(string)
-			ref := objectRef{namespace: namespace, name: name}
+			ref := objectRef{namespace: namespace, name: name, group: group, kind: kind}
 			if _, ok := seen[ref]; ok {
 				continue
 			}
@@ -572,7 +713,7 @@ type backendConfigAnnotation struct {
 	Ports   map[string]string `json:"ports"`
 }
 
-func backendConfigForService(service corev1.Service) []string {
+func backendConfigForServicePort(service corev1.Service, ref ingressServiceRef) []string {
 	value := service.Annotations["cloud.google.com/backend-config"]
 	if value == "" {
 		return nil
@@ -594,9 +735,40 @@ func backendConfigForService(service corev1.Service) []string {
 		names = append(names, name)
 	}
 	add(parsed.Default)
-	for _, name := range parsed.Ports {
-		add(name)
+	for portKey, name := range parsed.Ports {
+		if servicePortMatchesRef(portKey, ref) {
+			add(name)
+		}
 	}
 	sort.Strings(names)
 	return names
+}
+
+func servicePortMatchesRef(portKey string, ref ingressServiceRef) bool {
+	if portKey == "" {
+		return false
+	}
+	if ref.portName != "" {
+		return portKey == ref.portName
+	}
+	if ref.portNumber != 0 {
+		return portKey == fmt.Sprint(ref.portNumber)
+	}
+	return false
+}
+
+func hasGroupKind(object unstructured.Unstructured, group, kind string) bool {
+	return object.GetKind() == kind && hasAPIGroup(object, group)
+}
+
+func hasAPIGroup(object unstructured.Unstructured, group string) bool {
+	return apiGroup(object.GetAPIVersion()) == group
+}
+
+func apiGroup(apiVersion string) string {
+	group, _, found := strings.Cut(apiVersion, "/")
+	if !found {
+		return ""
+	}
+	return group
 }

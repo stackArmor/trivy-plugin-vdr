@@ -135,6 +135,31 @@ func TestAnalyzeGKEIngressBackendConfigIAPProtectsTargetService(t *testing.T) {
 	requireEvidence(t, exposure, "GKE BackendConfig default/web-backend enables IAP for Service default/web-svc")
 }
 
+func TestAnalyzeGKEIngressBackendConfigPortsOnlyProtectMatchingServicePort(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{
+			serviceWithPortsAndAnnotations("default", "web-svc", map[string]string{"app": "web"}, map[string]string{
+				"cloud.google.com/backend-config": `{"ports":{"admin":"admin-backend"}}`,
+			}, servicePort("public", 80), servicePort("admin", 8080)),
+		},
+		Ingresses: []networkingv1.Ingress{ingress("default", "public-ing", "gce", "web-svc", nil)},
+		Unstructured: []unstructured.Unstructured{
+			backendConfigIAP("default", "admin-backend", true),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true because Ingress targets unprotected service port: %#v", exposure)
+	}
+	if exposure.Protection != nil {
+		t.Fatalf("Protection = %#v, want nil for unprotected service port", exposure.Protection)
+	}
+}
+
 func TestAnalyzeAWSALBIngressSchemeAndClassParams(t *testing.T) {
 	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
 	objects := Objects{
@@ -218,6 +243,29 @@ func TestAnalyzeAWSALBAuthAnnotationsProtectOIDCAndCognito(t *testing.T) {
 	}
 }
 
+func TestAnalyzeAWSALBAuthAllowUnauthenticatedRemainsInternetAccessible(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "auth-alb", "", "api-svc", map[string]string{
+			"kubernetes.io/ingress.class":                               "alb",
+			"alb.ingress.kubernetes.io/scheme":                          "internet-facing",
+			"alb.ingress.kubernetes.io/auth-type":                       "oidc",
+			"alb.ingress.kubernetes.io/auth-on-unauthenticated-request": "allow",
+		})},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "api", "api", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true when unauthenticated action is allow: %#v", exposure)
+	}
+	if exposure.Protection != nil {
+		t.Fatalf("Protection = %#v, want nil when unauthenticated action is allow", exposure.Protection)
+	}
+}
+
 func TestAnalyzeAWSGatewayLoadBalancerConfigurationInternetFacing(t *testing.T) {
 	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
 	objects := Objects{
@@ -239,6 +287,72 @@ func TestAnalyzeAWSGatewayLoadBalancerConfigurationInternetFacing(t *testing.T) 
 		t.Fatalf("unexpected exposure metadata: %#v", exposure)
 	}
 	requireEvidence(t, exposure, "AWS Gateway default/aws-gw LoadBalancerConfiguration scheme is internet-facing")
+}
+
+func TestAnalyzeGatewayRouteIgnoresCrossNamespaceBackendRefWithoutReferenceGrant(t *testing.T) {
+	inv := inventoryWithWorkload("backend", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("backend", "api-svc", map[string]string{"app": "api"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("frontend", "public-gw", "gke-l7-global-external-managed"),
+			routeWithBackendRef("HTTPRoute", "frontend", "route", "public-gw", map[string]any{
+				"name":      "api-svc",
+				"namespace": "backend",
+				"port":      int64(80),
+			}),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("Analyze() returned %#v, want no exposure without ReferenceGrant", got)
+	}
+}
+
+func TestAnalyzeGatewayRouteAllowsCrossNamespaceBackendRefWithReferenceGrant(t *testing.T) {
+	inv := inventoryWithWorkload("backend", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("backend", "api-svc", map[string]string{"app": "api"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("frontend", "public-gw", "gke-l7-global-external-managed"),
+			routeWithBackendRef("HTTPRoute", "frontend", "route", "public-gw", map[string]any{
+				"name":      "api-svc",
+				"namespace": "backend",
+				"port":      int64(80),
+			}),
+			referenceGrant("backend", "allow-route", "gateway.networking.k8s.io", "HTTPRoute", "frontend", "", "Service", "api-svc"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("backend", "api", "api", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true with matching ReferenceGrant: %#v", exposure)
+	}
+}
+
+func TestAnalyzeUnstructuredKindCollisionsIgnoreUnexpectedAPIGroups(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		IngressClasses: []networkingv1.IngressClass{
+			ingressClass("alb", "ingress.k8s.aws/alb", "internet-facing-params"),
+		},
+		Ingresses: []networkingv1.Ingress{ingress("default", "params-alb", "alb", "api-svc", nil)},
+		Unstructured: []unstructured.Unstructured{
+			unstructuredWithGroup("example.com/v1", "IngressClassParams", "", "internet-facing-params", map[string]any{"scheme": "internet-facing"}),
+			unstructuredWithGroup("example.com/v1", "Gateway", "default", "fake-gw", map[string]any{"gatewayClassName": "gke-l7-global-external-managed"}),
+			route("HTTPRoute", "default", "fake-route", "fake-gw", "api-svc"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("Analyze() returned %#v, want no exposure from wrong API group kind collisions", got)
+	}
 }
 
 func TestAnalyzeGatewayRouteKindsResolveBackendRefs(t *testing.T) {
@@ -364,6 +478,17 @@ func serviceWithAnnotations(namespace, name string, selector, annotations map[st
 	}
 }
 
+func serviceWithPortsAndAnnotations(namespace, name string, selector, annotations map[string]string, ports ...corev1.ServicePort) corev1.Service {
+	return corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Annotations: annotations},
+		Spec:       corev1.ServiceSpec{Selector: selector, Ports: ports},
+	}
+}
+
+func servicePort(name string, port int32) corev1.ServicePort {
+	return corev1.ServicePort{Name: name, Port: port}
+}
+
 func ingress(namespace, name, className, serviceName string, annotations map[string]string) networkingv1.Ingress {
 	pathType := networkingv1.PathTypePrefix
 	ing := networkingv1.Ingress{
@@ -419,6 +544,10 @@ func httpRoute(namespace, name, gatewayName, serviceName string) unstructured.Un
 }
 
 func route(kind, namespace, name, gatewayName, serviceName string) unstructured.Unstructured {
+	return routeWithBackendRef(kind, namespace, name, gatewayName, map[string]any{"name": serviceName, "port": int64(80)})
+}
+
+func routeWithBackendRef(kind, namespace, name, gatewayName string, backendRef map[string]any) unstructured.Unstructured {
 	return unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "gateway.networking.k8s.io/v1",
 		"kind":       kind,
@@ -429,9 +558,44 @@ func route(kind, namespace, name, gatewayName, serviceName string) unstructured.
 		"spec": map[string]any{
 			"parentRefs": []any{map[string]any{"name": gatewayName}},
 			"rules": []any{map[string]any{
-				"backendRefs": []any{map[string]any{"name": serviceName, "port": int64(80)}},
+				"backendRefs": []any{backendRef},
 			}},
 		},
+	}}
+}
+
+func referenceGrant(namespace, name, fromGroup, fromKind, fromNamespace, toGroup, toKind, toName string) unstructured.Unstructured {
+	to := map[string]any{"group": toGroup, "kind": toKind}
+	if toName != "" {
+		to["name"] = toName
+	}
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1beta1",
+		"kind":       "ReferenceGrant",
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+		"spec": map[string]any{
+			"from": []any{map[string]any{
+				"group":     fromGroup,
+				"kind":      fromKind,
+				"namespace": fromNamespace,
+			}},
+			"to": []any{to},
+		},
+	}}
+}
+
+func unstructuredWithGroup(apiVersion, kind, namespace, name string, spec map[string]any) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": apiVersion,
+		"kind":       kind,
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+		"spec": spec,
 	}}
 }
 
