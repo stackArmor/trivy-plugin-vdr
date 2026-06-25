@@ -211,6 +211,52 @@ func TestRepeatedNamespaceFilterCollectsRequestedNamespaces(t *testing.T) {
 	}
 }
 
+func TestRejectsNamespacesWithAllNamespaces(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	_, err := (&Collector{Client: client}).Collect(context.Background(), Options{
+		AllNamespaces: true,
+		Namespaces:    []string{"prod"},
+	})
+	if err == nil {
+		t.Fatalf("Collect() error = nil, want conflicting namespace options error")
+	}
+	if err.Error() != "cannot set namespaces with all-namespaces" {
+		t.Fatalf("Collect() error = %q", err.Error())
+	}
+}
+
+func TestDeduplicatesRepeatedNamespaceInputs(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		deployment("prod", "web", podSpec(container("app", "example.com/prod:v1"))),
+	)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{Namespaces: []string{"prod", "prod"}})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	if len(inv.Resources) != 1 {
+		t.Fatalf("len(Resources) = %d, want 1: %#v", len(inv.Resources), inv.Resources)
+	}
+	img := requireImage(t, inv, "example.com/prod:v1")
+	if len(img.Resources) != 1 {
+		t.Fatalf("len(Image.Resources) = %d, want 1: %#v", len(img.Resources), img.Resources)
+	}
+}
+
+func TestRejectsEmptyNamespaceEntries(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	_, err := (&Collector{Client: client}).Collect(context.Background(), Options{Namespaces: []string{"prod", ""}})
+	if err == nil {
+		t.Fatalf("Collect() error = nil, want empty namespace error")
+	}
+	if err.Error() != "namespace entries cannot be empty" {
+		t.Fatalf("Collect() error = %q", err.Error())
+	}
+}
+
 func TestRequiresNamespaceOrAllNamespaces(t *testing.T) {
 	client := fake.NewSimpleClientset()
 
