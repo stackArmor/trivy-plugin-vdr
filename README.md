@@ -131,3 +131,13 @@ make test
 make build
 make install-local
 ```
+
+To build and run against your current Kubernetes context in one step (writes `output.json` and `output.html`):
+
+```sh
+scripts/local-test.sh                     # all namespaces
+scripts/local-test.sh --namespace default # single namespace
+scripts/local-test.sh --debug             # verbose progress logs
+```
+
+The script runs the freshly built binary directly, so it picks up local changes on every run. Trivy must be installed; `gcloud`/`aws` are optional for registry auth.
