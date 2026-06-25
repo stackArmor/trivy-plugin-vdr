@@ -38,8 +38,23 @@ type ContainerImage struct {
 	ImageRef      string `json:"imageRef"`
 	// NormalizedImage is the image reference without tag or digest for grouping and display only.
 	// ImageRef remains the canonical scan/deduplication key.
-	NormalizedImage string `json:"normalizedImage,omitempty"`
-	RestartPolicy   string `json:"restartPolicy,omitempty"`
+	NormalizedImage string             `json:"normalizedImage,omitempty"`
+	RestartPolicy   string             `json:"restartPolicy,omitempty"`
+	Security        *ContainerSecurity `json:"security,omitempty"`
+}
+
+type ContainerSecurity struct {
+	Privileged             *bool            `json:"privileged,omitempty"`
+	CapabilitiesAdd        []string         `json:"capabilitiesAdd,omitempty"`
+	CapabilitiesDrop       []string         `json:"capabilitiesDrop,omitempty"`
+	ReadOnlyRootFilesystem *bool            `json:"readOnlyRootFilesystem,omitempty"`
+	SeccompProfile         *SecurityProfile `json:"seccompProfile,omitempty"`
+	AppArmorProfile        *SecurityProfile `json:"appArmorProfile,omitempty"`
+}
+
+type SecurityProfile struct {
+	Type             string `json:"type,omitempty"`
+	LocalhostProfile string `json:"localhostProfile,omitempty"`
 }
 
 type Finding struct {
