@@ -736,7 +736,7 @@ func backendConfigForServicePort(service corev1.Service, ref ingressServiceRef) 
 	}
 	add(parsed.Default)
 	for portKey, name := range parsed.Ports {
-		if servicePortMatchesRef(portKey, ref) {
+		if servicePortMatchesRef(service, portKey, ref) {
 			add(name)
 		}
 	}
@@ -744,15 +744,20 @@ func backendConfigForServicePort(service corev1.Service, ref ingressServiceRef) 
 	return names
 }
 
-func servicePortMatchesRef(portKey string, ref ingressServiceRef) bool {
+func servicePortMatchesRef(service corev1.Service, portKey string, ref ingressServiceRef) bool {
 	if portKey == "" {
 		return false
 	}
-	if ref.portName != "" {
-		return portKey == ref.portName
-	}
-	if ref.portNumber != 0 {
-		return portKey == fmt.Sprint(ref.portNumber)
+	for _, port := range service.Spec.Ports {
+		if ref.portName != "" && port.Name != ref.portName {
+			continue
+		}
+		if ref.portNumber != 0 && port.Port != ref.portNumber {
+			continue
+		}
+		if portKey == port.Name || portKey == fmt.Sprint(port.Port) {
+			return true
+		}
 	}
 	return false
 }

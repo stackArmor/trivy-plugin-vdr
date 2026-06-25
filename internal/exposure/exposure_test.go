@@ -160,6 +160,56 @@ func TestAnalyzeGKEIngressBackendConfigPortsOnlyProtectMatchingServicePort(t *te
 	}
 }
 
+func TestAnalyzeGKEIngressBackendConfigPortNameAnnotationMatchesIngressPortNumber(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{
+			serviceWithPortsAndAnnotations("default", "web-svc", map[string]string{"app": "web"}, map[string]string{
+				"cloud.google.com/backend-config": `{"ports":{"public":"web-backend"}}`,
+			}, servicePort("public", 80)),
+		},
+		Ingresses: []networkingv1.Ingress{ingress("default", "public-ing", "gce", "web-svc", nil)},
+		Unstructured: []unstructured.Unstructured{
+			backendConfigIAP("default", "web-backend", true),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = true, want false because BackendConfig targets the service port by name: %#v", exposure)
+	}
+	if exposure.Protection == nil || exposure.Protection.Type != "iap" || exposure.Protection.Provider != "gke" || !exposure.Protection.Enabled {
+		t.Fatalf("Protection = %#v, want enabled GKE IAP", exposure.Protection)
+	}
+}
+
+func TestAnalyzeGKEIngressBackendConfigPortNumberAnnotationMatchesIngressPortName(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{
+			serviceWithPortsAndAnnotations("default", "web-svc", map[string]string{"app": "web"}, map[string]string{
+				"cloud.google.com/backend-config": `{"ports":{"80":"web-backend"}}`,
+			}, servicePort("public", 80)),
+		},
+		Ingresses: []networkingv1.Ingress{ingressWithServicePortName("default", "public-ing", "gce", "web-svc", "public", nil)},
+		Unstructured: []unstructured.Unstructured{
+			backendConfigIAP("default", "web-backend", true),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = true, want false because BackendConfig targets the service port by number: %#v", exposure)
+	}
+	if exposure.Protection == nil || exposure.Protection.Type != "iap" || exposure.Protection.Provider != "gke" || !exposure.Protection.Enabled {
+		t.Fatalf("Protection = %#v, want enabled GKE IAP", exposure.Protection)
+	}
+}
+
 func TestAnalyzeAWSALBIngressSchemeAndClassParams(t *testing.T) {
 	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
 	objects := Objects{
@@ -490,6 +540,14 @@ func servicePort(name string, port int32) corev1.ServicePort {
 }
 
 func ingress(namespace, name, className, serviceName string, annotations map[string]string) networkingv1.Ingress {
+	return ingressWithBackendPort(namespace, name, className, serviceName, networkingv1.ServiceBackendPort{Number: 80}, annotations)
+}
+
+func ingressWithServicePortName(namespace, name, className, serviceName, servicePortName string, annotations map[string]string) networkingv1.Ingress {
+	return ingressWithBackendPort(namespace, name, className, serviceName, networkingv1.ServiceBackendPort{Name: servicePortName}, annotations)
+}
+
+func ingressWithBackendPort(namespace, name, className, serviceName string, port networkingv1.ServiceBackendPort, annotations map[string]string) networkingv1.Ingress {
 	pathType := networkingv1.PathTypePrefix
 	ing := networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Annotations: annotations},
@@ -500,7 +558,7 @@ func ingress(namespace, name, className, serviceName string, annotations map[str
 						PathType: &pathType,
 						Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
 							Name: serviceName,
-							Port: networkingv1.ServiceBackendPort{Number: 80},
+							Port: port,
 						}},
 					}},
 				}},
