@@ -46,12 +46,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          platforms="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
+          # Unix only: the scanner uses syscall.Statfs, which isn't available on Windows.
+          platforms="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64"
           for platform in $platforms; do
             os="${platform%/*}"
             arch="${platform#*/}"
             bin="vdr"
-            [ "$os" = "windows" ] && bin="vdr.exe"
 
             echo "Building $os/$arch"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
