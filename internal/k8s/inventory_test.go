@@ -192,6 +192,65 @@ func TestCapturesAppArmorAnnotationForContainer(t *testing.T) {
 	})
 }
 
+func TestCapturesContainerAppArmorProfile(t *testing.T) {
+	profile := "profiles/container-apparmor"
+	client := fake.NewSimpleClientset(pod("default", "container-apparmor", podSpec(corev1.Container{
+		Name:  "app",
+		Image: "registry.example.com/app:v1",
+		SecurityContext: &corev1.SecurityContext{
+			AppArmorProfile: &corev1.AppArmorProfile{
+				Type:             corev1.AppArmorProfileTypeLocalhost,
+				LocalhostProfile: &profile,
+			},
+		},
+	})))
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireContainerSecurity(t, inv, "container-apparmor", "app", model.ContainerSecurity{
+		AppArmorProfile: &model.SecurityProfile{Type: "Localhost", LocalhostProfile: "profiles/container-apparmor"},
+	})
+}
+
+func TestCapturesPodAppArmorProfileFallback(t *testing.T) {
+	spec := podSpec(container("app", "registry.example.com/app:v1"))
+	spec.SecurityContext = &corev1.PodSecurityContext{
+		AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeRuntimeDefault},
+	}
+	client := fake.NewSimpleClientset(pod("default", "pod-apparmor", spec))
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireContainerSecurity(t, inv, "pod-apparmor", "app", model.ContainerSecurity{
+		AppArmorProfile: &model.SecurityProfile{Type: "RuntimeDefault"},
+	})
+}
+
+func TestAppArmorAnnotationOverridesPodProfile(t *testing.T) {
+	spec := podSpec(container("app", "registry.example.com/app:v1"))
+	spec.SecurityContext = &corev1.PodSecurityContext{
+		AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeRuntimeDefault},
+	}
+	client := fake.NewSimpleClientset(podWithAnnotations("default", "apparmor-precedence", map[string]string{
+		"container.apparmor.security.beta.kubernetes.io/app": "localhost/container-specific",
+	}, spec))
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireContainerSecurity(t, inv, "apparmor-precedence", "app", model.ContainerSecurity{
+		AppArmorProfile: &model.SecurityProfile{Type: "Localhost", LocalhostProfile: "container-specific"},
+	})
+}
+
 func TestExcludesZeroDesiredDaemonSetsByDefault(t *testing.T) {
 	client := fake.NewSimpleClientset(daemonSet("kube-system", "agent", 0, podSpec(
 		container("agent", "example.com/agent:v1"),
