@@ -1,6 +1,7 @@
 package vulnrichment
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,11 +12,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matthewvenne/trivy-plugin-k8s-vdr/internal/model"
 )
 
 const DefaultBaseURL = "https://raw.githubusercontent.com/cisagov/vulnrichment/develop"
+
+const httpTimeout = 30 * time.Second
 
 var cvePattern = regexp.MustCompile(`^CVE-(\d{4})-(\d{4,})$`)
 
@@ -43,15 +47,25 @@ func NewStore(cacheDir string, options ...Option) *Store {
 	store := &Store{
 		cacheDir: cacheDir,
 		baseURL:  DefaultBaseURL,
-		client:   http.DefaultClient,
+		client:   &http.Client{Timeout: httpTimeout},
 	}
 	for _, option := range options {
 		option(store)
 	}
-	if store.client == nil {
-		store.client = http.DefaultClient
-	}
+	store.client = normalizeClient(store.client)
 	return store
+}
+
+func normalizeClient(client *http.Client) *http.Client {
+	if client == nil {
+		return &http.Client{Timeout: httpTimeout}
+	}
+	if client.Timeout != 0 {
+		return client
+	}
+	copy := *client
+	copy.Timeout = httpTimeout
+	return &copy
 }
 
 func CacheRelativePath(cveID string) (string, error) {
@@ -63,7 +77,11 @@ func CacheRelativePath(cveID string) (string, error) {
 }
 
 func (s *Store) Lookup(cveID string) (model.Vulnrichment, bool, error) {
-	data, sourceURL, ok, err := s.readOrFetch(cveID)
+	return s.LookupContext(context.Background(), cveID)
+}
+
+func (s *Store) LookupContext(ctx context.Context, cveID string) (model.Vulnrichment, bool, error) {
+	data, sourceURL, ok, err := s.readOrFetch(ctx, cveID)
 	if err != nil || !ok {
 		return model.Vulnrichment{}, false, err
 	}
@@ -76,12 +94,16 @@ func (s *Store) Lookup(cveID string) (model.Vulnrichment, bool, error) {
 }
 
 func EnrichFindings(findings []model.Finding, store *Store) ([]model.Finding, error) {
+	return EnrichFindingsContext(context.Background(), findings, store)
+}
+
+func EnrichFindingsContext(ctx context.Context, findings []model.Finding, store *Store) ([]model.Finding, error) {
 	enriched := append([]model.Finding(nil), findings...)
 	if store == nil {
 		return enriched, nil
 	}
 	for i := range enriched {
-		vulnrichment, ok, err := store.Lookup(enriched[i].ID)
+		vulnrichment, ok, err := store.LookupContext(ctx, enriched[i].ID)
 		if err != nil {
 			return nil, err
 		}
@@ -93,10 +115,10 @@ func EnrichFindings(findings []model.Finding, store *Store) ([]model.Finding, er
 	return enriched, nil
 }
 
-func (s *Store) readOrFetch(cveID string) ([]byte, string, bool, error) {
+func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, bool, error) {
 	relativePath, err := CacheRelativePath(cveID)
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", false, nil
 	}
 	cachePath := filepath.Join(s.cacheDir, "vulnrichment", filepath.FromSlash(relativePath))
 	sourceURL := s.baseURL + "/" + relativePath
@@ -109,7 +131,14 @@ func (s *Store) readOrFetch(cveID string) ([]byte, string, bool, error) {
 		return nil, "", false, err
 	}
 
-	resp, err := s.client.Get(sourceURL)
+	if err := ctx.Err(); err != nil {
+		return nil, "", false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return nil, "", false, err
+	}
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, "", false, fmt.Errorf("fetch Vulnrichment data for %s: %w", cveID, err)
 	}
@@ -142,7 +171,7 @@ func bucketForCVE(cveID string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	return matches[1], fmt.Sprintf("CVE-%s-%dxxx", matches[1], number/1000), nil
+	return matches[1], fmt.Sprintf("%dxxx", number/1000), nil
 }
 
 func parse(data []byte) (model.Vulnrichment, bool, error) {
