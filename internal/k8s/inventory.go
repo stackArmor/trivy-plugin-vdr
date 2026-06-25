@@ -265,11 +265,11 @@ func containerSecurity(spec corev1.PodSpec, annotations map[string]string, c cor
 	if security.SeccompProfile == nil && spec.SecurityContext != nil {
 		security.SeccompProfile = seccompProfile(spec.SecurityContext.SeccompProfile)
 	}
-	if security.AppArmorProfile == nil && spec.SecurityContext != nil {
-		security.AppArmorProfile = appArmorProfile(spec.SecurityContext.AppArmorProfile)
-	}
 	if security.AppArmorProfile == nil {
 		security.AppArmorProfile = appArmorAnnotationProfile(annotations, c.Name)
+	}
+	if security.AppArmorProfile == nil && spec.SecurityContext != nil {
+		security.AppArmorProfile = appArmorProfile(spec.SecurityContext.AppArmorProfile)
 	}
 	if isZeroContainerSecurity(security) {
 		return nil
