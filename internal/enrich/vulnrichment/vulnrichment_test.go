@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/matthewvenne/trivy-plugin-k8s-vdr/internal/model"
 )
@@ -91,6 +92,150 @@ func TestLookupFetchesCachesAndExtractsCISAADPSSVC(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")); err != nil {
 		t.Fatalf("cache file missing: %v", err)
+	}
+}
+
+func TestLookupUsesFreshCacheWithoutRefresh(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, vulnrichmentJSON("cached"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(cachePath, now.Add(-6*24*time.Hour), now.Add(-6*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not be called for fresh cache")
+	}))
+	t.Cleanup(server.Close)
+
+	enrichment, ok, err := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now })).Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true")
+	}
+	if enrichment.Exploitation != "cached" {
+		t.Fatalf("Exploitation = %q, want cached", enrichment.Exploitation)
+	}
+}
+
+func TestLookupRefreshesStaleCache(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, vulnrichmentJSON("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(cachePath, now.Add(-8*24*time.Hour), now.Add(-8*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(vulnrichmentJSON("refreshed"))
+	}))
+	t.Cleanup(server.Close)
+
+	enrichment, ok, err := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now })).Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true")
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if enrichment.Exploitation != "refreshed" {
+		t.Fatalf("Exploitation = %q, want refreshed", enrichment.Exploitation)
+	}
+}
+
+func TestLookupForceRefreshFetchesEvenWhenCacheIsFresh(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, vulnrichmentJSON("cached"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(cachePath, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(vulnrichmentJSON("forced"))
+	}))
+	t.Cleanup(server.Close)
+
+	enrichment, ok, err := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }), WithForceRefresh(true)).Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true")
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if enrichment.Exploitation != "forced" {
+		t.Fatalf("Exploitation = %q, want forced", enrichment.Exploitation)
+	}
+}
+
+func TestLookupFailedForcedRefreshLeavesFreshCacheUsable(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cachedJSON := vulnrichmentJSON("cached")
+	if err := os.WriteFile(cachePath, cachedJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(cachePath, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+
+	enrichment, ok, err := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }), WithForceRefresh(true)).Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true from existing cache")
+	}
+	if enrichment.Exploitation != "cached" {
+		t.Fatalf("Exploitation = %q, want cached", enrichment.Exploitation)
+	}
+	got, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(cachedJSON) {
+		t.Fatalf("cache was modified after failed forced refresh: %q", string(got))
 	}
 }
 
@@ -291,4 +436,25 @@ func TestEnrichFindingsSkipsNonCVEIDs(t *testing.T) {
 	if enriched[0].Vulnrichment != nil {
 		t.Fatalf("Vulnrichment = %+v, want nil", enriched[0].Vulnrichment)
 	}
+}
+
+func vulnrichmentJSON(exploitation string) []byte {
+	return []byte(`{
+		"containers": {
+			"adp": [{
+				"metrics": [{
+					"other": {
+						"type": "ssvc",
+						"content": {
+							"options": [
+								{"Exploitation": "` + exploitation + `"},
+								{"Automatable": "yes"},
+								{"Technical Impact": "total"}
+							]
+						}
+					}
+				}]
+			}]
+		}
+	}`)
 }

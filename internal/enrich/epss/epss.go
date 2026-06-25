@@ -26,10 +26,11 @@ const (
 )
 
 type Store struct {
-	cacheDir string
-	url      string
-	client   *http.Client
-	now      func() time.Time
+	cacheDir     string
+	url          string
+	client       *http.Client
+	now          func() time.Time
+	forceRefresh bool
 
 	loaded bool
 	values map[string]model.EPSS
@@ -52,6 +53,12 @@ func WithHTTPClient(client *http.Client) Option {
 func WithNow(now func() time.Time) Option {
 	return func(s *Store) {
 		s.now = now
+	}
+}
+
+func WithForceRefresh(forceRefresh bool) Option {
+	return func(s *Store) {
+		s.forceRefresh = forceRefresh
 	}
 }
 
@@ -146,7 +153,7 @@ func (s *Store) load(ctx context.Context) error {
 
 func (s *Store) refreshIfStale(ctx context.Context) error {
 	info, err := os.Stat(s.cachePath())
-	if err == nil && s.now().Sub(info.ModTime()) < cacheMaxAge {
+	if err == nil && !s.forceRefresh && s.now().Sub(info.ModTime()) < cacheMaxAge {
 		return nil
 	}
 	if err != nil && !os.IsNotExist(err) {

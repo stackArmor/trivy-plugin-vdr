@@ -23,9 +23,16 @@ trivy vdr k8s --namespace default --format json
 trivy vdr k8s --all-namespaces --min-severity HIGH --min-epss 0.5
 trivy vdr k8s --view resources --output vdr-k8s.json
 trivy vdr k8s --skip-enrichment --skip-exposure --debug
+trivy vdr k8s --refresh-enrichment
 ```
 
 Future source commands are reserved but not implemented yet: `trivy vdr ecs` and `trivy vdr image`.
+
+## Enrichment cache
+
+EPSS and CISA Vulnrichment data are cached under `--cache-dir`. EPSS cache files are refreshed after 24 hours. Vulnrichment cache files are refreshed after 7 days.
+
+Use `--refresh-enrichment` to force EPSS and Vulnrichment refresh attempts even when cached files are still fresh. If a forced refresh fails and an existing cache file is still readable and valid, `vdr` keeps and uses the cached data.
 
 Run the standalone binary during development:
 

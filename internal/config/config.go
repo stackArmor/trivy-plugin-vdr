@@ -40,6 +40,7 @@ type Config struct {
 	MinSeverity           string
 	MinEPSS               float64
 	SkipEnrichment        bool
+	RefreshEnrichment     bool
 	SkipExposure          bool
 	Debug                 bool
 }
@@ -91,6 +92,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.MinSeverity, "min-severity", cfg.MinSeverity, "minimum severity")
 	fs.StringVar(&minEPSS, "min-epss", minEPSS, "minimum EPSS score from 0 to 1")
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")
+	fs.BoolVar(&cfg.RefreshEnrichment, "refresh-enrichment", cfg.RefreshEnrichment, "force EPSS and Vulnrichment enrichment refresh")
 	fs.BoolVar(&cfg.SkipExposure, "skip-exposure", cfg.SkipExposure, "skip exposure analysis")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
 
