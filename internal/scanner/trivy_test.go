@@ -312,6 +312,58 @@ func TestScanInventoryWithOptionsScansConcurrentlyAndReturnsFindingsByImageRef(t
 	}
 }
 
+func TestScanInventoryWithOptionsDefaultsToFiveParallelScans(t *testing.T) {
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{
+			{ImageRef: "registry.example.com/a:v1"},
+			{ImageRef: "registry.example.com/b:v1"},
+			{ImageRef: "registry.example.com/c:v1"},
+			{ImageRef: "registry.example.com/d:v1"},
+			{ImageRef: "registry.example.com/e:v1"},
+			{ImageRef: "registry.example.com/f:v1"},
+		},
+	}
+	runner := newBlockingImageRunner(map[string][]model.Finding{
+		"registry.example.com/a:v1": {{ID: "CVE-A"}},
+		"registry.example.com/b:v1": {{ID: "CVE-B"}},
+		"registry.example.com/c:v1": {{ID: "CVE-C"}},
+		"registry.example.com/d:v1": {{ID: "CVE-D"}},
+		"registry.example.com/e:v1": {{ID: "CVE-E"}},
+		"registry.example.com/f:v1": {{ID: "CVE-F"}},
+	})
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, _, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+			CacheCleanup: CleanupNever,
+		})
+		resultCh <- err
+	}()
+
+	runner.waitUntilActive(t, 5)
+	if got := runner.maxActive(); got > 5 {
+		t.Fatalf("max active scans = %d, want at most 5", got)
+	}
+	runner.release("registry.example.com/a:v1")
+	runner.waitUntilStarted(t, "registry.example.com/f:v1")
+	for _, image := range []string{
+		"registry.example.com/b:v1",
+		"registry.example.com/c:v1",
+		"registry.example.com/d:v1",
+		"registry.example.com/e:v1",
+		"registry.example.com/f:v1",
+	} {
+		runner.release(image)
+	}
+
+	if err := <-resultCh; err != nil {
+		t.Fatalf("ScanInventoryWithOptions returned error: %v", err)
+	}
+	if got := runner.maxActive(); got != 5 {
+		t.Fatalf("max active scans = %d, want default parallelism 5", got)
+	}
+}
+
 func TestScanInventoryWithOptionsSurfacesCleanupWarningWithoutDroppingFindings(t *testing.T) {
 	inventory := &model.Inventory{
 		Images: []model.ImageInventory{
@@ -337,14 +389,14 @@ func TestScanInventoryWithOptionsSurfacesCleanupWarningWithoutDroppingFindings(t
 	if len(findings) != 1 || findings[0].ID != "CVE-2026-0001" {
 		t.Fatalf("findings = %#v, want scan result preserved", findings)
 	}
-	if cleaner.calls != 1 {
-		t.Fatalf("cleanup calls = %d, want 1", cleaner.calls)
+	if got := cleaner.callCount(); got != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", got)
 	}
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want one cleanup warning", warnings)
 	}
-	if warnings[0].ImageRef != "registry.example.com/app:v1" || !strings.Contains(warnings[0].Message, "clean failed") {
-		t.Fatalf("warning = %#v, want image cleanup failure context", warnings[0])
+	if warnings[0].ImageRef != "" || !strings.Contains(warnings[0].Message, "clean failed") {
+		t.Fatalf("warning = %#v, want global cleanup failure context", warnings[0])
 	}
 }
 
@@ -373,8 +425,8 @@ func TestScanInventoryWithOptionsRunsCleanupAfterAllScansComplete(t *testing.T) 
 	}()
 
 	runner.waitUntilActive(t, 2)
-	if cleaner.calls != 0 {
-		t.Fatalf("cleanup calls while scans active = %d, want 0", cleaner.calls)
+	if got := cleaner.callCount(); got != 0 {
+		t.Fatalf("cleanup calls while scans active = %d, want 0", got)
 	}
 	runner.release("registry.example.com/a:v1")
 	runner.release("registry.example.com/b:v1")
@@ -382,10 +434,10 @@ func TestScanInventoryWithOptionsRunsCleanupAfterAllScansComplete(t *testing.T) 
 	if err := <-resultCh; err != nil {
 		t.Fatalf("ScanInventoryWithOptions returned error: %v", err)
 	}
-	if cleaner.calls != 2 {
-		t.Fatalf("cleanup calls = %d, want one per successful image", cleaner.calls)
+	if got := cleaner.callCount(); got != 1 {
+		t.Fatalf("cleanup calls = %d, want one post-scan cleanup", got)
 	}
-	if cleaner.overlapped {
+	if cleaner.didOverlap() {
 		t.Fatal("cleanup ran while image scans were active")
 	}
 }
@@ -434,27 +486,51 @@ func (f *fakeImageRunner) ScanImage(ctx context.Context, image string, timeout t
 }
 
 type fakeCacheCleaner struct {
+	mu    sync.Mutex
 	calls int
 	err   error
 }
 
 func (f *fakeCacheCleaner) Cleanup(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	return f.err
 }
 
+func (f *fakeCacheCleaner) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 type activeCheckingCacheCleaner struct {
+	mu         sync.Mutex
 	calls      int
 	overlapped bool
 	active     func() int
 }
 
 func (f *activeCheckingCacheCleaner) Cleanup(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	if f.active() != 0 {
 		f.overlapped = true
 	}
 	return nil
+}
+
+func (f *activeCheckingCacheCleaner) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func (f *activeCheckingCacheCleaner) didOverlap() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.overlapped
 }
 
 type blockingImageRunner struct {
@@ -488,6 +564,11 @@ func (r *blockingImageRunner) ScanImage(ctx context.Context, image string, timeo
 	}
 	close(r.started[image])
 	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.active--
+		r.mu.Unlock()
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -495,9 +576,6 @@ func (r *blockingImageRunner) ScanImage(ctx context.Context, image string, timeo
 	case <-r.releaseC[image]:
 	}
 
-	r.mu.Lock()
-	r.active--
-	r.mu.Unlock()
 	return r.findings[image], nil
 }
 
