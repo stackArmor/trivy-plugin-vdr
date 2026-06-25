@@ -94,6 +94,36 @@ func TestLookupFetchesCachesAndExtractsCISAADPSSVC(t *testing.T) {
 	}
 }
 
+func TestLookupDoesNotPublishInvalidFetchedJSON(t *testing.T) {
+	cacheDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"containers":`))
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	_, ok, err := store.Lookup("CVE-2026-12345")
+	if err == nil {
+		t.Fatal("Lookup returned nil error, want invalid JSON error")
+	}
+	if ok {
+		t.Fatal("Lookup ok = true, want false")
+	}
+
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if _, statErr := os.Stat(cachePath); !os.IsNotExist(statErr) {
+		t.Fatalf("cache file stat error = %v, want file to not exist", statErr)
+	}
+	matches, globErr := filepath.Glob(filepath.Join(filepath.Dir(cachePath), "vulnrichment-*.tmp"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temp files left behind: %v", matches)
+	}
+}
+
 func TestLookup404ReturnsNoEnrichmentWithoutError(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
