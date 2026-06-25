@@ -173,10 +173,11 @@ testdata/
 - [ ] Validate `parallel-scans > 0`, `cache-cleanup` in `auto|always|never`, `cache-min-free-gb >= 0`, and `cache-min-free-percent` between 0 and 100.
 - [ ] Pass `--image-src <value>` to `trivy image`; default must force registry scanning.
 - [ ] Update `ScanInventory` or add an options-based scanner to scan up to `parallel-scans` unique images concurrently while preserving deterministic final finding order by image ref.
-- [ ] After each image scan completes, run cache cleanup only when policy says so:
+- [ ] After the image scan phase completes, run one serialized cache cleanup only when policy says so:
   - `never`: do nothing.
   - `always`: run `trivy clean --scan-cache`.
   - `auto`: inspect free disk space for the configured Trivy cache directory or nearest existing parent; run `trivy clean --scan-cache` only when free space is below either configured threshold.
+- [ ] Cache cleanup must not run concurrently with active image scans.
 - [ ] Cache cleanup must be tested with fake disk-space and fake command runners; tests must not invoke real `trivy clean`.
 - [ ] If cleanup fails after a successful image scan, surface a warning/diagnostic in a testable way without discarding the scan result. A later report task may expose warnings.
 - [ ] Verify with `go test ./internal/scanner/...`, `go test ./internal/config/...`, and `go test ./...`.
