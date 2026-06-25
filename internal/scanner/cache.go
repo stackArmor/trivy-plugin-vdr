@@ -114,7 +114,13 @@ func (c trivyCacheCleaner) runClean(ctx context.Context) error {
 		commandRunner = execCommandRunner{}
 	}
 
-	_, stderr, err := commandRunner.Run(ctx, binary, "clean", "--scan-cache")
+	args := []string{"clean"}
+	if c.options.CacheDir != "" {
+		args = append(args, "--cache-dir", c.options.CacheDir)
+	}
+	args = append(args, "--scan-cache")
+
+	_, stderr, err := commandRunner.Run(ctx, binary, args...)
 	if err != nil {
 		return fmt.Errorf("trivy clean --scan-cache failed: %w: %s", err, string(bytes.TrimSpace(stderr)))
 	}
