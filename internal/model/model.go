@@ -9,7 +9,9 @@ type Inventory struct {
 }
 
 type ImageInventory struct {
-	ImageRef        string        `json:"imageRef"`
+	ImageRef string `json:"imageRef"`
+	// NormalizedImage is the image reference without tag or digest for grouping and display only.
+	// ImageRef remains the canonical scan/deduplication key.
 	NormalizedImage string        `json:"normalizedImage,omitempty"`
 	Resources       []ResourceRef `json:"resources"`
 }
@@ -31,9 +33,11 @@ type ResourceRef struct {
 }
 
 type ContainerImage struct {
-	Name            string `json:"name"`
-	ContainerType   string `json:"containerType"`
-	ImageRef        string `json:"imageRef"`
+	Name          string `json:"name"`
+	ContainerType string `json:"containerType"`
+	ImageRef      string `json:"imageRef"`
+	// NormalizedImage is the image reference without tag or digest for grouping and display only.
+	// ImageRef remains the canonical scan/deduplication key.
 	NormalizedImage string `json:"normalizedImage,omitempty"`
 	RestartPolicy   string `json:"restartPolicy,omitempty"`
 }

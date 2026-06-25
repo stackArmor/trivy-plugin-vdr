@@ -27,6 +27,7 @@ func TestCollectsDeploymentImages(t *testing.T) {
 		t.Fatalf("NormalizedImage = %q, want %q", img.NormalizedImage, "ghcr.io/acme/web")
 	}
 	requireRef(t, img, model.ResourceRef{
+		APIVersion:    "apps/v1",
 		Kind:          "Deployment",
 		Namespace:     "default",
 		Name:          "web",
@@ -47,6 +48,7 @@ func TestCollectsStatefulSetImages(t *testing.T) {
 
 	img := requireImage(t, inv, "postgres:16")
 	requireRef(t, img, model.ResourceRef{
+		APIVersion:    "apps/v1",
 		Kind:          "StatefulSet",
 		Namespace:     "data",
 		Name:          "db",
@@ -67,6 +69,7 @@ func TestCollectsPodRegularAndInitContainers(t *testing.T) {
 	}
 
 	requireRef(t, requireImage(t, inv, "registry.example.com/app:v1"), model.ResourceRef{
+		APIVersion:    "v1",
 		Kind:          "Pod",
 		Namespace:     "default",
 		Name:          "standalone",
@@ -74,6 +77,7 @@ func TestCollectsPodRegularAndInitContainers(t *testing.T) {
 		ContainerName: "app",
 	})
 	requireRef(t, requireImage(t, inv, "registry.example.com/migrate:v1"), model.ResourceRef{
+		APIVersion:    "v1",
 		Kind:          "Pod",
 		Namespace:     "default",
 		Name:          "standalone",
@@ -94,6 +98,7 @@ func TestCapturesInitContainerRestartPolicyAlways(t *testing.T) {
 	}
 
 	requireRef(t, requireImage(t, inv, "registry.example.com/sidecar:v1"), model.ResourceRef{
+		APIVersion:    "v1",
 		Kind:          "Pod",
 		Namespace:     "default",
 		Name:          "with-sidecar",
@@ -132,6 +137,7 @@ func TestIncludesZeroDesiredDaemonSetsWhenEnabled(t *testing.T) {
 	}
 
 	requireRef(t, requireImage(t, inv, "example.com/agent:v1"), model.ResourceRef{
+		APIVersion:    "apps/v1",
 		Kind:          "DaemonSet",
 		Namespace:     "kube-system",
 		Name:          "agent",
@@ -152,6 +158,7 @@ func TestCollectsJobAndCronJobImages(t *testing.T) {
 	}
 
 	requireRef(t, requireImage(t, inv, "example.com/job:v1"), model.ResourceRef{
+		APIVersion:    "batch/v1",
 		Kind:          "Job",
 		Namespace:     "batch",
 		Name:          "once",
@@ -159,6 +166,7 @@ func TestCollectsJobAndCronJobImages(t *testing.T) {
 		ContainerName: "runner",
 	})
 	requireRef(t, requireImage(t, inv, "example.com/cron:v2"), model.ResourceRef{
+		APIVersion:    "batch/v1",
 		Kind:          "CronJob",
 		Namespace:     "batch",
 		Name:          "nightly",
@@ -173,7 +181,7 @@ func TestNamespaceFilterCollectsOnlyRequestedNamespace(t *testing.T) {
 		deployment("prod", "web", podSpec(container("app", "example.com/prod:v1"))),
 	)
 
-	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{Namespace: "prod"})
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{Namespaces: []string{"prod"}})
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
@@ -182,6 +190,37 @@ func TestNamespaceFilterCollectsOnlyRequestedNamespace(t *testing.T) {
 		t.Fatalf("collected image from namespace outside filter")
 	}
 	requireImage(t, inv, "example.com/prod:v1")
+}
+
+func TestRepeatedNamespaceFilterCollectsRequestedNamespaces(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		deployment("default", "web", podSpec(container("app", "example.com/default:v1"))),
+		deployment("prod", "web", podSpec(container("app", "example.com/prod:v1"))),
+		deployment("dev", "web", podSpec(container("app", "example.com/dev:v1"))),
+	)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{Namespaces: []string{"default", "prod"}})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireImage(t, inv, "example.com/default:v1")
+	requireImage(t, inv, "example.com/prod:v1")
+	if imageByRef(inv, "example.com/dev:v1") != nil {
+		t.Fatalf("collected image from namespace outside repeated filter")
+	}
+}
+
+func TestRequiresNamespaceOrAllNamespaces(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	_, err := (&Collector{Client: client}).Collect(context.Background(), Options{})
+	if err == nil {
+		t.Fatalf("Collect() error = nil, want namespace requirement error")
+	}
+	if err.Error() != "namespace or all-namespaces is required" {
+		t.Fatalf("Collect() error = %q", err.Error())
+	}
 }
 
 func TestSameImageHasMultipleResourceRefs(t *testing.T) {
@@ -199,8 +238,8 @@ func TestSameImageHasMultipleResourceRefs(t *testing.T) {
 	if len(img.Resources) != 2 {
 		t.Fatalf("len(Resources) = %d, want 2: %#v", len(img.Resources), img.Resources)
 	}
-	requireRef(t, img, model.ResourceRef{Kind: "Deployment", Namespace: "default", Name: "web", ContainerType: "container", ContainerName: "app"})
-	requireRef(t, img, model.ResourceRef{Kind: "Pod", Namespace: "default", Name: "debug", ContainerType: "container", ContainerName: "tool"})
+	requireRef(t, img, model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "web", ContainerType: "container", ContainerName: "app"})
+	requireRef(t, img, model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "default", Name: "debug", ContainerType: "container", ContainerName: "tool"})
 }
 
 func TestNormalizedImageStripsTagAndDigestButImageKeyIsFullReference(t *testing.T) {
@@ -226,6 +265,24 @@ func TestNormalizedImageStripsTagAndDigestButImageKeyIsFullReference(t *testing.
 	}
 	if len(inv.Images) != 2 {
 		t.Fatalf("len(Images) = %d, want 2 full image keys", len(inv.Images))
+	}
+}
+
+func TestNormalizedImageStripsTagWithRegistryPort(t *testing.T) {
+	imageRef := "localhost:5000/team/api:1.0"
+	client := fake.NewSimpleClientset(pod("default", "api", podSpec(container("api", imageRef))))
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	img := requireImage(t, inv, imageRef)
+	if img.NormalizedImage != "localhost:5000/team/api" {
+		t.Fatalf("NormalizedImage = %q, want %q", img.NormalizedImage, "localhost:5000/team/api")
+	}
+	if img.ImageRef != imageRef {
+		t.Fatalf("ImageRef = %q, want full image ref %q", img.ImageRef, imageRef)
 	}
 }
 
@@ -329,7 +386,8 @@ func imageByRef(inv *model.Inventory, imageRef string) *model.ImageInventory {
 func requireRef(t *testing.T, img model.ImageInventory, want model.ResourceRef) {
 	t.Helper()
 	for _, got := range img.Resources {
-		if got.Kind == want.Kind &&
+		if got.APIVersion == want.APIVersion &&
+			got.Kind == want.Kind &&
 			got.Namespace == want.Namespace &&
 			got.Name == want.Name &&
 			got.ContainerType == want.ContainerType &&
