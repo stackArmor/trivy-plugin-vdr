@@ -121,7 +121,7 @@ func (c *Collector) collectPods(ctx context.Context, namespace string, builder *
 	}
 	for _, pod := range pods.Items {
 		ref := model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
-		builder.addResource(ref, pod.Spec, pod.Annotations)
+		builder.addResource(ref, pod.Spec, pod.Annotations, pod.Labels)
 	}
 	return nil
 }
@@ -133,7 +133,7 @@ func (c *Collector) collectDeployments(ctx context.Context, namespace string, bu
 	}
 	for _, deployment := range deployments.Items {
 		ref := workloadRef("apps/v1", "Deployment", deployment.Namespace, deployment.Name)
-		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations)
+		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations, deployment.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func (c *Collector) collectStatefulSets(ctx context.Context, namespace string, b
 	}
 	for _, statefulSet := range statefulSets.Items {
 		ref := workloadRef("apps/v1", "StatefulSet", statefulSet.Namespace, statefulSet.Name)
-		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations)
+		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations, statefulSet.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -160,7 +160,7 @@ func (c *Collector) collectDaemonSets(ctx context.Context, namespace string, inc
 			continue
 		}
 		ref := workloadRef("apps/v1", "DaemonSet", daemonSet.Namespace, daemonSet.Name)
-		builder.addResource(ref, daemonSet.Spec.Template.Spec, daemonSet.Spec.Template.Annotations)
+		builder.addResource(ref, daemonSet.Spec.Template.Spec, daemonSet.Spec.Template.Annotations, daemonSet.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -172,7 +172,7 @@ func (c *Collector) collectJobs(ctx context.Context, namespace string, builder *
 	}
 	for _, job := range jobs.Items {
 		ref := workloadRef("batch/v1", "Job", job.Namespace, job.Name)
-		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations)
+		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations, job.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -184,7 +184,7 @@ func (c *Collector) collectCronJobs(ctx context.Context, namespace string, build
 	}
 	for _, cronJob := range cronJobs.Items {
 		ref := workloadRef("batch/v1", "CronJob", cronJob.Namespace, cronJob.Name)
-		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec, cronJob.Spec.JobTemplate.Spec.Template.Annotations)
+		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec, cronJob.Spec.JobTemplate.Spec.Template.Annotations, cronJob.Spec.JobTemplate.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -203,8 +203,8 @@ type inventoryBuilder struct {
 	images    map[string]*model.ImageInventory
 }
 
-func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations map[string]string) {
-	resourceInventory := model.ResourceInventory{Resource: resource}
+func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, labels map[string]string) {
+	resourceInventory := model.ResourceInventory{Resource: resource, Labels: copyStringMap(labels)}
 	for _, c := range spec.Containers {
 		b.addContainer(&resourceInventory, resource, spec, annotations, c, "container")
 	}
@@ -248,6 +248,17 @@ func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInvento
 		b.images[c.Image] = image
 	}
 	image.Resources = append(image.Resources, ref)
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
 }
 
 func containerSecurity(spec corev1.PodSpec, annotations map[string]string, c corev1.Container) *model.ContainerSecurity {
