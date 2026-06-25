@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/distribution/reference"
 	"github.com/matthewvenne/trivy-plugin-k8s-vdr/internal/model"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,7 +15,7 @@ import (
 )
 
 type Options struct {
-	Namespace             string
+	Namespaces            []string
 	AllNamespaces         bool
 	IncludeZeroDaemonSets bool
 }
@@ -57,28 +58,34 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 		inventory: &model.Inventory{ContextName: c.ContextName},
 		images:    map[string]*model.ImageInventory{},
 	}
-	namespace := metav1.NamespaceAll
-	if opts.Namespace != "" {
-		namespace = opts.Namespace
+
+	namespaces := opts.Namespaces
+	if len(namespaces) == 0 {
+		if !opts.AllNamespaces {
+			return nil, errors.New("namespace or all-namespaces is required")
+		}
+		namespaces = []string{metav1.NamespaceAll}
 	}
 
-	if err := c.collectPods(ctx, namespace, &builder); err != nil {
-		return nil, err
-	}
-	if err := c.collectDeployments(ctx, namespace, &builder); err != nil {
-		return nil, err
-	}
-	if err := c.collectStatefulSets(ctx, namespace, &builder); err != nil {
-		return nil, err
-	}
-	if err := c.collectDaemonSets(ctx, namespace, opts.IncludeZeroDaemonSets, &builder); err != nil {
-		return nil, err
-	}
-	if err := c.collectJobs(ctx, namespace, &builder); err != nil {
-		return nil, err
-	}
-	if err := c.collectCronJobs(ctx, namespace, &builder); err != nil {
-		return nil, err
+	for _, namespace := range namespaces {
+		if err := c.collectPods(ctx, namespace, &builder); err != nil {
+			return nil, err
+		}
+		if err := c.collectDeployments(ctx, namespace, &builder); err != nil {
+			return nil, err
+		}
+		if err := c.collectStatefulSets(ctx, namespace, &builder); err != nil {
+			return nil, err
+		}
+		if err := c.collectDaemonSets(ctx, namespace, opts.IncludeZeroDaemonSets, &builder); err != nil {
+			return nil, err
+		}
+		if err := c.collectJobs(ctx, namespace, &builder); err != nil {
+			return nil, err
+		}
+		if err := c.collectCronJobs(ctx, namespace, &builder); err != nil {
+			return nil, err
+		}
 	}
 
 	return builder.finish(), nil
@@ -247,6 +254,13 @@ func resourceLess(a, b model.ResourceRef) bool {
 }
 
 func normalizeImage(image string) string {
+	ref, err := reference.ParseAnyReference(image)
+	if err == nil {
+		if named, ok := ref.(reference.Named); ok {
+			return reference.FamiliarString(reference.TrimNamed(named))
+		}
+	}
+
 	if beforeDigest, _, ok := strings.Cut(image, "@"); ok {
 		image = beforeDigest
 	}
