@@ -26,6 +26,7 @@ type CommandRunner interface {
 type TrivyRunner struct {
 	Binary        string
 	ImageSrc      string
+	CacheDir      string
 	CommandRunner CommandRunner
 }
 
@@ -44,7 +45,11 @@ func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.D
 		imageSrc = "registry"
 	}
 
-	args := []string{"image", "--image-src", imageSrc, "--format", "json", "--scanners", "vuln", "--timeout", timeout.String(), image}
+	args := []string{"image"}
+	if r.CacheDir != "" {
+		args = append(args, "--cache-dir", r.CacheDir)
+	}
+	args = append(args, "--image-src", imageSrc, "--format", "json", "--scanners", "vuln", "--timeout", timeout.String(), image)
 	stdout, stderr, err := commandRunner.Run(ctx, binary, args...)
 	if err != nil {
 		return nil, fmt.Errorf("trivy image scan failed for %q: %w: %s", image, err, string(bytes.TrimSpace(stderr)))
@@ -146,7 +151,7 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 			for index := range jobs {
 				image := images[index]
 				findings, err := runner.ScanImage(ctx, image.ImageRef, options.Timeout)
-				result := scanResult{findings: findings, err: err}
+				result := scanResult{findings: findings, err: err, completed: err == nil}
 				if err == nil {
 					for i := range result.findings {
 						result.findings[i].ImageRef = image.ImageRef
@@ -154,14 +159,6 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 							result.findings[i].NormalizedImage = image.NormalizedImage
 						}
 						result.findings[i].AffectedResources = append([]model.ResourceRef(nil), image.Resources...)
-					}
-					if options.CacheCleanup != CleanupNever && options.CacheCleaner != nil {
-						if cleanupErr := options.CacheCleaner.Cleanup(ctx); cleanupErr != nil {
-							result.warnings = append(result.warnings, Warning{
-								ImageRef: image.ImageRef,
-								Message:  fmt.Sprintf("trivy cache cleanup failed after scanning %q: %v", image.ImageRef, cleanupErr),
-							})
-						}
 					}
 				}
 				results[index] = result
@@ -185,6 +182,33 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	close(jobs)
 	wg.Wait()
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		for _, result := range results {
+			if result.err != nil {
+				return nil, nil, result.err
+			}
+		}
+		for _, result := range results {
+			if !result.completed {
+				return nil, nil, ctxErr
+			}
+		}
+	}
+
+	if options.CacheCleanup != CleanupNever && options.CacheCleaner != nil {
+		for index, result := range results {
+			if !result.completed {
+				continue
+			}
+			if cleanupErr := options.CacheCleaner.Cleanup(ctx); cleanupErr != nil {
+				results[index].warnings = append(results[index].warnings, Warning{
+					ImageRef: images[index].ImageRef,
+					Message:  fmt.Sprintf("trivy cache cleanup failed after scanning %q: %v", images[index].ImageRef, cleanupErr),
+				})
+			}
+		}
+	}
+
 	var findings []model.Finding
 	var warnings []Warning
 	for _, result := range results {
@@ -198,9 +222,10 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 }
 
 type scanResult struct {
-	findings []model.Finding
-	warnings []Warning
-	err      error
+	findings  []model.Finding
+	warnings  []Warning
+	err       error
+	completed bool
 }
 
 type inventoryImage struct {

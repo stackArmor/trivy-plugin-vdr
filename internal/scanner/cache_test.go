@@ -45,6 +45,24 @@ func TestCacheCleanerAlwaysRunsTrivyCleanScanCache(t *testing.T) {
 	}
 }
 
+func TestCacheCleanerAlwaysRunsTrivyCleanScanCacheWithCacheDir(t *testing.T) {
+	runner := &recordingCommandRunner{}
+	cleaner := NewCacheCleaner(CacheCleanupOptions{
+		Policy:        CleanupAlways,
+		Binary:        "trivy-test",
+		CacheDir:      "/tmp/trivy-cache",
+		CommandRunner: runner,
+	})
+
+	if err := cleaner.Cleanup(context.Background()); err != nil {
+		t.Fatalf("Cleanup returned error: %v", err)
+	}
+	wantArgs := []string{"clean", "--cache-dir", "/tmp/trivy-cache", "--scan-cache"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("command args = %#v, want %#v", runner.args, wantArgs)
+	}
+}
+
 func TestCacheCleanerAutoRunsWhenFreeSpaceBelowThresholds(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -56,6 +56,27 @@ func TestTrivyRunnerBuildsImageScanCommandWithCustomImageSource(t *testing.T) {
 	}
 }
 
+func TestTrivyRunnerBuildsImageScanCommandWithCacheDir(t *testing.T) {
+	fake := &fakeCommandRunner{
+		stdout: []byte(`{"Results":[]}`),
+	}
+	runner := TrivyRunner{
+		Binary:        "trivy-test",
+		CacheDir:      "/tmp/trivy-cache",
+		CommandRunner: fake,
+	}
+
+	_, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second)
+	if err != nil {
+		t.Fatalf("ScanImage returned error: %v", err)
+	}
+
+	wantArgs := []string{"image", "--cache-dir", "/tmp/trivy-cache", "--image-src", "registry", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
+	if !reflect.DeepEqual(fake.args, wantArgs) {
+		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
+	}
+}
+
 func TestTrivyRunnerParsesVulnerabilitiesFromMultipleResults(t *testing.T) {
 	runner := TrivyRunner{
 		Binary: "trivy",
@@ -327,6 +348,67 @@ func TestScanInventoryWithOptionsSurfacesCleanupWarningWithoutDroppingFindings(t
 	}
 }
 
+func TestScanInventoryWithOptionsRunsCleanupAfterAllScansComplete(t *testing.T) {
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{
+			{ImageRef: "registry.example.com/a:v1"},
+			{ImageRef: "registry.example.com/b:v1"},
+		},
+	}
+	runner := newBlockingImageRunner(map[string][]model.Finding{
+		"registry.example.com/a:v1": {{ID: "CVE-A"}},
+		"registry.example.com/b:v1": {{ID: "CVE-B"}},
+	})
+	cleaner := &activeCheckingCacheCleaner{active: runner.activeCount}
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, _, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+			Timeout:       time.Minute,
+			ParallelScans: 2,
+			CacheCleanup:  CleanupAlways,
+			CacheCleaner:  cleaner,
+		})
+		resultCh <- err
+	}()
+
+	runner.waitUntilActive(t, 2)
+	if cleaner.calls != 0 {
+		t.Fatalf("cleanup calls while scans active = %d, want 0", cleaner.calls)
+	}
+	runner.release("registry.example.com/a:v1")
+	runner.release("registry.example.com/b:v1")
+
+	if err := <-resultCh; err != nil {
+		t.Fatalf("ScanInventoryWithOptions returned error: %v", err)
+	}
+	if cleaner.calls != 2 {
+		t.Fatalf("cleanup calls = %d, want one per successful image", cleaner.calls)
+	}
+	if cleaner.overlapped {
+		t.Fatal("cleanup ran while image scans were active")
+	}
+}
+
+func TestScanInventoryWithOptionsReturnsContextErrorWhenCanceledBeforeScheduling(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{
+			{ImageRef: "registry.example.com/app:v1"},
+		},
+	}
+
+	_, _, err := ScanInventoryWithOptions(ctx, inventory, &fakeImageRunner{}, ScanOptions{
+		Timeout:       time.Minute,
+		ParallelScans: 1,
+		CacheCleanup:  CleanupNever,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
 type fakeCommandRunner struct {
 	name   string
 	args   []string
@@ -359,6 +441,20 @@ type fakeCacheCleaner struct {
 func (f *fakeCacheCleaner) Cleanup(ctx context.Context) error {
 	f.calls++
 	return f.err
+}
+
+type activeCheckingCacheCleaner struct {
+	calls      int
+	overlapped bool
+	active     func() int
+}
+
+func (f *activeCheckingCacheCleaner) Cleanup(ctx context.Context) error {
+	f.calls++
+	if f.active() != 0 {
+		f.overlapped = true
+	}
+	return nil
 }
 
 type blockingImageRunner struct {
@@ -442,4 +538,10 @@ func (r *blockingImageRunner) maxActive() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.max
+}
+
+func (r *blockingImageRunner) activeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.active
 }
