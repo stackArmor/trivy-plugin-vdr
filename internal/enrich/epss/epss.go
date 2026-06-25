@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
@@ -31,12 +32,20 @@ type Store struct {
 	client       *http.Client
 	now          func() time.Time
 	forceRefresh bool
+	logger       *log.Logger
 
 	loaded bool
 	values map[string]model.EPSS
 }
 
 type Option func(*Store)
+
+// WithLogger attaches a logger for INFO-level fetch/cache progress.
+func WithLogger(logger *log.Logger) Option {
+	return func(s *Store) {
+		s.logger = logger
+	}
+}
 
 func WithURL(url string) Option {
 	return func(s *Store) {
@@ -154,11 +163,13 @@ func (s *Store) load(ctx context.Context) error {
 func (s *Store) refreshIfStale(ctx context.Context) error {
 	info, err := os.Stat(s.cachePath())
 	if err == nil && !s.forceRefresh && s.now().Sub(info.ModTime()) < cacheMaxAge {
+		s.logger.Info("EPSS: using cached scores (updated %s)", info.ModTime().Format(time.RFC3339))
 		return nil
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	s.logger.Info("EPSS: downloading current scores")
 	return s.fetch(ctx)
 }
 
