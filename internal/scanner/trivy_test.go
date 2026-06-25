@@ -442,6 +442,57 @@ func TestScanInventoryWithOptionsRunsCleanupAfterAllScansComplete(t *testing.T) 
 	}
 }
 
+func TestScanInventoryWithOptionsReturnsRootScanErrorOverSiblingCancellation(t *testing.T) {
+	rootErr := errors.New("scan failed")
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{
+			{ImageRef: "registry.example.com/a:v1"},
+			{ImageRef: "registry.example.com/z:v1"},
+		},
+	}
+	runner := &cancellingImageRunner{err: rootErr}
+
+	_, _, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+		Timeout:       time.Minute,
+		ParallelScans: 2,
+		CacheCleanup:  CleanupNever,
+	})
+	if !errors.Is(err, rootErr) {
+		t.Fatalf("error = %v, want root scan error %v", err, rootErr)
+	}
+}
+
+func TestScanInventoryWithOptionsReturnsParentCancellationDuringCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{
+			{ImageRef: "registry.example.com/app:v1", Resources: []model.ResourceRef{{Kind: "Deployment", Name: "app"}}},
+		},
+	}
+	runner := &fakeImageRunner{
+		findings: map[string][]model.Finding{
+			"registry.example.com/app:v1": {{ID: "CVE-2026-0001"}},
+		},
+	}
+	cleaner := &cancelingCacheCleaner{cancel: cancel}
+
+	findings, warnings, err := ScanInventoryWithOptions(ctx, inventory, runner, ScanOptions{
+		Timeout:       time.Minute,
+		ParallelScans: 1,
+		CacheCleanup:  CleanupAlways,
+		CacheCleaner:  cleaner,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if findings != nil {
+		t.Fatalf("findings = %#v, want nil on cleanup cancellation error", findings)
+	}
+	if warnings != nil {
+		t.Fatalf("warnings = %#v, want nil on cleanup cancellation error", warnings)
+	}
+}
+
 func TestScanInventoryWithOptionsReturnsContextErrorWhenCanceledBeforeScheduling(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -504,6 +555,15 @@ func (f *fakeCacheCleaner) callCount() int {
 	return f.calls
 }
 
+type cancelingCacheCleaner struct {
+	cancel context.CancelFunc
+}
+
+func (f *cancelingCacheCleaner) Cleanup(ctx context.Context) error {
+	f.cancel()
+	return ctx.Err()
+}
+
 type activeCheckingCacheCleaner struct {
 	mu         sync.Mutex
 	calls      int
@@ -531,6 +591,18 @@ func (f *activeCheckingCacheCleaner) didOverlap() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.overlapped
+}
+
+type cancellingImageRunner struct {
+	err error
+}
+
+func (r *cancellingImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
+	if strings.Contains(image, "/z:") {
+		return nil, r.err
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 type blockingImageRunner struct {
