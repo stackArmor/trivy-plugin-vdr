@@ -78,7 +78,9 @@ Scan defaults:
 - `--cache-min-free-gb 10`
 - `--cache-min-free-percent 10`
 
-The Trivy image command uses `trivy image --image-src <value> --format json --scanners vuln --timeout <timeout> <image>`. The default `--image-src remote` pulls each image from its registry.
+The Trivy image command uses `trivy image --image-src <value> --skip-version-check --format json --scanners vuln --timeout <timeout> <image>`. The default `--image-src remote` pulls each image from its registry.
+
+To run scans concurrently without corrupting Trivy's shared BoltDB cache, `vdr` downloads the vulnerability database once up front (`trivy image --download-db-only`) and then runs each scan with `--skip-db-update` in its own temporary cache directory, with the downloaded database symlinked in read-only. This keeps the vulnerability DB shared while giving each concurrent scan a private filesystem (fanal) cache, avoiding the cache-lock contention and database corruption that otherwise occur when multiple `trivy image` processes share one cache directory.
 
 A single image that cannot be pulled or scanned does not abort the run: the failure is recorded as a warning in the report and the remaining images are still scanned and enriched. If any image fails, `vdr` exits with a non-zero status after writing the report.
 

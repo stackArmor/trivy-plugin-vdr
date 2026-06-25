@@ -3,6 +3,8 @@ package scanner
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -29,7 +31,7 @@ func TestTrivyRunnerBuildsImageScanCommand(t *testing.T) {
 	if fake.name != "trivy-test" {
 		t.Fatalf("command name = %q, want trivy-test", fake.name)
 	}
-	wantArgs := []string{"image", "--image-src", "remote", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
+	wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
 	}
@@ -50,7 +52,7 @@ func TestTrivyRunnerBuildsImageScanCommandWithCustomImageSource(t *testing.T) {
 		t.Fatalf("ScanImage returned error: %v", err)
 	}
 
-	wantArgs := []string{"image", "--image-src", "remote,local", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
+	wantArgs := []string{"image", "--image-src", "remote,local", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
 	}
@@ -71,7 +73,7 @@ func TestTrivyRunnerBuildsImageScanCommandWithCacheDir(t *testing.T) {
 		t.Fatalf("ScanImage returned error: %v", err)
 	}
 
-	wantArgs := []string{"image", "--cache-dir", "/tmp/trivy-cache", "--image-src", "remote", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
+	wantArgs := []string{"image", "--cache-dir", "/tmp/trivy-cache", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
 	}
@@ -439,6 +441,74 @@ func TestScanInventoryWithOptionsRunsCleanupAfterAllScansComplete(t *testing.T) 
 	}
 	if cleaner.didOverlap() {
 		t.Fatal("cleanup ran while image scans were active")
+	}
+}
+
+func TestEnsureVulnDBDownloadsOnce(t *testing.T) {
+	fake := &fakeCommandRunner{stdout: []byte("")}
+	runner := TrivyRunner{Binary: "trivy-test", CacheDir: "/tmp/trivy-cache", CommandRunner: fake}
+	if err := runner.EnsureVulnDB(context.Background()); err != nil {
+		t.Fatalf("EnsureVulnDB error: %v", err)
+	}
+	wantArgs := []string{"image", "--download-db-only", "--skip-version-check", "--cache-dir", "/tmp/trivy-cache"}
+	if !reflect.DeepEqual(fake.args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", fake.args, wantArgs)
+	}
+}
+
+func TestScanImageIsolatedCacheUsesTempDirAndSkipsDBUpdate(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "db"), 0o755); err != nil {
+		t.Fatalf("seed db dir: %v", err)
+	}
+	fake := &fakeCommandRunner{stdout: []byte(`{"Results":[]}`)}
+	runner := TrivyRunner{Binary: "trivy-test", CacheDir: base, IsolateCache: true, CommandRunner: fake}
+
+	if _, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second); err != nil {
+		t.Fatalf("ScanImage error: %v", err)
+	}
+
+	var cacheDir string
+	skipDB := false
+	for i, a := range fake.args {
+		if a == "--cache-dir" && i+1 < len(fake.args) {
+			cacheDir = fake.args[i+1]
+		}
+		if a == "--skip-db-update" {
+			skipDB = true
+		}
+	}
+	if cacheDir == "" || cacheDir == base {
+		t.Fatalf("expected isolated temp cache dir, got %q (base %q)", cacheDir, base)
+	}
+	if !skipDB {
+		t.Fatalf("expected --skip-db-update in args: %#v", fake.args)
+	}
+}
+
+func TestIsolatedCacheDirSymlinksDB(t *testing.T) {
+	base := t.TempDir()
+	dbPath := filepath.Join(base, "db")
+	if err := os.MkdirAll(dbPath, 0o755); err != nil {
+		t.Fatalf("seed db: %v", err)
+	}
+	dir, cleanup, err := isolatedCacheDir(base)
+	if err != nil {
+		t.Fatalf("isolatedCacheDir error: %v", err)
+	}
+	defer cleanup()
+
+	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, "db"))
+	if err != nil {
+		t.Fatalf("eval symlink: %v", err)
+	}
+	wantResolved, _ := filepath.EvalSymlinks(dbPath)
+	if resolved != wantResolved {
+		t.Fatalf("db symlink resolves to %q, want %q", resolved, wantResolved)
+	}
+	cleanup()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected temp dir removed after cleanup")
 	}
 }
 
