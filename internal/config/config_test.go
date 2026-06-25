@@ -47,8 +47,18 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.MinEPSS != -1 {
 		t.Fatalf("MinEPSS = %v, want -1", cfg.MinEPSS)
 	}
-	if cfg.SkipEnrichment || cfg.SkipExposure || cfg.Debug {
-		t.Fatalf("SkipEnrichment/SkipExposure/Debug = %v/%v/%v, want all false", cfg.SkipEnrichment, cfg.SkipExposure, cfg.Debug)
+	if cfg.SkipEnrichment || cfg.RefreshEnrichment || cfg.SkipExposure || cfg.Debug {
+		t.Fatalf("SkipEnrichment/RefreshEnrichment/SkipExposure/Debug = %v/%v/%v/%v, want all false", cfg.SkipEnrichment, cfg.RefreshEnrichment, cfg.SkipExposure, cfg.Debug)
+	}
+}
+
+func TestParseRefreshEnrichment(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--refresh-enrichment"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.RefreshEnrichment {
+		t.Fatal("RefreshEnrichment = false, want true")
 	}
 }
 

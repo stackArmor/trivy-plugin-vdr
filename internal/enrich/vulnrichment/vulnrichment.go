@@ -19,14 +19,19 @@ import (
 
 const DefaultBaseURL = "https://raw.githubusercontent.com/cisagov/vulnrichment/develop"
 
-const httpTimeout = 30 * time.Second
+const (
+	cacheMaxAge = 7 * 24 * time.Hour
+	httpTimeout = 30 * time.Second
+)
 
 var cvePattern = regexp.MustCompile(`^CVE-(\d{4})-(\d{4,})$`)
 
 type Store struct {
-	cacheDir string
-	baseURL  string
-	client   *http.Client
+	cacheDir     string
+	baseURL      string
+	client       *http.Client
+	now          func() time.Time
+	forceRefresh bool
 }
 
 type Option func(*Store)
@@ -43,16 +48,32 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
+func WithNow(now func() time.Time) Option {
+	return func(s *Store) {
+		s.now = now
+	}
+}
+
+func WithForceRefresh(forceRefresh bool) Option {
+	return func(s *Store) {
+		s.forceRefresh = forceRefresh
+	}
+}
+
 func NewStore(cacheDir string, options ...Option) *Store {
 	store := &Store{
 		cacheDir: cacheDir,
 		baseURL:  DefaultBaseURL,
 		client:   &http.Client{Timeout: httpTimeout},
+		now:      time.Now,
 	}
 	for _, option := range options {
 		option(store)
 	}
 	store.client = normalizeClient(store.client)
+	if store.now == nil {
+		store.now = time.Now
+	}
 	return store
 }
 
@@ -125,41 +146,63 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 
 	data, err := os.ReadFile(cachePath)
 	if err == nil {
-		return data, sourceURL, true, nil
+		info, statErr := os.Stat(cachePath)
+		if statErr != nil {
+			return nil, "", false, statErr
+		}
+		if !s.forceRefresh && s.now().Sub(info.ModTime()) < cacheMaxAge {
+			return data, sourceURL, true, nil
+		}
+		refreshedData, ok, fetchErr := s.fetch(ctx, cveID, cachePath, sourceURL)
+		if fetchErr != nil {
+			if json.Valid(data) {
+				return data, sourceURL, true, nil
+			}
+			return nil, "", false, fetchErr
+		}
+		return refreshedData, sourceURL, ok, nil
 	}
 	if !os.IsNotExist(err) {
 		return nil, "", false, err
 	}
 
-	if err := ctx.Err(); err != nil {
+	data, ok, err := s.fetch(ctx, cveID, cachePath, sourceURL)
+	if err != nil {
 		return nil, "", false, err
+	}
+	return data, sourceURL, ok, nil
+}
+
+func (s *Store) fetch(ctx context.Context, cveID, cachePath, sourceURL string) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
-		return nil, "", false, err
+		return nil, false, err
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, "", false, fmt.Errorf("fetch Vulnrichment data for %s: %w", cveID, err)
+		return nil, false, fmt.Errorf("fetch Vulnrichment data for %s: %w", cveID, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, sourceURL, false, nil
+		return nil, false, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, "", false, fmt.Errorf("fetch Vulnrichment data for %s: status %d", cveID, resp.StatusCode)
+		return nil, false, fmt.Errorf("fetch Vulnrichment data for %s: status %d", cveID, resp.StatusCode)
 	}
-	data, err = io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, "", false, err
+		return nil, false, err
 	}
 	if !json.Valid(data) {
-		return nil, "", false, fmt.Errorf("parse Vulnrichment data for %s: invalid JSON", cveID)
+		return nil, false, fmt.Errorf("parse Vulnrichment data for %s: invalid JSON", cveID)
 	}
 	if err := writeCacheFileAtomically(cachePath, data); err != nil {
-		return nil, "", false, err
+		return nil, false, err
 	}
-	return data, sourceURL, true, nil
+	return data, true, nil
 }
 
 func writeCacheFileAtomically(cachePath string, data []byte) error {
