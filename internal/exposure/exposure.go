@@ -714,7 +714,7 @@ type backendConfigAnnotation struct {
 }
 
 func backendConfigForServicePort(service corev1.Service, ref ingressServiceRef) []string {
-	value := service.Annotations["cloud.google.com/backend-config"]
+	value := backendConfigAnnotationValue(service)
 	if value == "" {
 		return nil
 	}
@@ -734,14 +734,25 @@ func backendConfigForServicePort(service corev1.Service, ref ingressServiceRef) 
 		seen[name] = struct{}{}
 		names = append(names, name)
 	}
-	add(parsed.Default)
+	matchedPort := false
 	for portKey, name := range parsed.Ports {
 		if servicePortMatchesRef(service, portKey, ref) {
+			matchedPort = true
 			add(name)
 		}
 	}
+	if !matchedPort {
+		add(parsed.Default)
+	}
 	sort.Strings(names)
 	return names
+}
+
+func backendConfigAnnotationValue(service corev1.Service) string {
+	if value := service.Annotations["cloud.google.com/backend-config"]; value != "" {
+		return value
+	}
+	return service.Annotations["beta.cloud.google.com/backend-config"]
 }
 
 func servicePortMatchesRef(service corev1.Service, portKey string, ref ingressServiceRef) bool {
