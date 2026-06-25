@@ -8,15 +8,15 @@ import (
 	"io"
 	"os"
 
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/config"
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/enrich"
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/enrich/epss"
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/enrich/vulnrichment"
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/exposure"
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/k8s"
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/report"
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/scanner"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/epss"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/vulnrichment"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/exposure"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/k8s"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/report"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scanner"
 )
 
 func main() {

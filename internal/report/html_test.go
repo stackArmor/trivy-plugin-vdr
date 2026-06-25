@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
 func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/matthewvenne/trivy-plugin-vdr
+module github.com/stackArmor/trivy-plugin-vdr
 
 go 1.23.0
 
