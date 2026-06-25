@@ -195,11 +195,7 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 				return nil, nil, result.err
 			}
 		}
-		for _, result := range results {
-			if !result.completed {
-				return nil, nil, ctxErr
-			}
-		}
+		return nil, nil, ctxErr
 	}
 
 	var cleanupWarnings []Warning
