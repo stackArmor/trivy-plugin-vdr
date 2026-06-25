@@ -1,4 +1,4 @@
-module github.com/matthewvenne/trivy-plugin-k8s-vdr
+module github.com/matthewvenne/trivy-plugin-vdr
 
 go 1.23.0
 

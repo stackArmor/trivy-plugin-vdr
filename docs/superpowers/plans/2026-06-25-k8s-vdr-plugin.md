@@ -56,7 +56,7 @@ testdata/
 - Create: `internal/model/model.go`
 - Create: `README.md`
 
-- [ ] Initialize the Go module with `go mod init github.com/matthewvenne/trivy-plugin-k8s-vdr`.
+- [ ] Initialize the Go module with `go mod init github.com/matthewvenne/trivy-plugin-vdr`.
 - [ ] Create `plugin.yaml` for a Trivy plugin named `vdr`.
 - [ ] Create shared model structs for inventory, resource refs, findings, EPSS, Vulnrichment, exposure, and reports.
 - [ ] Write config tests for defaults, namespace parsing, invalid formats, invalid views, invalid severity, and timeout parsing.
@@ -65,7 +65,7 @@ testdata/
 - [ ] Add `Makefile` targets `build`, `test`, and `install-local`.
 - [ ] Add README usage examples.
 - [ ] Verify with `go test ./...`, `go run ./cmd/vdr --help`, and `go build -o vdr ./cmd/vdr`.
-- [ ] Commit with `git commit -m "feat: scaffold k8s-vdr plugin"`.
+- [ ] Commit with `git commit -m "feat: scaffold vdr plugin"`.
 
 ---
 
@@ -78,7 +78,7 @@ testdata/
 - Modify: `internal/config/config.go`
 - Modify: `internal/config/config_test.go`
 - Rename: `cmd/k8s-vdr/main.go` to `cmd/vdr/main.go`
-- Modify: `docs/superpowers/plans/2026-06-25-k8s-vdr-plugin.md`
+- Modify: `docs/superpowers/plans/2026-06-25-vdr-plugin.md`
 
 - [ ] Rename the executable package path from `cmd/k8s-vdr` to `cmd/vdr`.
 - [ ] Change the plugin manifest name from `k8s-vdr` to `vdr`.
