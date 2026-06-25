@@ -1,2 +1,7 @@
 .worktrees/
 docs/superpowers/
+
+# Build output
+/vdr
+/vdr.exe
+/dist/

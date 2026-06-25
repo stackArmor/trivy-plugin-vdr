@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
 func TestEnrichFindingsCombinesEPSSAndVulnrichment(t *testing.T) {
