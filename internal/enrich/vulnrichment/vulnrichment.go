@@ -153,13 +153,39 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 	if err != nil {
 		return nil, "", false, err
 	}
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
-		return nil, "", false, err
+	if !json.Valid(data) {
+		return nil, "", false, fmt.Errorf("parse Vulnrichment data for %s: invalid JSON", cveID)
 	}
-	if err := os.WriteFile(cachePath, data, 0o644); err != nil {
+	if err := writeCacheFileAtomically(cachePath, data); err != nil {
 		return nil, "", false, err
 	}
 	return data, sourceURL, true, nil
+}
+
+func writeCacheFileAtomically(cachePath string, data []byte) error {
+	cacheDir := filepath.Dir(cachePath)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return err
+	}
+
+	tmpFile, err := os.CreateTemp(cacheDir, "vulnrichment-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, cachePath); err != nil {
+		return err
+	}
+	return nil
 }
 
 func bucketForCVE(cveID string) (string, string, error) {
