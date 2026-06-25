@@ -61,6 +61,16 @@ func TestParseNamespaceFlags(t *testing.T) {
 	}
 }
 
+func TestParseRejectsConflictingNamespaceScope(t *testing.T) {
+	_, err := Parse([]string{"--namespace", "prod", "--all-namespaces"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want conflicting namespace scope error")
+	}
+	if !strings.Contains(err.Error(), "all-namespaces") {
+		t.Fatalf("error = %q, want all-namespaces context", err.Error())
+	}
+}
+
 func TestParseNamespaceRejectsInvalidNames(t *testing.T) {
 	_, err := Parse([]string{"--namespace", "bad/name"})
 	if err == nil {
@@ -68,6 +78,16 @@ func TestParseNamespaceRejectsInvalidNames(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "namespace") {
 		t.Fatalf("error = %q, want namespace context", err.Error())
+	}
+}
+
+func TestParseNamespaceRejectsNamesLongerThan63Characters(t *testing.T) {
+	_, err := Parse([]string{"--namespace", strings.Repeat("a", 64)})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want namespace length error")
+	}
+	if !strings.Contains(err.Error(), "63") {
+		t.Fatalf("error = %q, want max length context", err.Error())
 	}
 }
 
@@ -105,6 +125,15 @@ func TestParseTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("Parse returned nil error, want invalid timeout error")
 	}
+
+	for _, value := range []string{"0s", "-1s"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := Parse([]string{"--timeout", value})
+			if err == nil {
+				t.Fatal("Parse returned nil error, want non-positive timeout error")
+			}
+		})
+	}
 }
 
 func TestParseMinEPSS(t *testing.T) {
@@ -116,7 +145,7 @@ func TestParseMinEPSS(t *testing.T) {
 		t.Fatalf("MinEPSS = %v, want 0.72", cfg.MinEPSS)
 	}
 
-	for _, value := range []string{"-0.2", "1.2", "not-a-number"} {
+	for _, value := range []string{"-0.2", "1.2", "not-a-number", "NaN", "+Inf", "-Inf"} {
 		t.Run(value, func(t *testing.T) {
 			_, err := Parse([]string{"--min-epss", value})
 			if err == nil {

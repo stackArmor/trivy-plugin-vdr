@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -47,6 +48,9 @@ func (n *namespaceList) String() string {
 func (n *namespaceList) Set(value string) error {
 	if value == "" {
 		return errors.New("namespace cannot be empty")
+	}
+	if len(value) > 63 {
+		return fmt.Errorf("invalid namespace %q: must be 63 characters or fewer", value)
 	}
 	if !namespacePattern.MatchString(value) {
 		return fmt.Errorf("invalid namespace %q", value)
@@ -95,17 +99,23 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid timeout %q: %w", timeout, err)
 	}
+	if parsedTimeout <= 0 {
+		return Config{}, fmt.Errorf("invalid timeout %q: must be greater than zero", timeout)
+	}
 	cfg.Timeout = parsedTimeout
 
 	parsedEPSS, err := strconv.ParseFloat(minEPSS, 64)
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid min-epss %q: %w", minEPSS, err)
 	}
-	if parsedEPSS != -1 && (parsedEPSS < 0 || parsedEPSS > 1) {
+	if math.IsNaN(parsedEPSS) || math.IsInf(parsedEPSS, 0) || (parsedEPSS != -1 && (parsedEPSS < 0 || parsedEPSS > 1)) {
 		return Config{}, fmt.Errorf("invalid min-epss %v: must be -1 or between 0 and 1", parsedEPSS)
 	}
 	cfg.MinEPSS = parsedEPSS
 	cfg.Namespaces = []string(namespaces)
+	if len(cfg.Namespaces) > 0 && allNamespacesSet && cfg.AllNamespaces {
+		return Config{}, errors.New("cannot use --namespace with --all-namespaces")
+	}
 	if len(cfg.Namespaces) > 0 && !allNamespacesSet {
 		cfg.AllNamespaces = false
 	}
