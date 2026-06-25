@@ -23,6 +23,10 @@ const (
 
 	ViewFindings  = "findings"
 	ViewResources = "resources"
+
+	CacheCleanupAuto   = "auto"
+	CacheCleanupAlways = "always"
+	CacheCleanupNever  = "never"
 )
 
 var namespacePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
@@ -37,6 +41,11 @@ type Config struct {
 	Output                string
 	CacheDir              string
 	Timeout               time.Duration
+	ImageSrc              string
+	ParallelScans         int
+	CacheCleanup          string
+	CacheMinFreeGB        int
+	CacheMinFreePercent   int
 	MinSeverity           string
 	MinEPSS               float64
 	SkipEnrichment        bool
@@ -89,6 +98,11 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.Output, "output", cfg.Output, "write output to file")
 	fs.StringVar(&cfg.CacheDir, "cache-dir", cfg.CacheDir, "cache directory")
 	fs.StringVar(&timeout, "timeout", timeout, "scan timeout")
+	fs.StringVar(&cfg.ImageSrc, "image-src", cfg.ImageSrc, "Trivy image source")
+	fs.IntVar(&cfg.ParallelScans, "parallel-scans", cfg.ParallelScans, "maximum concurrent image scans")
+	fs.StringVar(&cfg.CacheCleanup, "cache-cleanup", cfg.CacheCleanup, "Trivy scan cache cleanup policy: auto, always, or never")
+	fs.IntVar(&cfg.CacheMinFreeGB, "cache-min-free-gb", cfg.CacheMinFreeGB, "minimum free disk space in GB before auto cache cleanup")
+	fs.IntVar(&cfg.CacheMinFreePercent, "cache-min-free-percent", cfg.CacheMinFreePercent, "minimum free disk percentage before auto cache cleanup")
 	fs.StringVar(&cfg.MinSeverity, "min-severity", cfg.MinSeverity, "minimum severity")
 	fs.StringVar(&minEPSS, "min-epss", minEPSS, "minimum EPSS score from 0 to 1")
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")
@@ -159,6 +173,18 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	if err := validateSeverity(cfg.MinSeverity); err != nil {
 		return Config{}, err
 	}
+	if cfg.ParallelScans <= 0 {
+		return Config{}, fmt.Errorf("invalid parallel-scans %d: must be greater than zero", cfg.ParallelScans)
+	}
+	if err := validateCacheCleanup(cfg.CacheCleanup); err != nil {
+		return Config{}, err
+	}
+	if cfg.CacheMinFreeGB < 0 {
+		return Config{}, fmt.Errorf("invalid cache-min-free-gb %d: must be greater than or equal to zero", cfg.CacheMinFreeGB)
+	}
+	if cfg.CacheMinFreePercent < 0 || cfg.CacheMinFreePercent > 100 {
+		return Config{}, fmt.Errorf("invalid cache-min-free-percent %d: must be between 0 and 100", cfg.CacheMinFreePercent)
+	}
 
 	return cfg, nil
 }
@@ -175,6 +201,11 @@ func Default() Config {
 		View:                  ViewFindings,
 		CacheDir:              filepath.Join(home, ".cache", "trivy", "vdr"),
 		Timeout:               30 * time.Minute,
+		ImageSrc:              "registry",
+		ParallelScans:         5,
+		CacheCleanup:          CacheCleanupAuto,
+		CacheMinFreeGB:        10,
+		CacheMinFreePercent:   10,
 		MinEPSS:               -1,
 	}
 }
@@ -203,5 +234,14 @@ func validateSeverity(value string) error {
 		return nil
 	default:
 		return fmt.Errorf("invalid min-severity %q", value)
+	}
+}
+
+func validateCacheCleanup(value string) error {
+	switch value {
+	case CacheCleanupAuto, CacheCleanupAlways, CacheCleanupNever:
+		return nil
+	default:
+		return fmt.Errorf("invalid cache-cleanup %q: must be auto, always, or never", value)
 	}
 }

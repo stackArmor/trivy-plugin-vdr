@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,7 +29,28 @@ func TestTrivyRunnerBuildsImageScanCommand(t *testing.T) {
 	if fake.name != "trivy-test" {
 		t.Fatalf("command name = %q, want trivy-test", fake.name)
 	}
-	wantArgs := []string{"image", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
+	wantArgs := []string{"image", "--image-src", "registry", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
+	if !reflect.DeepEqual(fake.args, wantArgs) {
+		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
+	}
+}
+
+func TestTrivyRunnerBuildsImageScanCommandWithCustomImageSource(t *testing.T) {
+	fake := &fakeCommandRunner{
+		stdout: []byte(`{"Results":[]}`),
+	}
+	runner := TrivyRunner{
+		Binary:        "trivy-test",
+		ImageSrc:      "remote,local",
+		CommandRunner: fake,
+	}
+
+	_, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second)
+	if err != nil {
+		t.Fatalf("ScanImage returned error: %v", err)
+	}
+
+	wantArgs := []string{"image", "--image-src", "remote,local", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
 	}
@@ -211,6 +233,100 @@ func TestScanInventoryScansUniqueImagesAndFansOutAffectedResources(t *testing.T)
 	}
 }
 
+func TestScanInventoryWithOptionsScansConcurrentlyAndReturnsFindingsByImageRef(t *testing.T) {
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{
+			{ImageRef: "registry.example.com/z:v1", Resources: []model.ResourceRef{{Kind: "Deployment", Name: "z"}}},
+			{ImageRef: "registry.example.com/a:v1", Resources: []model.ResourceRef{{Kind: "Deployment", Name: "a"}}},
+			{ImageRef: "registry.example.com/m:v1", Resources: []model.ResourceRef{{Kind: "Deployment", Name: "m"}}},
+		},
+	}
+	runner := newBlockingImageRunner(map[string][]model.Finding{
+		"registry.example.com/z:v1": {{ID: "CVE-Z"}},
+		"registry.example.com/a:v1": {{ID: "CVE-A"}},
+		"registry.example.com/m:v1": {{ID: "CVE-M"}},
+	})
+
+	resultCh := make(chan struct {
+		findings []model.Finding
+		warnings []Warning
+		err      error
+	}, 1)
+	go func() {
+		findings, warnings, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+			Timeout:       30 * time.Second,
+			ParallelScans: 2,
+			CacheCleanup:  CleanupNever,
+		})
+		resultCh <- struct {
+			findings []model.Finding
+			warnings []Warning
+			err      error
+		}{findings: findings, warnings: warnings, err: err}
+	}()
+
+	runner.waitUntilActive(t, 2)
+	if got := runner.maxActive(); got > 2 {
+		t.Fatalf("max active scans = %d, want at most 2", got)
+	}
+	runner.release("registry.example.com/z:v1")
+	runner.waitUntilStarted(t, "registry.example.com/m:v1")
+	runner.release("registry.example.com/m:v1")
+	runner.release("registry.example.com/a:v1")
+
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatalf("ScanInventoryWithOptions returned error: %v", result.err)
+	}
+	if len(result.warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none", result.warnings)
+	}
+	var gotIDs []string
+	for _, finding := range result.findings {
+		gotIDs = append(gotIDs, finding.ID)
+	}
+	wantIDs := []string{"CVE-A", "CVE-M", "CVE-Z"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("finding IDs = %#v, want sorted by image ref %#v", gotIDs, wantIDs)
+	}
+}
+
+func TestScanInventoryWithOptionsSurfacesCleanupWarningWithoutDroppingFindings(t *testing.T) {
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{
+			{ImageRef: "registry.example.com/app:v1", Resources: []model.ResourceRef{{Kind: "Deployment", Name: "app"}}},
+		},
+	}
+	runner := &fakeImageRunner{
+		findings: map[string][]model.Finding{
+			"registry.example.com/app:v1": {{ID: "CVE-2026-0001"}},
+		},
+	}
+	cleaner := &fakeCacheCleaner{err: errors.New("clean failed")}
+
+	findings, warnings, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+		Timeout:       time.Minute,
+		ParallelScans: 1,
+		CacheCleanup:  CleanupAlways,
+		CacheCleaner:  cleaner,
+	})
+	if err != nil {
+		t.Fatalf("ScanInventoryWithOptions returned error: %v", err)
+	}
+	if len(findings) != 1 || findings[0].ID != "CVE-2026-0001" {
+		t.Fatalf("findings = %#v, want scan result preserved", findings)
+	}
+	if cleaner.calls != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", cleaner.calls)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want one cleanup warning", warnings)
+	}
+	if warnings[0].ImageRef != "registry.example.com/app:v1" || !strings.Contains(warnings[0].Message, "clean failed") {
+		t.Fatalf("warning = %#v, want image cleanup failure context", warnings[0])
+	}
+}
+
 type fakeCommandRunner struct {
 	name   string
 	args   []string
@@ -233,4 +349,97 @@ type fakeImageRunner struct {
 func (f *fakeImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
 	f.images = append(f.images, image)
 	return f.findings[image], nil
+}
+
+type fakeCacheCleaner struct {
+	calls int
+	err   error
+}
+
+func (f *fakeCacheCleaner) Cleanup(ctx context.Context) error {
+	f.calls++
+	return f.err
+}
+
+type blockingImageRunner struct {
+	mu       sync.Mutex
+	findings map[string][]model.Finding
+	started  map[string]chan struct{}
+	releaseC map[string]chan struct{}
+	active   int
+	max      int
+}
+
+func newBlockingImageRunner(findings map[string][]model.Finding) *blockingImageRunner {
+	started := make(map[string]chan struct{}, len(findings))
+	releaseC := make(map[string]chan struct{}, len(findings))
+	for image := range findings {
+		started[image] = make(chan struct{})
+		releaseC[image] = make(chan struct{})
+	}
+	return &blockingImageRunner{
+		findings: findings,
+		started:  started,
+		releaseC: releaseC,
+	}
+}
+
+func (r *blockingImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
+	r.mu.Lock()
+	r.active++
+	if r.active > r.max {
+		r.max = r.active
+	}
+	close(r.started[image])
+	r.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.releaseC[image]:
+	}
+
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
+	return r.findings[image], nil
+}
+
+func (r *blockingImageRunner) release(image string) {
+	close(r.releaseC[image])
+}
+
+func (r *blockingImageRunner) waitUntilStarted(t *testing.T, image string) {
+	t.Helper()
+	select {
+	case <-r.started[image]:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s to start", image)
+	}
+}
+
+func (r *blockingImageRunner) waitUntilActive(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %d active scans", want)
+		case <-ticker.C:
+			r.mu.Lock()
+			active := r.active
+			r.mu.Unlock()
+			if active == want {
+				return
+			}
+		}
+	}
+}
+
+func (r *blockingImageRunner) maxActive() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.max
 }

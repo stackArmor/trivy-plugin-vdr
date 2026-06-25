@@ -47,8 +47,53 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.MinEPSS != -1 {
 		t.Fatalf("MinEPSS = %v, want -1", cfg.MinEPSS)
 	}
+	if cfg.ImageSrc != "registry" {
+		t.Fatalf("ImageSrc = %q, want registry", cfg.ImageSrc)
+	}
+	if cfg.ParallelScans != 5 {
+		t.Fatalf("ParallelScans = %d, want 5", cfg.ParallelScans)
+	}
+	if cfg.CacheCleanup != "auto" {
+		t.Fatalf("CacheCleanup = %q, want auto", cfg.CacheCleanup)
+	}
+	if cfg.CacheMinFreeGB != 10 {
+		t.Fatalf("CacheMinFreeGB = %d, want 10", cfg.CacheMinFreeGB)
+	}
+	if cfg.CacheMinFreePercent != 10 {
+		t.Fatalf("CacheMinFreePercent = %d, want 10", cfg.CacheMinFreePercent)
+	}
 	if cfg.SkipEnrichment || cfg.RefreshEnrichment || cfg.SkipExposure || cfg.Debug {
 		t.Fatalf("SkipEnrichment/RefreshEnrichment/SkipExposure/Debug = %v/%v/%v/%v, want all false", cfg.SkipEnrichment, cfg.RefreshEnrichment, cfg.SkipExposure, cfg.Debug)
+	}
+}
+
+func TestParseScanAndCacheFlags(t *testing.T) {
+	cfg, err := Parse([]string{
+		"k8s",
+		"--image-src", "remote,local",
+		"--parallel-scans", "3",
+		"--cache-cleanup", "always",
+		"--cache-min-free-gb", "0",
+		"--cache-min-free-percent", "25",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if cfg.ImageSrc != "remote,local" {
+		t.Fatalf("ImageSrc = %q, want remote,local", cfg.ImageSrc)
+	}
+	if cfg.ParallelScans != 3 {
+		t.Fatalf("ParallelScans = %d, want 3", cfg.ParallelScans)
+	}
+	if cfg.CacheCleanup != "always" {
+		t.Fatalf("CacheCleanup = %q, want always", cfg.CacheCleanup)
+	}
+	if cfg.CacheMinFreeGB != 0 {
+		t.Fatalf("CacheMinFreeGB = %d, want 0", cfg.CacheMinFreeGB)
+	}
+	if cfg.CacheMinFreePercent != 25 {
+		t.Fatalf("CacheMinFreePercent = %d, want 25", cfg.CacheMinFreePercent)
 	}
 }
 
@@ -239,6 +284,33 @@ func TestParseMinEPSS(t *testing.T) {
 			_, err := Parse([]string{"k8s", "--min-epss", value})
 			if err == nil {
 				t.Fatal("Parse returned nil error, want invalid min EPSS error")
+			}
+		})
+	}
+}
+
+func TestParseRejectsInvalidScanAndCacheFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "zero parallel scans", args: []string{"k8s", "--parallel-scans", "0"}, want: "parallel-scans"},
+		{name: "negative parallel scans", args: []string{"k8s", "--parallel-scans", "-1"}, want: "parallel-scans"},
+		{name: "invalid cache cleanup", args: []string{"k8s", "--cache-cleanup", "sometimes"}, want: "cache-cleanup"},
+		{name: "negative cache min free gb", args: []string{"k8s", "--cache-min-free-gb", "-1"}, want: "cache-min-free-gb"},
+		{name: "negative cache min free percent", args: []string{"k8s", "--cache-min-free-percent", "-1"}, want: "cache-min-free-percent"},
+		{name: "cache min free percent over 100", args: []string{"k8s", "--cache-min-free-percent", "101"}, want: "cache-min-free-percent"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.args)
+			if err == nil {
+				t.Fatal("Parse returned nil error, want invalid flag error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %q context", err.Error(), tt.want)
 			}
 		})
 	}
