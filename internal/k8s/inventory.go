@@ -59,12 +59,9 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 		images:    map[string]*model.ImageInventory{},
 	}
 
-	namespaces := opts.Namespaces
-	if len(namespaces) == 0 {
-		if !opts.AllNamespaces {
-			return nil, errors.New("namespace or all-namespaces is required")
-		}
-		namespaces = []string{metav1.NamespaceAll}
+	namespaces, err := namespacesForCollection(opts)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, namespace := range namespaces {
@@ -89,6 +86,32 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 	}
 
 	return builder.finish(), nil
+}
+
+func namespacesForCollection(opts Options) ([]string, error) {
+	if len(opts.Namespaces) > 0 && opts.AllNamespaces {
+		return nil, errors.New("cannot set namespaces with all-namespaces")
+	}
+	if len(opts.Namespaces) == 0 {
+		if !opts.AllNamespaces {
+			return nil, errors.New("namespace or all-namespaces is required")
+		}
+		return []string{metav1.NamespaceAll}, nil
+	}
+
+	seen := map[string]struct{}{}
+	namespaces := make([]string, 0, len(opts.Namespaces))
+	for _, namespace := range opts.Namespaces {
+		if strings.TrimSpace(namespace) == "" {
+			return nil, errors.New("namespace entries cannot be empty")
+		}
+		if _, ok := seen[namespace]; ok {
+			continue
+		}
+		seen[namespace] = struct{}{}
+		namespaces = append(namespaces, namespace)
+	}
+	return namespaces, nil
 }
 
 func (c *Collector) collectPods(ctx context.Context, namespace string, builder *inventoryBuilder) error {
