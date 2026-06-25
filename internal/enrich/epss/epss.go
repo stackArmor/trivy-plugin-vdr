@@ -199,12 +199,16 @@ func (s *Store) fetch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := parseCSV(tempFile); err != nil {
+	values, err := parseCSV(tempFile)
+	if err != nil {
 		_ = tempFile.Close()
 		return err
 	}
 	if err := tempFile.Close(); err != nil {
 		return err
+	}
+	if len(values) == 0 {
+		return fmt.Errorf("parse EPSS CSV: no score rows found")
 	}
 	return os.Rename(tempPath, s.cachePath())
 }
