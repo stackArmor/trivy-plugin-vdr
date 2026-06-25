@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matthewvenne/trivy-plugin-k8s-vdr/internal/model"
+	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
 )
 
 const DefaultBaseURL = "https://raw.githubusercontent.com/cisagov/vulnrichment/develop"

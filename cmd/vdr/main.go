@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/matthewvenne/trivy-plugin-k8s-vdr/internal/config"
+	"github.com/matthewvenne/trivy-plugin-vdr/internal/config"
 )
 
 func main() {

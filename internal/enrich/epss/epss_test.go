@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matthewvenne/trivy-plugin-k8s-vdr/internal/model"
+	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
 )
 
 func TestLookupFetchesGunzipCachesAndParsesMetadata(t *testing.T) {
