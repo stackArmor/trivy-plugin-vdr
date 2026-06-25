@@ -102,7 +102,14 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 	}
 
-	trivyRunner := scanner.TrivyRunner{ImageSrc: cfg.ImageSrc, CacheDir: cfg.CacheDir, DockerConfigDir: dockerConfigDir}
+	trivyRunner := scanner.TrivyRunner{ImageSrc: cfg.ImageSrc, CacheDir: cfg.CacheDir, DockerConfigDir: dockerConfigDir, IsolateCache: cfg.CacheDir != ""}
+	if trivyRunner.IsolateCache {
+		logger.Info("updating Trivy vulnerability database")
+		if dbErr := trivyRunner.EnsureVulnDB(ctx); dbErr != nil {
+			logger.Warn("%v", dbErr)
+			warnings = append(warnings, fmt.Sprintf("vulnerability DB update failed: %v", dbErr))
+		}
+	}
 	logger.Info("scanning %d images with Trivy (%d parallel)", len(inventory.Images), cfg.ParallelScans)
 	findings, scanWarnings, err := scanner.ScanInventoryWithOptions(ctx, inventory, trivyRunner, scanner.ScanOptions{
 		Timeout:             cfg.Timeout,

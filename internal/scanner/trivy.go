@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -31,30 +32,73 @@ type TrivyRunner struct {
 	ImageSrc        string
 	CacheDir        string
 	DockerConfigDir string
-	CommandRunner   CommandRunner
+	// IsolateCache runs each scan in its own temporary cache directory (with the
+	// shared vulnerability DB symlinked in) so concurrent scans do not contend on
+	// Trivy's BoltDB cache lock. Requires CacheDir to be set and the DB to be
+	// pre-downloaded with EnsureVulnDB.
+	IsolateCache  bool
+	CommandRunner CommandRunner
+}
+
+func (r TrivyRunner) binary() string {
+	if r.Binary == "" {
+		return defaultTrivyBinary
+	}
+	return r.Binary
+}
+
+func (r TrivyRunner) commandRunner() CommandRunner {
+	if r.CommandRunner != nil {
+		return r.CommandRunner
+	}
+	return execCommandRunner{extraEnv: r.dockerEnv()}
+}
+
+// EnsureVulnDB downloads/updates the Trivy vulnerability database once so that
+// per-image scans can run with --skip-db-update and share it read-only. This
+// avoids many concurrent scans racing to update the same BoltDB, which can
+// deadlock on the cache lock or corrupt the database.
+func (r TrivyRunner) EnsureVulnDB(ctx context.Context) error {
+	args := []string{"image", "--download-db-only", "--skip-version-check"}
+	if r.CacheDir != "" {
+		args = append(args, "--cache-dir", r.CacheDir)
+	}
+	_, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
+	if err != nil {
+		return fmt.Errorf("trivy vulnerability DB download failed: %w: %s", err, string(bytes.TrimSpace(stderr)))
+	}
+	return nil
 }
 
 func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
-	binary := r.Binary
-	if binary == "" {
-		binary = defaultTrivyBinary
-	}
-	commandRunner := r.CommandRunner
-	if commandRunner == nil {
-		commandRunner = execCommandRunner{extraEnv: r.dockerEnv()}
-	}
-
 	imageSrc := r.ImageSrc
 	if imageSrc == "" {
 		imageSrc = "remote"
 	}
 
-	args := []string{"image"}
-	if r.CacheDir != "" {
-		args = append(args, "--cache-dir", r.CacheDir)
+	cacheDir := r.CacheDir
+	skipDBUpdate := false
+	cleanup := func() {}
+	if r.IsolateCache && r.CacheDir != "" {
+		isolated, isolatedCleanup, err := isolatedCacheDir(r.CacheDir)
+		if err != nil {
+			return nil, fmt.Errorf("prepare isolated cache for %q: %w", image, err)
+		}
+		cacheDir = isolated
+		skipDBUpdate = true
+		cleanup = isolatedCleanup
 	}
-	args = append(args, "--image-src", imageSrc, "--format", "json", "--scanners", "vuln", "--timeout", timeout.String(), image)
-	stdout, stderr, err := commandRunner.Run(ctx, binary, args...)
+	defer cleanup()
+
+	args := []string{"image"}
+	if cacheDir != "" {
+		args = append(args, "--cache-dir", cacheDir)
+	}
+	if skipDBUpdate {
+		args = append(args, "--skip-db-update")
+	}
+	args = append(args, "--image-src", imageSrc, "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", timeout.String(), image)
+	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("trivy image scan failed for %q: %w: %s", image, err, string(bytes.TrimSpace(stderr)))
 	}
@@ -64,6 +108,22 @@ func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.D
 		return nil, err
 	}
 	return findings, nil
+}
+
+// isolatedCacheDir creates a temporary Trivy cache directory whose db/ subdir is
+// a symlink to the shared base cache's db/, so concurrent scans get private
+// fs (fanal) caches while sharing one read-only vulnerability database.
+func isolatedCacheDir(base string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "vdr-trivy-cache-")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+	if err := os.Symlink(filepath.Join(base, "db"), filepath.Join(dir, "db")); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return dir, cleanup, nil
 }
 
 type CacheCleaner interface {
