@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"sync"
@@ -26,10 +27,11 @@ type CommandRunner interface {
 }
 
 type TrivyRunner struct {
-	Binary        string
-	ImageSrc      string
-	CacheDir      string
-	CommandRunner CommandRunner
+	Binary          string
+	ImageSrc        string
+	CacheDir        string
+	DockerConfigDir string
+	CommandRunner   CommandRunner
 }
 
 func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
@@ -39,12 +41,12 @@ func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.D
 	}
 	commandRunner := r.CommandRunner
 	if commandRunner == nil {
-		commandRunner = execCommandRunner{}
+		commandRunner = execCommandRunner{extraEnv: r.dockerEnv()}
 	}
 
 	imageSrc := r.ImageSrc
 	if imageSrc == "" {
-		imageSrc = "registry"
+		imageSrc = "remote"
 	}
 
 	args := []string{"image"}
@@ -165,9 +167,8 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 					}
 				}
 				results[index] = result
-				if err != nil {
-					cancel()
-				}
+				// A single image failure is recorded and surfaced as a
+				// warning; it does not cancel sibling scans or abort the run.
 			}
 		}()
 	}
@@ -185,21 +186,10 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	close(jobs)
 	wg.Wait()
 
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		if parentErr := parentCtx.Err(); parentErr != nil {
-			return nil, nil, parentErr
-		}
-		for _, result := range results {
-			if result.err != nil && !isContextError(result.err) {
-				return nil, nil, result.err
-			}
-		}
-		for _, result := range results {
-			if result.err != nil {
-				return nil, nil, result.err
-			}
-		}
-		return nil, nil, ctxErr
+	// The derived ctx is only cancelled when the parent is, so any cancellation
+	// here means the caller aborted the whole run.
+	if parentErr := parentCtx.Err(); parentErr != nil {
+		return nil, nil, parentErr
 	}
 
 	var cleanupWarnings []Warning
@@ -228,9 +218,13 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 
 	var findings []model.Finding
 	var warnings []Warning
-	for _, result := range results {
+	for index, result := range results {
 		if result.err != nil {
-			return nil, nil, result.err
+			warnings = append(warnings, Warning{
+				ImageRef: images[index].ImageRef,
+				Message:  fmt.Sprintf("image scan failed: %v", result.err),
+			})
+			continue
 		}
 		findings = append(findings, result.findings...)
 		warnings = append(warnings, result.warnings...)
@@ -338,10 +332,24 @@ type trivyVulnerability struct {
 	References       []string `json:"References"`
 }
 
-type execCommandRunner struct{}
+// dockerEnv returns the DOCKER_CONFIG environment entry that points Trivy at the
+// generated registry credentials, or nil when no credentials were assembled.
+func (r TrivyRunner) dockerEnv() []string {
+	if r.DockerConfigDir == "" {
+		return nil
+	}
+	return []string{"DOCKER_CONFIG=" + r.DockerConfigDir}
+}
 
-func (execCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+type execCommandRunner struct {
+	extraEnv []string
+}
+
+func (r execCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(r.extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), r.extraEnv...)
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout

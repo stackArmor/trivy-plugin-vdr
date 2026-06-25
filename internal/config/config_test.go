@@ -47,8 +47,8 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.MinEPSS != -1 {
 		t.Fatalf("MinEPSS = %v, want -1", cfg.MinEPSS)
 	}
-	if cfg.ImageSrc != "registry" {
-		t.Fatalf("ImageSrc = %q, want registry", cfg.ImageSrc)
+	if cfg.ImageSrc != "remote" {
+		t.Fatalf("ImageSrc = %q, want remote", cfg.ImageSrc)
 	}
 	if cfg.ParallelScans != 5 {
 		t.Fatalf("ParallelScans = %d, want 5", cfg.ParallelScans)
@@ -67,6 +67,25 @@ func TestParseDefaults(t *testing.T) {
 	}
 	if cfg.SkipEnrichment || cfg.RefreshEnrichment || cfg.SkipExposure || cfg.Debug {
 		t.Fatalf("SkipEnrichment/RefreshEnrichment/SkipExposure/Debug = %v/%v/%v/%v, want all false", cfg.SkipEnrichment, cfg.RefreshEnrichment, cfg.SkipExposure, cfg.Debug)
+	}
+	if cfg.SkipRegistryAuth || cfg.NoGcloudAuth || cfg.NoECRAuth || cfg.Quiet {
+		t.Fatalf("registry auth/quiet flags = %v/%v/%v/%v, want all false", cfg.SkipRegistryAuth, cfg.NoGcloudAuth, cfg.NoECRAuth, cfg.Quiet)
+	}
+}
+
+func TestParseRegistryAuthAndLogFlags(t *testing.T) {
+	cfg, err := Parse([]string{
+		"k8s",
+		"--skip-registry-auth",
+		"--no-gcloud-auth",
+		"--no-ecr-auth",
+		"--quiet",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.SkipRegistryAuth || !cfg.NoGcloudAuth || !cfg.NoECRAuth || !cfg.Quiet {
+		t.Fatalf("flags = %v/%v/%v/%v, want all true", cfg.SkipRegistryAuth, cfg.NoGcloudAuth, cfg.NoECRAuth, cfg.Quiet)
 	}
 }
 

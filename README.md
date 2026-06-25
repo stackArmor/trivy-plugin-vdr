@@ -13,6 +13,9 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Finding-centric and resource-centric view flags.
 - Optional standalone HTML report with filter controls for namespace, internet exposure, automatable, exploitation status, EPSS score, and technical impact.
 - Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
+- Automatic private-registry authentication from Kubernetes `imagePullSecrets`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
+- Resilient scanning: a single image that fails to pull or scan is reported as a warning and the run continues, producing a partial (still enriched) report.
+- INFO-level progress logging to stderr by default.
 - Shared JSON model for inventory, findings, EPSS, CISA Vulnrichment, exposure, access protection, reports, and summaries.
 
 ## Usage
@@ -23,9 +26,12 @@ trivy vdr k8s --help
 trivy vdr k8s --namespace default --format json
 trivy vdr k8s --all-namespaces --min-severity HIGH --min-epss 0.5
 trivy vdr k8s --view resources --output vdr-k8s.json
-trivy vdr k8s --image-src registry --parallel-scans 5
+trivy vdr k8s --image-src remote --parallel-scans 5
 trivy vdr k8s --skip-enrichment --skip-exposure --debug
 trivy vdr k8s --refresh-enrichment
+trivy vdr k8s --skip-registry-auth
+trivy vdr k8s --no-gcloud-auth --no-ecr-auth
+trivy vdr k8s --quiet
 trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.html
 trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
 ```
@@ -38,19 +44,43 @@ EPSS and CISA Vulnrichment data are cached under `--cache-dir`. EPSS cache files
 
 Use `--refresh-enrichment` to force EPSS and Vulnrichment refresh attempts even when cached files are still fresh. If a forced refresh fails and an existing cache file is still readable and valid, `vdr` keeps and uses the cached data.
 
+## Private registry authentication
+
+Before scanning, `vdr` assembles Docker credentials so Trivy can pull private images, and hands them to Trivy through a temporary `DOCKER_CONFIG` directory (written owner-only and removed when the run ends). Credentials come from three sources:
+
+- **Kubernetes `imagePullSecrets`** — the `kubernetes.io/dockerconfigjson` (and legacy `kubernetes.io/dockercfg`) Secrets referenced by the scanned workloads' pod specs.
+- **Google Artifact Registry / GCR** — for `*.pkg.dev`, `gcr.io`, and `*.gcr.io` images, `vdr` runs `gcloud auth print-access-token` once.
+- **AWS ECR** — for `*.dkr.ecr.<region>.amazonaws.com` images, `vdr` runs `aws ecr get-login-password --region <region>` once per registry.
+
+A cluster secret always wins over a cloud-CLI token for the same registry host. Tokens are never logged. Each source degrades gracefully: a missing/unauthenticated `gcloud` or `aws` CLI, an unreadable Secret, or an RBAC denial produces a warning, not a failure (affected images then surface as per-image scan warnings).
+
+Flags:
+
+- `--skip-registry-auth` disables all automatic authentication.
+- `--no-gcloud-auth` skips the `gcloud` token for GAR/GCR.
+- `--no-ecr-auth` skips the `aws` token for ECR.
+
+This adds one RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
+
+## Logging
+
+Progress is logged to stderr (the report is written to stdout or `--output`, so logs never contaminate it). The default level is INFO and announces each phase: inventory collection, registry auth, scanning, EPSS/vulnrichment fetch-vs-cache, and report output. Use `--quiet` for warnings and errors only, or `--debug` for verbose diagnostics.
+
 ## Image scanning and Trivy cache cleanup
 
 `vdr` scans each unique full image reference once and fans findings back out to every Kubernetes resource that uses that image. Scan results are returned in deterministic image-reference order, independent of the order in which concurrent scans finish.
 
 Scan defaults:
 
-- `--image-src registry`
+- `--image-src remote`
 - `--parallel-scans 5`
 - `--cache-cleanup auto`
 - `--cache-min-free-gb 10`
 - `--cache-min-free-percent 10`
 
-The Trivy image command uses `trivy image --image-src <value> --format json --scanners vuln --timeout <timeout> <image>`. The default `--image-src registry` forces registry scanning.
+The Trivy image command uses `trivy image --image-src <value> --format json --scanners vuln --timeout <timeout> <image>`. The default `--image-src remote` pulls each image from its registry.
+
+A single image that cannot be pulled or scanned does not abort the run: the failure is recorded as a warning in the report and the remaining images are still scanned and enriched. If any image fails, `vdr` exits with a non-zero status after writing the report.
 
 Cache cleanup runs once after the image scan phase completes:
 
@@ -101,3 +131,13 @@ make test
 make build
 make install-local
 ```
+
+To build and run against your current Kubernetes context in one step (writes `output.json` and `output.html`):
+
+```sh
+scripts/local-test.sh                     # all namespaces
+scripts/local-test.sh --namespace default # single namespace
+scripts/local-test.sh --debug             # verbose progress logs
+```
+
+The script runs the freshly built binary directly, so it picks up local changes on every run. Trivy must be installed; `gcloud`/`aws` are optional for registry auth.
