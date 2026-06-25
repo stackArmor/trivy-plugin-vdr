@@ -3,6 +3,7 @@ package epss
 import (
 	"bufio"
 	"compress/gzip"
+	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ const (
 	cacheMaxAge  = 24 * time.Hour
 	cacheSubdir  = "epss"
 	cacheCSVName = "epss.csv"
+	httpTimeout  = 30 * time.Second
 )
 
 type Store struct {
@@ -57,23 +59,37 @@ func NewStore(cacheDir string, options ...Option) *Store {
 	store := &Store{
 		cacheDir: cacheDir,
 		url:      DefaultURL,
-		client:   http.DefaultClient,
+		client:   &http.Client{Timeout: httpTimeout},
 		now:      time.Now,
 	}
 	for _, option := range options {
 		option(store)
 	}
-	if store.client == nil {
-		store.client = http.DefaultClient
-	}
+	store.client = normalizeClient(store.client)
 	if store.now == nil {
 		store.now = time.Now
 	}
 	return store
 }
 
+func normalizeClient(client *http.Client) *http.Client {
+	if client == nil {
+		return &http.Client{Timeout: httpTimeout}
+	}
+	if client.Timeout != 0 {
+		return client
+	}
+	copy := *client
+	copy.Timeout = httpTimeout
+	return &copy
+}
+
 func (s *Store) Lookup(cveID string) (model.EPSS, bool, error) {
-	if err := s.load(); err != nil {
+	return s.LookupContext(context.Background(), cveID)
+}
+
+func (s *Store) LookupContext(ctx context.Context, cveID string) (model.EPSS, bool, error) {
+	if err := s.load(ctx); err != nil {
 		return model.EPSS{}, false, err
 	}
 	enrichment, ok := s.values[strings.ToUpper(cveID)]
@@ -81,12 +97,16 @@ func (s *Store) Lookup(cveID string) (model.EPSS, bool, error) {
 }
 
 func EnrichFindings(findings []model.Finding, store *Store) ([]model.Finding, error) {
+	return EnrichFindingsContext(context.Background(), findings, store)
+}
+
+func EnrichFindingsContext(ctx context.Context, findings []model.Finding, store *Store) ([]model.Finding, error) {
 	enriched := append([]model.Finding(nil), findings...)
 	if store == nil {
 		return enriched, nil
 	}
 	for i := range enriched {
-		epss, ok, err := store.Lookup(enriched[i].ID)
+		epss, ok, err := store.LookupContext(ctx, enriched[i].ID)
 		if err != nil {
 			return nil, err
 		}
@@ -98,11 +118,14 @@ func EnrichFindings(findings []model.Finding, store *Store) ([]model.Finding, er
 	return enriched, nil
 }
 
-func (s *Store) load() error {
+func (s *Store) load(ctx context.Context) error {
 	if s.loaded {
 		return nil
 	}
-	if err := s.refreshIfStale(); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.refreshIfStale(ctx); err != nil && !cacheExists(s.cachePath()) {
 		return err
 	}
 
@@ -121,7 +144,7 @@ func (s *Store) load() error {
 	return nil
 }
 
-func (s *Store) refreshIfStale() error {
+func (s *Store) refreshIfStale(ctx context.Context) error {
 	info, err := os.Stat(s.cachePath())
 	if err == nil && s.now().Sub(info.ModTime()) < cacheMaxAge {
 		return nil
@@ -129,11 +152,18 @@ func (s *Store) refreshIfStale() error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return s.fetch()
+	return s.fetch(ctx)
 }
 
-func (s *Store) fetch() error {
-	resp, err := s.client.Get(s.url)
+func (s *Store) fetch(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("fetch EPSS data: %w", err)
 	}
@@ -151,19 +181,41 @@ func (s *Store) fetch() error {
 	if err := os.MkdirAll(filepath.Dir(s.cachePath()), 0o755); err != nil {
 		return err
 	}
-	file, err := os.Create(s.cachePath())
+	file, err := os.CreateTemp(filepath.Dir(s.cachePath()), "epss-*.csv")
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	tempPath := file.Name()
+	defer os.Remove(tempPath)
 	if _, err := io.Copy(file, reader); err != nil {
+		_ = file.Close()
 		return err
 	}
-	return nil
+	if err := file.Close(); err != nil {
+		return err
+	}
+
+	tempFile, err := os.Open(tempPath)
+	if err != nil {
+		return err
+	}
+	if _, err := parseCSV(tempFile); err != nil {
+		_ = tempFile.Close()
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, s.cachePath())
 }
 
 func (s *Store) cachePath() string {
 	return filepath.Join(s.cacheDir, cacheSubdir, cacheCSVName)
+}
+
+func cacheExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func parseCSV(reader io.Reader) (map[string]model.EPSS, error) {

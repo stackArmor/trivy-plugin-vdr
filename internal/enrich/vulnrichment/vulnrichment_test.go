@@ -1,11 +1,11 @@
 package vulnrichment
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/matthewvenne/trivy-plugin-k8s-vdr/internal/model"
@@ -13,11 +13,12 @@ import (
 
 func TestBucketForCVE(t *testing.T) {
 	tests := map[string]string{
-		"CVE-2026-0001":   "2026/CVE-2026-0xxx/CVE-2026-0001.json",
-		"CVE-2026-9999":   "2026/CVE-2026-9xxx/CVE-2026-9999.json",
-		"CVE-2026-10000":  "2026/CVE-2026-10xxx/CVE-2026-10000.json",
-		"CVE-2026-25999":  "2026/CVE-2026-25xxx/CVE-2026-25999.json",
-		"CVE-2026-123456": "2026/CVE-2026-123xxx/CVE-2026-123456.json",
+		"CVE-2026-0001":   "2026/0xxx/CVE-2026-0001.json",
+		"CVE-2026-9999":   "2026/9xxx/CVE-2026-9999.json",
+		"CVE-2026-10000":  "2026/10xxx/CVE-2026-10000.json",
+		"CVE-2026-25999":  "2026/25xxx/CVE-2026-25999.json",
+		"CVE-2026-123456": "2026/123xxx/CVE-2026-123456.json",
+		"CVE-2024-46446":  "2024/46xxx/CVE-2024-46446.json",
 	}
 	for cve, want := range tests {
 		t.Run(cve, func(t *testing.T) {
@@ -29,6 +30,13 @@ func TestBucketForCVE(t *testing.T) {
 				t.Fatalf("CacheRelativePath = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestNewStoreAppliesTimeoutToProvidedNoTimeoutClient(t *testing.T) {
+	store := NewStore(t.TempDir(), WithHTTPClient(&http.Client{}))
+	if store.client.Timeout == 0 {
+		t.Fatal("client timeout = 0, want non-zero timeout")
 	}
 }
 
@@ -78,10 +86,10 @@ func TestLookupFetchesCachesAndExtractsCISAADPSSVC(t *testing.T) {
 	if enrichment.SourceURL == "" {
 		t.Fatal("SourceURL empty, want URL")
 	}
-	if requestedPath != "/2026/CVE-2026-12xxx/CVE-2026-12345.json" {
+	if requestedPath != "/2026/12xxx/CVE-2026-12345.json" {
 		t.Fatalf("requested path = %q, want Vulnrichment raw path", requestedPath)
 	}
-	if _, err := os.Stat(filepath.Join(cacheDir, "vulnrichment", "2026", "CVE-2026-12xxx", "CVE-2026-12345.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")); err != nil {
 		t.Fatalf("cache file missing: %v", err)
 	}
 }
@@ -101,7 +109,8 @@ func TestLookup404ReturnsNoEnrichmentWithoutError(t *testing.T) {
 }
 
 func TestLookupMissingSSVCReturnsNoEnrichmentWithoutError(t *testing.T) {
-	cachePath := filepath.Join(t.TempDir(), "vulnrichment", "2026", "CVE-2026-0xxx", "CVE-2026-0005.json")
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "0xxx", "CVE-2026-0005.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +118,7 @@ func TestLookupMissingSSVCReturnsNoEnrichmentWithoutError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := NewStore(strings.TrimSuffix(cachePath, filepath.Join("vulnrichment", "2026", "CVE-2026-0xxx", "CVE-2026-0005.json")))
+	store := NewStore(cacheDir)
 	_, ok, err := store.Lookup("CVE-2026-0005")
 	if err != nil {
 		t.Fatalf("Lookup returned error: %v", err)
@@ -119,9 +128,46 @@ func TestLookupMissingSSVCReturnsNoEnrichmentWithoutError(t *testing.T) {
 	}
 }
 
+func TestLookupNonCVEIDReturnsNoEnrichmentWithoutError(t *testing.T) {
+	for _, id := range []string{"GHSA-xxxx", "ALAS2-foo"} {
+		t.Run(id, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			_, ok, err := store.Lookup(id)
+			if err != nil {
+				t.Fatalf("Lookup returned error: %v", err)
+			}
+			if ok {
+				t.Fatal("Lookup ok = true, want false")
+			}
+		})
+	}
+}
+
+func TestLookupContextCanceledReturnsErrorWithoutNetworkCall(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		t.Fatal("server should not be called with canceled context")
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, ok, err := NewStore(t.TempDir(), WithBaseURL(server.URL), WithHTTPClient(server.Client())).LookupContext(ctx, "CVE-2026-0008")
+	if err == nil {
+		t.Fatal("LookupContext returned nil error, want context cancellation")
+	}
+	if ok {
+		t.Fatal("LookupContext ok = true, want false")
+	}
+	if called {
+		t.Fatal("server was called")
+	}
+}
+
 func TestLookupIgnoresNonADPSSVCData(t *testing.T) {
 	cacheDir := t.TempDir()
-	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "CVE-2026-0xxx", "CVE-2026-0007.json")
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "0xxx", "CVE-2026-0007.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +203,7 @@ func TestLookupIgnoresNonADPSSVCData(t *testing.T) {
 
 func TestEnrichFindingsIgnoresMissingCVEAndPreservesFields(t *testing.T) {
 	cacheDir := t.TempDir()
-	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "CVE-2026-0xxx", "CVE-2026-0006.json")
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "0xxx", "CVE-2026-0006.json")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -203,5 +249,16 @@ func TestEnrichFindingsIgnoresMissingCVEAndPreservesFields(t *testing.T) {
 	}
 	if enriched[1].Vulnrichment != nil {
 		t.Fatalf("second finding Vulnrichment = %+v, want nil", enriched[1].Vulnrichment)
+	}
+}
+
+func TestEnrichFindingsSkipsNonCVEIDs(t *testing.T) {
+	findings := []model.Finding{{ID: "GHSA-xxxx", ImageRef: "repo/app:1", Severity: "HIGH"}}
+	enriched, err := EnrichFindings(findings, NewStore(t.TempDir()))
+	if err != nil {
+		t.Fatalf("EnrichFindings returned error: %v", err)
+	}
+	if enriched[0].Vulnrichment != nil {
+		t.Fatalf("Vulnrichment = %+v, want nil", enriched[0].Vulnrichment)
 	}
 }
