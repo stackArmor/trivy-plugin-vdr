@@ -14,7 +14,7 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		fmt.Fprintf(os.Stderr, "k8s-vdr: %v\n", err)
+		fmt.Fprintf(os.Stderr, "vdr: %v\n", err)
 		os.Exit(2)
 	}
 }

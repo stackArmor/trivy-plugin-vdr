@@ -1,9 +1,9 @@
-name: k8s-vdr
+name: vdr
 version: 0.1.0
 repository: github.com/matthewvenne/trivy-plugin-k8s-vdr
-summary: Kubernetes vulnerability detection and response reporting
-usage: trivy k8s-vdr [flags]
-description: Inventory Kubernetes workload images, scan them with Trivy, and report resource-level vulnerability context.
+summary: Vulnerability detection and response reporting
+usage: trivy vdr <source> [flags]
+description: Inventory source images, scan them with Trivy, and report resource-level vulnerability context. Kubernetes is available with the k8s source.
 platforms:
-  - uri: https://github.com/matthewvenne/trivy-plugin-k8s-vdr/releases/download/v{{ .Version }}/k8s-vdr_{{ .OS }}_{{ .Arch }}.tar.gz
-    bin: k8s-vdr
+  - uri: https://github.com/matthewvenne/trivy-plugin-k8s-vdr/releases/download/v{{ .Version }}/vdr_{{ .OS }}_{{ .Arch }}.tar.gz
+    bin: vdr
