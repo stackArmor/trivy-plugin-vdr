@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
@@ -34,6 +35,19 @@ func TestCollectsDeploymentImages(t *testing.T) {
 		ContainerType: "container",
 		ContainerName: "app",
 	})
+}
+
+func TestCollectsWorkloadTemplateLabels(t *testing.T) {
+	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
+	deploy.Spec.Template.Labels = map[string]string{"app": "web", "tier": "frontend"}
+	client := fake.NewSimpleClientset(deploy)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireResourceLabels(t, inv, "web", map[string]string{"app": "web", "tier": "frontend"})
 }
 
 func TestCollectsStatefulSetImages(t *testing.T) {
@@ -609,6 +623,19 @@ func requireContainerSecurity(t *testing.T, inv *model.Inventory, resourceName, 
 		}
 	}
 	t.Fatalf("missing container %q on resource %q", containerName, resourceName)
+}
+
+func requireResourceLabels(t *testing.T, inv *model.Inventory, resourceName string, want map[string]string) {
+	t.Helper()
+	for _, resource := range inv.Resources {
+		if resource.Resource.Name == resourceName {
+			if !reflect.DeepEqual(resource.Labels, want) {
+				t.Fatalf("Labels = %#v, want %#v", resource.Labels, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing resource %q", resourceName)
 }
 
 func requireSecurity(t *testing.T, got, want model.ContainerSecurity) {

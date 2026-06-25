@@ -1,0 +1,502 @@
+package exposure
+
+import (
+	"testing"
+
+	"github.com/matthewvenne/trivy-plugin-vdr/internal/model"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+func TestAnalyzeGKEGatewayPublicAndInternalClasses(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "public-gw", "gke-l7-global-external-managed"),
+			httpRoute("default", "public-route", "public-gw", "web-svc"),
+			gateway("default", "internal-gw", "gke-l7-rilb"),
+			httpRoute("default", "internal-route", "internal-gw", "web-svc"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	ref := resourceRef("default", "web", "app", "container", "")
+	exposure := got[ref]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true: %#v", exposure)
+	}
+	if exposure.Provider != "gke" || exposure.RouteKind != "HTTPRoute" || exposure.RouteName != "public-route" {
+		t.Fatalf("unexpected exposure metadata: %#v", exposure)
+	}
+	requireEvidence(t, exposure, "GKE Gateway default/public-gw uses public class gke-l7-global-external-managed")
+}
+
+func TestAnalyzeGKEGatewayInternalClassIsNotPublic(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "internal-gw", "gke-l7-rilb"),
+			httpRoute("default", "internal-route", "internal-gw", "web-svc"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("Analyze() returned %#v, want no exposure for internal GKE Gateway", got)
+	}
+}
+
+func TestAnalyzeGKEGatewayIAPBackendPolicyProtectsTargetService(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "public-gw", "gke-l7-global-external-managed"),
+			httpRoute("default", "public-route", "public-gw", "web-svc"),
+			gcpBackendPolicyIAP("default", "web-iap", "web-svc", true),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = true, want false: %#v", exposure)
+	}
+	if exposure.Protection == nil || exposure.Protection.Type != "iap" || exposure.Protection.Provider != "gke" || !exposure.Protection.Enabled {
+		t.Fatalf("Protection = %#v, want enabled GKE IAP", exposure.Protection)
+	}
+	requireEvidence(t, exposure, "GKE GCPBackendPolicy default/web-iap enables IAP for Service default/web-svc")
+}
+
+func TestAnalyzeGKEIngressGCEAndInternalClasses(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{
+			ingress("default", "public-ing", "gce", "web-svc", nil),
+			ingress("default", "internal-ing", "gce-internal", "web-svc", nil),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true: %#v", exposure)
+	}
+	if exposure.Provider != "gke" || exposure.RouteKind != "Ingress" || exposure.RouteName != "public-ing" {
+		t.Fatalf("unexpected exposure metadata: %#v", exposure)
+	}
+	requireEvidence(t, exposure, "GKE Ingress default/public-ing uses public class gce")
+}
+
+func TestAnalyzeGKEIngressInternalClassIsNotPublic(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "internal-ing", "gce-internal", "web-svc", nil)},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("Analyze() returned %#v, want no exposure for internal GKE Ingress", got)
+	}
+}
+
+func TestAnalyzeGKEIngressBackendConfigIAPProtectsTargetService(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{serviceWithAnnotations("default", "web-svc", map[string]string{"app": "web"}, map[string]string{
+			"cloud.google.com/backend-config": `{"default":"web-backend"}`,
+		})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "public-ing", "gce", "web-svc", nil)},
+		Unstructured: []unstructured.Unstructured{
+			backendConfigIAP("default", "web-backend", true),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = true, want false: %#v", exposure)
+	}
+	if exposure.Protection == nil || exposure.Protection.Type != "iap" || exposure.Protection.Provider != "gke" || !exposure.Protection.Enabled {
+		t.Fatalf("Protection = %#v, want enabled GKE IAP", exposure.Protection)
+	}
+	requireEvidence(t, exposure, "GKE BackendConfig default/web-backend enables IAP for Service default/web-svc")
+}
+
+func TestAnalyzeAWSALBIngressSchemeAndClassParams(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		IngressClasses: []networkingv1.IngressClass{
+			ingressClass("alb", "ingress.k8s.aws/alb", "internet-facing-params"),
+		},
+		Ingresses: []networkingv1.Ingress{
+			ingress("default", "annotation-alb", "alb", "api-svc", map[string]string{
+				"alb.ingress.kubernetes.io/scheme": "internet-facing",
+			}),
+			ingress("default", "params-alb", "alb", "api-svc", nil),
+		},
+		Unstructured: []unstructured.Unstructured{
+			ingressClassParams("internet-facing-params", "internet-facing"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "api", "api", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true: %#v", exposure)
+	}
+	if exposure.Provider != "aws" || exposure.RouteKind != "Ingress" {
+		t.Fatalf("unexpected exposure metadata: %#v", exposure)
+	}
+	requireEvidence(t, exposure, "AWS ALB Ingress default/annotation-alb uses internet-facing scheme")
+}
+
+func TestAnalyzeAWSALBIngressClassParamsInternetFacing(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		IngressClasses: []networkingv1.IngressClass{
+			ingressClass("alb", "ingress.k8s.aws/alb", "internet-facing-params"),
+		},
+		Ingresses: []networkingv1.Ingress{ingress("default", "params-alb", "alb", "api-svc", nil)},
+		Unstructured: []unstructured.Unstructured{
+			ingressClassParams("internet-facing-params", "internet-facing"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "api", "api", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true: %#v", exposure)
+	}
+	if exposure.Provider != "aws" || exposure.RouteKind != "Ingress" || exposure.RouteName != "params-alb" {
+		t.Fatalf("unexpected exposure metadata: %#v", exposure)
+	}
+	requireEvidence(t, exposure, "AWS ALB IngressClassParams internet-facing-params uses internet-facing scheme")
+}
+
+func TestAnalyzeAWSALBAuthAnnotationsProtectOIDCAndCognito(t *testing.T) {
+	for _, authType := range []string{"oidc", "cognito"} {
+		t.Run(authType, func(t *testing.T) {
+			inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+			objects := Objects{
+				Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+				Ingresses: []networkingv1.Ingress{ingress("default", "auth-alb", "", "api-svc", map[string]string{
+					"kubernetes.io/ingress.class":                               "alb",
+					"alb.ingress.kubernetes.io/scheme":                          "internet-facing",
+					"alb.ingress.kubernetes.io/auth-type":                       authType,
+					"alb.ingress.kubernetes.io/auth-on-unauthenticated-request": "authenticate",
+				})},
+			}
+
+			got := Analyze(inv, objects)
+
+			exposure := got[resourceRef("default", "api", "api", "container", "")]
+			if exposure.InternetAccessible {
+				t.Fatalf("InternetAccessible = true, want false: %#v", exposure)
+			}
+			if exposure.Protection == nil || exposure.Protection.Type != authType || exposure.Protection.Provider != "aws" || !exposure.Protection.Enabled {
+				t.Fatalf("Protection = %#v, want enabled AWS %s auth", exposure.Protection, authType)
+			}
+			requireEvidence(t, exposure, "AWS ALB Ingress default/auth-alb uses "+authType+" authentication")
+		})
+	}
+}
+
+func TestAnalyzeAWSGatewayLoadBalancerConfigurationInternetFacing(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "aws-gw", "amazon-vpc-lattice"),
+			httpRoute("default", "aws-route", "aws-gw", "api-svc"),
+			loadBalancerConfiguration("default", "aws-gw", "internet-facing"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "api", "api", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true: %#v", exposure)
+	}
+	if exposure.Provider != "aws" || exposure.RouteKind != "HTTPRoute" || exposure.RouteName != "aws-route" {
+		t.Fatalf("unexpected exposure metadata: %#v", exposure)
+	}
+	requireEvidence(t, exposure, "AWS Gateway default/aws-gw LoadBalancerConfiguration scheme is internet-facing")
+}
+
+func TestAnalyzeGatewayRouteKindsResolveBackendRefs(t *testing.T) {
+	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+		t.Run(kind, func(t *testing.T) {
+			inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+			objects := Objects{
+				Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+				Unstructured: []unstructured.Unstructured{
+					gateway("default", "public-gw", "gke-l7-global-external-managed"),
+					route(kind, "default", "route", "public-gw", "api-svc"),
+				},
+			}
+
+			got := Analyze(inv, objects)
+
+			exposure := got[resourceRef("default", "api", "api", "container", "")]
+			if !exposure.InternetAccessible {
+				t.Fatalf("InternetAccessible = false, want true for %s: %#v", kind, exposure)
+			}
+			if exposure.RouteKind != kind {
+				t.Fatalf("RouteKind = %q, want %q", exposure.RouteKind, kind)
+			}
+		})
+	}
+}
+
+func TestAnalyzeIngressSelectorResolutionAndInitContainerRules(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"},
+		containerImage("app", "web:v1"),
+		initContainerImage("migrate", "migrate:v1", ""),
+		initContainerImage("proxy", "proxy:v1", "Always"),
+	)
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "public-ing", "gce", "web-svc", nil)},
+	}
+
+	got := Analyze(inv, objects)
+
+	app := got[resourceRef("default", "web", "app", "container", "")]
+	if !app.InternetAccessible {
+		t.Fatalf("app InternetAccessible = false, want true: %#v", app)
+	}
+	migrate := got[resourceRef("default", "web", "migrate", "initContainer", "")]
+	if migrate.InternetAccessible {
+		t.Fatalf("migrate InternetAccessible = true, want false: %#v", migrate)
+	}
+	requireEvidence(t, migrate, "init container default/web/migrate is not internet accessible because restartPolicy is not Always")
+	proxy := got[resourceRef("default", "web", "proxy", "initContainer", "Always")]
+	if !proxy.InternetAccessible {
+		t.Fatalf("proxy InternetAccessible = false, want true: %#v", proxy)
+	}
+	requireEvidence(t, proxy, "sidecar init container default/web/proxy inherits exposure because restartPolicy is Always")
+}
+
+func TestAnalyzeUnknownIngressClassIsNotPublic(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "unknown", "nginx", "web-svc", nil)},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("Analyze() returned %#v, want no exposure for unknown controller", got)
+	}
+}
+
+func TestResourceInventoryRequiresLabelsForSelectorResolution(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", nil, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "public-ing", "gce", "web-svc", nil)},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("Analyze() returned %#v, want no exposure without workload labels", got)
+	}
+}
+
+func inventoryWithWorkload(namespace, name string, labels map[string]string, images ...model.ContainerImage) *model.Inventory {
+	return &model.Inventory{
+		Resources: []model.ResourceInventory{{
+			Resource: model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: namespace, Name: name},
+			Labels:   labels,
+			Images:   images,
+		}},
+	}
+}
+
+func containerImage(name, image string) model.ContainerImage {
+	return model.ContainerImage{Name: name, ContainerType: "container", ImageRef: image}
+}
+
+func initContainerImage(name, image, restartPolicy string) model.ContainerImage {
+	return model.ContainerImage{Name: name, ContainerType: "initContainer", ImageRef: image, RestartPolicy: restartPolicy}
+}
+
+func resourceRef(namespace, workload, containerName, containerType, restartPolicy string) model.ResourceRef {
+	return model.ResourceRef{
+		APIVersion:    "apps/v1",
+		Kind:          "Deployment",
+		Namespace:     namespace,
+		Name:          workload,
+		ContainerName: containerName,
+		ContainerType: containerType,
+		RestartPolicy: restartPolicy,
+	}
+}
+
+func service(namespace, name string, selector map[string]string) corev1.Service {
+	return serviceWithAnnotations(namespace, name, selector, nil)
+}
+
+func serviceWithAnnotations(namespace, name string, selector, annotations map[string]string) corev1.Service {
+	return corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Annotations: annotations},
+		Spec:       corev1.ServiceSpec{Selector: selector},
+	}
+}
+
+func ingress(namespace, name, className, serviceName string, annotations map[string]string) networkingv1.Ingress {
+	pathType := networkingv1.PathTypePrefix
+	ing := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Annotations: annotations},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{
+				IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+					Paths: []networkingv1.HTTPIngressPath{{
+						PathType: &pathType,
+						Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+							Name: serviceName,
+							Port: networkingv1.ServiceBackendPort{Number: 80},
+						}},
+					}},
+				}},
+			}},
+		},
+	}
+	if className != "" {
+		ing.Spec.IngressClassName = &className
+	}
+	return ing
+}
+
+func ingressClass(name, controller, paramsName string) networkingv1.IngressClass {
+	return networkingv1.IngressClass{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: networkingv1.IngressClassSpec{
+			Controller: controller,
+			Parameters: &networkingv1.IngressClassParametersReference{
+				APIGroup: strPtr("elbv2.k8s.aws"),
+				Kind:     "IngressClassParams",
+				Name:     paramsName,
+			},
+		},
+	}
+}
+
+func gateway(namespace, name, className string) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1",
+		"kind":       "Gateway",
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+		"spec": map[string]any{"gatewayClassName": className},
+	}}
+}
+
+func httpRoute(namespace, name, gatewayName, serviceName string) unstructured.Unstructured {
+	return route("HTTPRoute", namespace, name, gatewayName, serviceName)
+}
+
+func route(kind, namespace, name, gatewayName, serviceName string) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1",
+		"kind":       kind,
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+		"spec": map[string]any{
+			"parentRefs": []any{map[string]any{"name": gatewayName}},
+			"rules": []any{map[string]any{
+				"backendRefs": []any{map[string]any{"name": serviceName, "port": int64(80)}},
+			}},
+		},
+	}}
+}
+
+func gcpBackendPolicyIAP(namespace, name, serviceName string, enabled bool) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.gke.io/v1",
+		"kind":       "GCPBackendPolicy",
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+		"spec": map[string]any{
+			"default": map[string]any{"iap": map[string]any{"enabled": enabled}},
+			"targetRef": map[string]any{
+				"group": "",
+				"kind":  "Service",
+				"name":  serviceName,
+			},
+		},
+	}}
+}
+
+func backendConfigIAP(namespace, name string, enabled bool) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cloud.google.com/v1",
+		"kind":       "BackendConfig",
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+		"spec": map[string]any{"iap": map[string]any{"enabled": enabled}},
+	}}
+}
+
+func ingressClassParams(name, scheme string) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "elbv2.k8s.aws/v1beta1",
+		"kind":       "IngressClassParams",
+		"metadata":   map[string]any{"name": name},
+		"spec":       map[string]any{"scheme": scheme},
+	}}
+}
+
+func loadBalancerConfiguration(namespace, gatewayName, scheme string) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.k8s.aws/v1beta1",
+		"kind":       "LoadBalancerConfiguration",
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      gatewayName,
+		},
+		"spec": map[string]any{"scheme": scheme},
+	}}
+}
+
+func requireEvidence(t *testing.T, exposure model.Exposure, want string) {
+	t.Helper()
+	for _, got := range exposure.Evidence {
+		if got == want {
+			return
+		}
+	}
+	t.Fatalf("missing evidence %q in %#v", want, exposure.Evidence)
+}
+
+func strPtr(v string) *string {
+	return &v
+}

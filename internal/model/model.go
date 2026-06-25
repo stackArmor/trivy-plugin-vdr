@@ -17,9 +17,10 @@ type ImageInventory struct {
 }
 
 type ResourceInventory struct {
-	Resource   ResourceRef      `json:"resource"`
-	Images     []ContainerImage `json:"images"`
-	Conditions []string         `json:"conditions,omitempty"`
+	Resource   ResourceRef       `json:"resource"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	Images     []ContainerImage  `json:"images"`
+	Conditions []string          `json:"conditions,omitempty"`
 }
 
 type ResourceRef struct {
