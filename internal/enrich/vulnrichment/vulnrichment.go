@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
@@ -32,6 +33,15 @@ type Store struct {
 	client       *http.Client
 	now          func() time.Time
 	forceRefresh bool
+
+	fetched atomic.Int64
+	cached  atomic.Int64
+}
+
+// Stats reports how many CVE records were fetched over the network versus served
+// from the local cache during the store's lifetime.
+func (s *Store) Stats() (fetched, cached int) {
+	return int(s.fetched.Load()), int(s.cached.Load())
 }
 
 type Option func(*Store)
@@ -151,17 +161,23 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 			return nil, "", false, statErr
 		}
 		if !s.forceRefresh && s.now().Sub(info.ModTime()) < cacheMaxAge {
+			s.cached.Add(1)
 			return data, sourceURL, true, nil
 		}
 		refreshedData, ok, fetchErr := s.fetch(ctx, cveID, cachePath, sourceURL)
 		if fetchErr != nil {
 			if json.Valid(data) {
+				s.cached.Add(1)
 				return data, sourceURL, true, nil
 			}
 			return nil, "", false, fetchErr
 		}
 		if !ok && json.Valid(data) {
+			s.cached.Add(1)
 			return data, sourceURL, true, nil
+		}
+		if ok {
+			s.fetched.Add(1)
 		}
 		return refreshedData, sourceURL, ok, nil
 	}
@@ -172,6 +188,9 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 	data, ok, err := s.fetch(ctx, cveID, cachePath, sourceURL)
 	if err != nil {
 		return nil, "", false, err
+	}
+	if ok {
+		s.fetched.Add(1)
 	}
 	return data, sourceURL, ok, nil
 }
