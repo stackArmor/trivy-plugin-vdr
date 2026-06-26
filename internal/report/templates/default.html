@@ -212,16 +212,27 @@
         default: return { label: "180 days", days: 180, method: "classic" }; // LOW / UNKNOWN / unset
       }
     }
+    // Downgrade a Classic result one tier (30 -> 60 -> 180 -> deferred).
+    function downgradeClassic(result) {
+      if (result.days <= 30) return { label: "60 days", days: 60, method: "classic" };
+      if (result.days <= 60) return { label: "180 days", days: 180, method: "classic" };
+      return { label: "Fix on system upgrade", days: 99999, method: "classic" };
+    }
+    function classic(row) {
+      const base = severityFallback(row.severity);
+      // Classic findings that are not internet exposed are one tier less urgent.
+      return row.exposed ? base : downgradeClassic(base);
+    }
     function remediation(row) {
       const automatable = normalizeAutomatable(row.automatable);
       const impact = normalizeImpact(row.impact);
       if (automatable === null || impact === null) {
-        return severityFallback(row.severity);
+        return classic(row);
       }
       const key = [row.exposed ? "Y" : "N", inKEV(row) ? "Y" : "N", automatable, impact].join("|");
       const hit = REMEDIATION_TABLE[key];
       if (!hit) {
-        return severityFallback(row.severity);
+        return classic(row);
       }
       return { label: hit.label, days: hit.days, method: "ssvc" };
     }
@@ -364,6 +375,28 @@
         render();
       });
     });
+    // Explain the Remediation column on hover of its header.
+    if (headerCells[11]) {
+      headerCells[11].title = [
+        "Remediation priority (CISA SSVC decision table). Hover a value for its exact timeline.",
+        "",
+        "Tiers, most to least urgent:",
+        "  Emergency  - 3 days + forensic triage",
+        "  Immediate  - 3 days",
+        "  Urgent     - 14 days",
+        "  High       - 30 days",
+        "  Moderate   - 60 days",
+        "  Low        - 180 days",
+        "  Deferred   - fix on system upgrade",
+        "",
+        "SSVC: computed from publicly exposed, in KEV (active exploitation, or",
+        "EPSS > 0.3 when poc/none/unknown), automatable, and technical impact.",
+        "",
+        "Classic (italic, marked *): severity-based fallback used when automatable",
+        "or technical impact is unavailable. Classic findings that are NOT internet",
+        "exposed are downgraded one tier."
+      ].join("\n");
+    }
     function compareRows(a, b, column) {
       if (column.type === "number") {
         const av = a[column.key];

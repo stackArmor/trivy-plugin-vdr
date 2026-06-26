@@ -107,7 +107,10 @@ Tiers (by deadline): **Emergency** (3 days + forensic triage), **Immediate** (3 
 
 - *In KEV* is true when the CVE's exploitation status is `active`, or — when exploitation is `poc`/`none`/unknown — when its EPSS score exceeds 0.3.
 - *Publicly exposed* uses the computed internet exposure of the affected resource.
-- When *automatable* or *technical impact* is not available (no CISA Vulnrichment record), the tier falls back to a severity-based **Classic** SLA (Critical/High → 30 days, Medium → 60 days, Low/unknown → 180 days). Classic values are shown in italics with a `*` so they are distinguishable from SSVC-derived tiers. Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
+- When *automatable* or *technical impact* is not available (no CISA Vulnrichment record), the tier falls back to a severity-based **Classic** SLA (Critical/High → 30 days, Medium → 60 days, Low/unknown → 180 days). Classic values are shown in italics with a `*` so they are distinguishable from SSVC-derived tiers.
+- A Classic finding that is **not internet exposed** is downgraded one tier (e.g. High → Moderate). SSVC tiers are not downgraded, since exposure is already one of their inputs.
+
+Hover the **Remediation** column header for an in-report legend covering every tier, the SSVC vs Classic distinction, and the not-exposed downgrade. Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 
 ## Exposure rules
 
