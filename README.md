@@ -12,7 +12,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Reserved future source subcommands named `ecs` and `image`.
 - JSON and table output mode flags.
 - Finding-centric and resource-centric view flags.
-- Optional standalone HTML report with filter controls for namespace, internet exposure, automatable, exploitation status, EPSS score, and technical impact.
+- Optional standalone HTML report with filter controls for severity (multi-select), namespace, internet exposure, automatable, exploitation status, EPSS score, and technical impact.
 - Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
 - Automatic private-registry authentication from Kubernetes `imagePullSecrets`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
 - Resilient scanning: a single image that fails to pull or scan is reported as a warning and the run continues, producing a partial (still enriched) report.
@@ -99,7 +99,7 @@ JSON output defaults to a finding-centric report. Each finding includes `affecte
 
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
-Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered) and click-to-sort on every column (severity sorts by rank, EPSS numerically). Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
+Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically). Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 
 ## Exposure rules
 
