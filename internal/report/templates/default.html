@@ -41,6 +41,10 @@
     .metric strong { display: block; font-size: 24px; margin-top: 4px; }
     .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin-bottom: 16px; }
     label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+    .filters .filter { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+    .checkboxes { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-height: 36px; }
+    .checkboxes label { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; color: var(--ink); font-size: 13px; cursor: pointer; }
+    .checkboxes input { width: auto; }
     select, input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px; background: var(--field-bg); color: var(--ink); font: inherit; }
     button { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; background: var(--field-bg); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
     button:hover { border-color: var(--accent); }
@@ -78,6 +82,7 @@
     </section>
 
     <section class="filters" aria-label="Filters">
+      <div class="filter"><span>Severity</span><div id="severity" class="checkboxes" role="group" aria-label="Severity"></div></div>
       <label>Namespace<select id="namespace"><option value="">All</option></select></label>
       <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
       <label>Automatable<select id="automatable"><option value="">All</option></select></label>
@@ -206,6 +211,26 @@
       { key: "impact", type: "string" }
     ];
     const severityRank = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, UNKNOWN: 1 };
+
+    // Severity multi-select: a checkbox per severity present in the data, ordered
+    // by rank. No boxes checked means no severity filter (show all).
+    const severityBox = document.getElementById("severity");
+    function selectedSeverities() {
+      return new Set(Array.from(severityBox.querySelectorAll("input:checked")).map(input => input.value));
+    }
+    [...new Set(rows.map(row => row.severity).filter(Boolean))]
+      .sort((a, b) => (severityRank[b] || 0) - (severityRank[a] || 0))
+      .forEach(severity => {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = severity;
+        input.addEventListener("change", render);
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(" " + severity));
+        severityBox.appendChild(label);
+      });
+
     let sortIndex = null;
     let sortDir = 1;
     const headerCells = Array.from(document.querySelectorAll("#findings thead th"));
@@ -244,7 +269,9 @@
     function render() {
       const filters = Object.fromEntries(controls.map(control => [control.id, control.value]));
       const minEPSS = filters.epss === "" ? null : Number(filters.epss);
+      const severities = selectedSeverities();
       const filtered = rows.filter(row =>
+        (severities.size === 0 || severities.has(row.severity)) &&
         (!filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&
         (!filters.automatable || row.automatable === filters.automatable) &&
