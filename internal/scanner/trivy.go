@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,12 +35,27 @@ type TrivyRunner struct {
 	ImageSrc        string
 	CacheDir        string
 	DockerConfigDir string
-	// IsolateCache runs each scan in its own temporary cache directory (with the
-	// shared vulnerability DB symlinked in) so concurrent scans do not contend on
-	// Trivy's BoltDB cache lock. Requires CacheDir to be set and the DB to be
-	// pre-downloaded with EnsureVulnDB.
-	IsolateCache  bool
+	// SkipDBUpdate passes --skip-db-update to each scan. Set this only after the
+	// vulnerability DB has been downloaded once via EnsureVulnDB so scans reuse
+	// it instead of each re-checking for an update.
+	SkipDBUpdate  bool
 	CommandRunner CommandRunner
+	// Logger receives self-heal notices. Optional.
+	Logger *log.Logger
+	// healOnce, when non-nil, enables one-shot cache self-healing: if a scan
+	// fails with a corrupted/locked Trivy cache, the cache is cleared and the DB
+	// re-downloaded once, then the scan is retried. Shared across all scans.
+	healOnce *sync.Once
+	// workerCaches, when non-nil, hands out an isolated cache directory per scan
+	// so concurrent scans don't contend on a shared scan-cache lock.
+	workerCaches *workerCachePool
+}
+
+// WithSelfHeal returns a copy of the runner with one-shot cache self-healing
+// enabled, sharing heal state so the cache is repaired at most once per run.
+func (r TrivyRunner) WithSelfHeal() TrivyRunner {
+	r.healOnce = &sync.Once{}
+	return r
 }
 
 func (r TrivyRunner) binary() string {
@@ -56,48 +72,73 @@ func (r TrivyRunner) commandRunner() CommandRunner {
 	return execCommandRunner{extraEnv: r.dockerEnv()}
 }
 
-// EnsureVulnDB downloads/updates the Trivy vulnerability database once so that
-// per-image scans can run with --skip-db-update and share it read-only. This
-// avoids many concurrent scans racing to update the same BoltDB, which can
-// deadlock on the cache lock or corrupt the database.
-func (r TrivyRunner) EnsureVulnDB(ctx context.Context) error {
-	args := []string{"image", "--download-db-only", "--skip-version-check"}
+// EnsureDatabases downloads/updates the Trivy vulnerability database and the
+// Java index database once up front so per-image scans can run with
+// --skip-db-update --skip-java-db-update and share the cache safely. Downloading
+// these mid-scan (the Java DB is ~900MB) is what corrupts a shared cache when
+// scans run concurrently, so doing it once before scanning makes parallel scans
+// against a single cache directory safe.
+func (r TrivyRunner) EnsureDatabases(ctx context.Context) error {
+	if err := r.downloadDB(ctx, "--download-db-only"); err != nil {
+		return fmt.Errorf("vulnerability DB: %w", err)
+	}
+	if err := r.downloadDB(ctx, "--download-java-db-only"); err != nil {
+		return fmt.Errorf("Java DB: %w", err)
+	}
+	return nil
+}
+
+func (r TrivyRunner) downloadDB(ctx context.Context, downloadFlag string) error {
+	args := []string{"image", downloadFlag, "--skip-version-check"}
 	if r.CacheDir != "" {
 		args = append(args, "--cache-dir", r.CacheDir)
 	}
 	_, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
 	if err != nil {
-		return fmt.Errorf("trivy vulnerability DB download failed: %w: %s", err, string(bytes.TrimSpace(stderr)))
+		return fmt.Errorf("trivy %s failed: %w: %s", downloadFlag, err, string(bytes.TrimSpace(stderr)))
 	}
 	return nil
 }
 
 func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
+	// With isolated worker caches, acquire one for the duration of this scan so
+	// each concurrent scan writes to its own fs (fanal) cache.
+	cacheDir := r.CacheDir
+	if r.workerCaches != nil {
+		d := <-r.workerCaches.free
+		defer func() { r.workerCaches.free <- d }()
+		cacheDir = d
+	}
+
+	findings, err := r.scanOnce(ctx, cacheDir, image, timeout)
+	if err == nil || r.healOnce == nil || !looksLikeCacheCorruption(err) {
+		return findings, err
+	}
+	// One-shot cache self-heal: a corrupted database fails every scan until
+	// cleared. Repair it once (shared across workers) and retry.
+	r.healOnce.Do(func() {
+		r.Logger.Warn("detected a corrupted Trivy database; clearing and re-downloading")
+		if healErr := r.healCache(ctx); healErr != nil {
+			r.Logger.Error("cache self-heal failed: %v", healErr)
+		} else {
+			r.Logger.Info("Trivy database repaired")
+		}
+	})
+	return r.scanOnce(ctx, cacheDir, image, timeout)
+}
+
+func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeout time.Duration) ([]model.Finding, error) {
 	imageSrc := r.ImageSrc
 	if imageSrc == "" {
 		imageSrc = "remote"
 	}
 
-	cacheDir := r.CacheDir
-	skipDBUpdate := false
-	cleanup := func() {}
-	if r.IsolateCache && r.CacheDir != "" {
-		isolated, isolatedCleanup, err := isolatedCacheDir(r.CacheDir)
-		if err != nil {
-			return nil, fmt.Errorf("prepare isolated cache for %q: %w", image, err)
-		}
-		cacheDir = isolated
-		skipDBUpdate = true
-		cleanup = isolatedCleanup
-	}
-	defer cleanup()
-
 	args := []string{"image"}
 	if cacheDir != "" {
 		args = append(args, "--cache-dir", cacheDir)
 	}
-	if skipDBUpdate {
-		args = append(args, "--skip-db-update")
+	if r.SkipDBUpdate {
+		args = append(args, "--skip-db-update", "--skip-java-db-update")
 	}
 	args = append(args, "--image-src", imageSrc, "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", timeout.String(), image)
 	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
@@ -112,20 +153,114 @@ func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.D
 	return findings, nil
 }
 
-// isolatedCacheDir creates a temporary Trivy cache directory whose db/ subdir is
-// a symlink to the shared base cache's db/, so concurrent scans get private
-// fs (fanal) caches while sharing one read-only vulnerability database.
-func isolatedCacheDir(base string) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "vdr-trivy-cache-")
+// workerCachePool hands out isolated Trivy cache directories so concurrent scans
+// don't contend on a shared fs (fanal) cache lock. Each directory shares the
+// vulnerability and Java databases with the base cache via hardlinks (no extra
+// disk) but has its own scan cache.
+type workerCachePool struct {
+	free chan string
+	dirs []string
+}
+
+func (p *workerCachePool) remove() {
+	for _, dir := range p.dirs {
+		os.RemoveAll(dir)
+	}
+}
+
+// PrepareWorkerCaches builds n isolated cache directories (DBs hardlinked from
+// the base cache) and returns a runner that hands them out per scan, plus a
+// cleanup func. With n <= 1 or no CacheDir it is a no-op. Call after
+// EnsureDatabases so the databases exist to hardlink.
+func (r TrivyRunner) PrepareWorkerCaches(n int) (TrivyRunner, func(), error) {
+	if n <= 1 || r.CacheDir == "" {
+		return r, func() {}, nil
+	}
+	pool := &workerCachePool{free: make(chan string, n)}
+	for i := 0; i < n; i++ {
+		dir, err := r.makeWorkerCache()
+		if err != nil {
+			pool.remove()
+			return r, func() {}, err
+		}
+		pool.dirs = append(pool.dirs, dir)
+		pool.free <- dir
+	}
+	r.workerCaches = pool
+	return r, pool.remove, nil
+}
+
+func (r TrivyRunner) makeWorkerCache() (string, error) {
+	dir, err := os.MkdirTemp(r.CacheDir, "worker-")
 	if err != nil {
-		return "", func() {}, err
+		return "", err
 	}
-	cleanup := func() { os.RemoveAll(dir) }
-	if err := os.Symlink(filepath.Join(base, "db"), filepath.Join(dir, "db")); err != nil {
-		cleanup()
-		return "", func() {}, err
+	for _, sub := range []string{"db", "java-db"} {
+		src := filepath.Join(r.CacheDir, sub)
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // Java DB may be absent until a Java image is scanned.
+			}
+			os.RemoveAll(dir)
+			return "", err
+		}
+		dst := filepath.Join(dir, sub)
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			os.RemoveAll(dir)
+			return "", err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if err := os.Link(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {
+				os.RemoveAll(dir)
+				return "", err
+			}
+		}
 	}
-	return dir, cleanup, nil
+	return dir, nil
+}
+
+// healCache removes the Trivy database subdirectories and re-downloads them,
+// leaving the scan cache (fanal) and enrichment caches (epss, vulnrichment)
+// untouched so concurrent scans are not disrupted.
+func (r TrivyRunner) healCache(ctx context.Context) error {
+	if r.CacheDir == "" {
+		return nil
+	}
+	for _, sub := range []string{"db", "java-db"} {
+		if err := os.RemoveAll(filepath.Join(r.CacheDir, sub)); err != nil {
+			return err
+		}
+	}
+	return r.EnsureDatabases(ctx)
+}
+
+// looksLikeCacheCorruption reports whether an error indicates a genuinely
+// corrupted database that a re-download could fix. It deliberately excludes
+// transient cache-lock contention ("cache may be in use", "unable to initialize
+// fs cache"), which is not corruption and must not trigger a destructive
+// clear+redownload that would disrupt other in-flight scans.
+func looksLikeCacheCorruption(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sig := range []string{
+		"unexpected fault",
+		"sigsegv",
+		"segmentation violation",
+		"bbolt",
+		"invalid database",
+		"panic:",
+	} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 type CacheCleaner interface {
@@ -214,42 +349,44 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	total := len(images)
 	var done atomic.Int64
 
+	scanIndex := func(index int) {
+		image := images[index]
+		options.Logger.Info("scanning %s", image.ImageRef)
+		findings, err := runner.ScanImage(ctx, image.ImageRef, options.Timeout)
+		result := scanResult{findings: findings, err: err, completed: err == nil}
+		if err == nil {
+			for i := range result.findings {
+				result.findings[i].ImageRef = image.ImageRef
+				if image.NormalizedImage != "" {
+					result.findings[i].NormalizedImage = image.NormalizedImage
+				}
+				result.findings[i].AffectedResources = append([]model.ResourceRef(nil), image.Resources...)
+			}
+		}
+		results[index] = result
+		// A single image failure is recorded and surfaced as a warning; it does
+		// not cancel sibling scans or abort the run.
+		n := done.Add(1)
+		if err != nil {
+			options.Logger.Warn("[%d/%d] %s failed: %v", n, total, image.ImageRef, err)
+		} else {
+			options.Logger.Info("[%d/%d] %s: %d findings", n, total, image.ImageRef, len(findings))
+		}
+	}
+
 	var wg sync.WaitGroup
 	for worker := 0; worker < parallelScans; worker++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for index := range jobs {
-				image := images[index]
-				options.Logger.Info("scanning %s", image.ImageRef)
-				findings, err := runner.ScanImage(ctx, image.ImageRef, options.Timeout)
-				result := scanResult{findings: findings, err: err, completed: err == nil}
-				if err == nil {
-					for i := range result.findings {
-						result.findings[i].ImageRef = image.ImageRef
-						if image.NormalizedImage != "" {
-							result.findings[i].NormalizedImage = image.NormalizedImage
-						}
-						result.findings[i].AffectedResources = append([]model.ResourceRef(nil), image.Resources...)
-					}
-				}
-				results[index] = result
-				// A single image failure is recorded and surfaced as a
-				// warning; it does not cancel sibling scans or abort the run.
-				n := done.Add(1)
-				if err != nil {
-					options.Logger.Warn("[%d/%d] %s: scan failed", n, total, image.ImageRef)
-				} else {
-					options.Logger.Info("[%d/%d] %s: %d findings", n, total, image.ImageRef, len(findings))
-				}
+				scanIndex(index)
 			}
 		}()
 	}
-
-	for index := range images {
+	for index := 0; index < total; index++ {
 		select {
 		case <-ctx.Done():
-			break
 		case jobs <- index:
 		}
 		if ctx.Err() != nil {
