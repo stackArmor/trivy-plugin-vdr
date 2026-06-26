@@ -60,6 +60,8 @@
     .sev-CRITICAL { color: var(--danger); font-weight: 700; }
     .sev-HIGH { color: var(--warn); font-weight: 650; }
     .muted { color: var(--muted); }
+    td.classic { font-style: italic; }
+    .legend { margin-top: 10px; font-size: 12px; color: var(--muted); }
     .empty { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
   </style>
 </head>
@@ -112,6 +114,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
+    <p class="legend">Remediation tiers follow the CISA SSVC decision table. Italic values marked <em>*</em> are severity-based fallbacks (Classic) used when SSVC inputs (automatable / technical impact) are unavailable. Hover a remediation value for its exact timeline.</p>
   </main>
   <script>
     // Theme toggle.
@@ -152,8 +155,10 @@
         impact: vuln.technicalImpact || ""
       };
       const rem = remediation(row);
-      row.remediation = rem.label;
-      row.remediationDays = rem.days;
+      row.remediation = rem.label;        // precise timeline string (tooltip)
+      row.remediationDays = rem.days;      // for sorting / color
+      row.remediationMethod = rem.method;  // "ssvc" or "classic"
+      row.remediationTier = remediationTier(rem.label); // displayed priority tier
       rows.push(row);
     }
 
@@ -198,12 +203,13 @@
       if (v === "partial") return "P";
       return null;
     }
+    // Severity-based fallback ("Classic") used when SSVC inputs are unavailable.
     function severityFallback(severity) {
       switch ((severity || "").toUpperCase()) {
         case "CRITICAL":
-        case "HIGH": return { label: "30 days", days: 30 };
-        case "MEDIUM": return { label: "60 days", days: 60 };
-        default: return { label: "180 days", days: 180 }; // LOW / UNKNOWN / unset
+        case "HIGH": return { label: "30 days", days: 30, method: "classic" };
+        case "MEDIUM": return { label: "60 days", days: 60, method: "classic" };
+        default: return { label: "180 days", days: 180, method: "classic" }; // LOW / UNKNOWN / unset
       }
     }
     function remediation(row) {
@@ -213,13 +219,32 @@
         return severityFallback(row.severity);
       }
       const key = [row.exposed ? "Y" : "N", inKEV(row) ? "Y" : "N", automatable, impact].join("|");
-      return REMEDIATION_TABLE[key] || severityFallback(row.severity);
+      const hit = REMEDIATION_TABLE[key];
+      if (!hit) {
+        return severityFallback(row.severity);
+      }
+      return { label: hit.label, days: hit.days, method: "ssvc" };
     }
     function remediationClass(days) {
       if (days <= 3) return "sev-CRITICAL";
       if (days <= 14) return "sev-HIGH";
       return "";
     }
+    // Priority tier per precise timeline label, so "3 days & forensic triage" is
+    // distinct from "3 days".
+    function remediationTier(label) {
+      switch (label) {
+        case "3 days & forensic triage": return "Emergency";
+        case "3 days": return "Immediate";
+        case "14 days": return "Urgent";
+        case "30 days": return "High";
+        case "60 days": return "Moderate";
+        case "180 days": return "Low";
+        case "Fix on system upgrade": return "Deferred";
+        default: return label;
+      }
+    }
+    const TIER_RANK = { "Emergency": 0, "Immediate": 1, "Urgent": 2, "High": 3, "Moderate": 4, "Low": 5, "Deferred": 6 };
     function securitySummary(images) {
       const values = [];
       images.forEach(image => {
@@ -308,16 +333,16 @@
     function selectedRemediations() {
       return new Set(Array.from(remediationBox.querySelectorAll("input:checked")).map(input => input.value));
     }
-    [...new Map(rows.map(row => [row.remediation, row.remediationDays])).entries()]
-      .sort((a, b) => a[1] - b[1])
-      .forEach(([remediationLabel]) => {
+    [...new Set(rows.map(row => row.remediationTier))]
+      .sort((a, b) => (TIER_RANK[a] ?? 99) - (TIER_RANK[b] ?? 99))
+      .forEach(tier => {
         const label = document.createElement("label");
         const input = document.createElement("input");
         input.type = "checkbox";
-        input.value = remediationLabel;
+        input.value = tier;
         input.addEventListener("change", render);
         label.appendChild(input);
-        label.appendChild(document.createTextNode(" " + remediationLabel));
+        label.appendChild(document.createTextNode(" " + tier));
         remediationBox.appendChild(label);
       });
 
@@ -363,7 +388,7 @@
       const remediations = selectedRemediations();
       const filtered = rows.filter(row =>
         (severities.size === 0 || severities.has(row.severity)) &&
-        (remediations.size === 0 || remediations.has(row.remediation)) &&
+        (remediations.size === 0 || remediations.has(row.remediationTier)) &&
         (!filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&
         (!filters.automatable || row.automatable === filters.automatable) &&
@@ -379,11 +404,20 @@
       tbody.textContent = "";
       filtered.forEach(row => {
         const tr = document.createElement("tr");
-        [row.id, row.severity, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.security, row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
+        [row.id, row.severity, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.security, row.automatable, row.exploitation, row.impact, row.remediationTier].forEach((value, index) => {
           const td = document.createElement("td");
           td.textContent = value;
-          if (index === 1) td.className = "sev-" + row.severity;
-          else if (index === 11) td.className = remediationClass(row.remediationDays);
+          if (index === 1) {
+            td.className = "sev-" + row.severity;
+          } else if (index === 11) {
+            td.className = remediationClass(row.remediationDays);
+            const basis = row.remediationMethod === "classic" ? "Severity-based (Classic)" : "SSVC";
+            td.title = basis + " — " + row.remediation;
+            if (row.remediationMethod === "classic") {
+              td.classList.add("classic");
+              td.textContent = value + " *";
+            }
+          }
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
