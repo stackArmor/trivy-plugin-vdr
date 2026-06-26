@@ -516,6 +516,7 @@ func parseTrivyFindings(data []byte, image string) ([]model.Finding, error) {
 				Title:            vulnerability.Title,
 				Description:      vulnerability.Description,
 				References:       append([]string(nil), vulnerability.References...),
+				CVSSVector:       bestCVSSVector(vulnerability.CVSS),
 			})
 		}
 	}
@@ -531,15 +532,56 @@ type trivyResult struct {
 }
 
 type trivyVulnerability struct {
-	VulnerabilityID  string   `json:"VulnerabilityID"`
-	PkgName          string   `json:"PkgName"`
-	InstalledVersion string   `json:"InstalledVersion"`
-	FixedVersion     string   `json:"FixedVersion"`
-	Severity         string   `json:"Severity"`
-	Status           string   `json:"Status"`
-	Title            string   `json:"Title"`
-	Description      string   `json:"Description"`
-	References       []string `json:"References"`
+	VulnerabilityID  string               `json:"VulnerabilityID"`
+	PkgName          string               `json:"PkgName"`
+	InstalledVersion string               `json:"InstalledVersion"`
+	FixedVersion     string               `json:"FixedVersion"`
+	Severity         string               `json:"Severity"`
+	Status           string               `json:"Status"`
+	Title            string               `json:"Title"`
+	Description      string               `json:"Description"`
+	References       []string             `json:"References"`
+	CVSS             map[string]trivyCVSS `json:"CVSS"`
+}
+
+type trivyCVSS struct {
+	V3Vector  string `json:"V3Vector"`
+	V40Vector string `json:"V40Vector"`
+}
+
+// bestCVSSVector returns a single CVSS base vector, preferring NVD, then Red Hat,
+// then GHSA, then any remaining source in a deterministic order. v3 vectors are
+// preferred over v4 because the report's automatability heuristic is expressed in
+// v3 base metrics (the AV/AC/PR/UI metric names are shared by both versions).
+func bestCVSSVector(cvss map[string]trivyCVSS) string {
+	if len(cvss) == 0 {
+		return ""
+	}
+	preferred := []string{"nvd", "redhat", "ghsa"}
+	pick := func(get func(trivyCVSS) string) string {
+		for _, vendor := range preferred {
+			if c, ok := cvss[vendor]; ok {
+				if v := get(c); v != "" {
+					return v
+				}
+			}
+		}
+		keys := make([]string, 0, len(cvss))
+		for key := range cvss {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if v := get(cvss[key]); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	if v := pick(func(c trivyCVSS) string { return c.V3Vector }); v != "" {
+		return v
+	}
+	return pick(func(c trivyCVSS) string { return c.V40Vector })
 }
 
 // dockerEnv returns the DOCKER_CONFIG environment entry that points Trivy at the

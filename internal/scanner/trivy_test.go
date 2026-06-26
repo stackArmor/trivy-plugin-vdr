@@ -97,7 +97,11 @@ func TestTrivyRunnerParsesVulnerabilitiesFromMultipleResults(t *testing.T) {
 								"Title": "openssl issue",
 								"Description": "bad openssl",
 								"References": ["https://example.com/cve"],
-								"Status": "fixed"
+								"Status": "fixed",
+								"CVSS": {
+									"redhat": { "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:L" },
+									"nvd": { "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" }
+								}
 							}
 						]
 					},
@@ -136,6 +140,9 @@ func TestTrivyRunnerParsesVulnerabilitiesFromMultipleResults(t *testing.T) {
 		first.Description != "bad openssl" ||
 		first.Status != "fixed" {
 		t.Fatalf("first finding did not preserve fields: %#v", first)
+	}
+	if first.CVSSVector != "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" {
+		t.Fatalf("CVSSVector = %q, want NVD v3 vector preferred over redhat", first.CVSSVector)
 	}
 	if !reflect.DeepEqual(first.References, []string{"https://example.com/cve"}) {
 		t.Fatalf("References = %#v", first.References)

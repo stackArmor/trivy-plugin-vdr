@@ -70,6 +70,10 @@ type Finding struct {
 	Title            string        `json:"title,omitempty"`
 	Description      string        `json:"description,omitempty"`
 	References       []string      `json:"references,omitempty"`
+	// CVSSVector is the preferred CVSS base vector (v3, else v4) from the scanner.
+	// It feeds the report's automatability fallback when CISA Vulnrichment has no
+	// record for the CVE.
+	CVSSVector       string        `json:"cvssVector,omitempty"`
 	EPSS             *EPSS         `json:"epss,omitempty"`
 	Vulnrichment     *Vulnrichment `json:"vulnrichment,omitempty"`
 	Exposure         *Exposure     `json:"exposure,omitempty"`
