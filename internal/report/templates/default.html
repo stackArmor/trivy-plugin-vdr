@@ -89,7 +89,7 @@
       <label>Exploitation<select id="exploitation"><option value="">All</option></select></label>
       <label>EPSS score<input id="epss" type="number" min="0" max="1" step="0.01" placeholder="Minimum"></label>
       <label>Technical impact<select id="impact"><option value="">All</option></select></label>
-      <label>Remediation<select id="remediation"><option value="">All</option></select></label>
+      <div class="filter"><span>Remediation</span><div id="remediation" class="checkboxes" role="group" aria-label="Remediation"></div></div>
     </section>
 
     <table id="findings">
@@ -262,16 +262,7 @@
     fillSelect("automatable", rows.map(row => row.automatable));
     fillSelect("exploitation", rows.map(row => row.exploitation));
     fillSelect("impact", rows.map(row => row.impact));
-    // Remediation options ordered by urgency (soonest deadline first).
-    [...new Map(rows.map(row => [row.remediation, row.remediationDays])).entries()]
-      .sort((a, b) => a[1] - b[1])
-      .forEach(([label]) => {
-        const option = document.createElement("option");
-        option.value = label;
-        option.textContent = label;
-        document.getElementById("remediation").appendChild(option);
-      });
-    const controls = ["namespace", "exposed", "automatable", "exploitation", "epss", "impact", "remediation"].map(id => document.getElementById(id));
+    const controls = ["namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
 
@@ -309,6 +300,25 @@
         label.appendChild(input);
         label.appendChild(document.createTextNode(" " + severity));
         severityBox.appendChild(label);
+      });
+
+    // Remediation multi-select: a checkbox per timeline present, ordered by
+    // deadline (soonest first). No boxes checked means no remediation filter.
+    const remediationBox = document.getElementById("remediation");
+    function selectedRemediations() {
+      return new Set(Array.from(remediationBox.querySelectorAll("input:checked")).map(input => input.value));
+    }
+    [...new Map(rows.map(row => [row.remediation, row.remediationDays])).entries()]
+      .sort((a, b) => a[1] - b[1])
+      .forEach(([remediationLabel]) => {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = remediationLabel;
+        input.addEventListener("change", render);
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(" " + remediationLabel));
+        remediationBox.appendChild(label);
       });
 
     let sortIndex = null;
@@ -350,14 +360,15 @@
       const filters = Object.fromEntries(controls.map(control => [control.id, control.value]));
       const minEPSS = filters.epss === "" ? null : Number(filters.epss);
       const severities = selectedSeverities();
+      const remediations = selectedRemediations();
       const filtered = rows.filter(row =>
         (severities.size === 0 || severities.has(row.severity)) &&
+        (remediations.size === 0 || remediations.has(row.remediation)) &&
         (!filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&
         (!filters.automatable || row.automatable === filters.automatable) &&
         (!filters.exploitation || row.exploitation === filters.exploitation) &&
         (!filters.impact || row.impact === filters.impact) &&
-        (!filters.remediation || row.remediation === filters.remediation) &&
         (minEPSS === null || (row.epss !== null && row.epss >= minEPSS))
       );
       if (sortIndex !== null) {
