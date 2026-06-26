@@ -89,6 +89,7 @@
       <label>Exploitation<select id="exploitation"><option value="">All</option></select></label>
       <label>EPSS score<input id="epss" type="number" min="0" max="1" step="0.01" placeholder="Minimum"></label>
       <label>Technical impact<select id="impact"><option value="">All</option></select></label>
+      <label>Remediation<select id="remediation"><option value="">All</option></select></label>
     </section>
 
     <table id="findings">
@@ -105,6 +106,7 @@
           <th>Automatable</th>
           <th>Exploitation</th>
           <th>Technical impact</th>
+          <th>Remediation</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -136,7 +138,7 @@
       const epss = finding.epss || {};
       const ref = resource || (finding.affected && finding.affected[0] && finding.affected[0].resource) || {};
       const images = resourceReport && resourceReport.images ? resourceReport.images : [];
-      rows.push({
+      const row = {
         id: finding.id || "",
         severity: finding.severity || "",
         epss: typeof epss.score === "number" ? epss.score : null,
@@ -148,7 +150,75 @@
         automatable: vuln.automatable || "",
         exploitation: vuln.exploitation || "",
         impact: vuln.technicalImpact || ""
-      });
+      };
+      const rem = remediation(row);
+      row.remediation = rem.label;
+      row.remediationDays = rem.days;
+      rows.push(row);
+    }
+
+    // Remediation timeline per the CISA SSVC decision table (Table 1).
+    // Inputs: Publicly Exposed (internet exposure), In KEV (active exploitation,
+    // or EPSS > 0.3 when exploitation is poc/none/unknown), Automatable, and
+    // Technical Impact. When Automatable or Technical Impact is unknown, fall
+    // back to a severity-based SLA.
+    const REMEDIATION_TABLE = {
+      // exposed | kev | automatable | impact(total/partial)
+      "Y|Y|Y|T": { label: "3 days & forensic triage", days: 3 },
+      "Y|Y|Y|P": { label: "3 days", days: 3 },
+      "Y|Y|N|T": { label: "3 days & forensic triage", days: 3 },
+      "Y|Y|N|P": { label: "14 days", days: 14 },
+      "Y|N|Y|T": { label: "3 days", days: 3 },
+      "Y|N|Y|P": { label: "14 days", days: 14 },
+      "Y|N|N|T": { label: "14 days", days: 14 },
+      "Y|N|N|P": { label: "60 days", days: 60 },
+      "N|Y|Y|T": { label: "3 days & forensic triage", days: 3 },
+      "N|Y|Y|P": { label: "14 days", days: 14 },
+      "N|Y|N|T": { label: "14 days", days: 14 },
+      "N|Y|N|P": { label: "14 days", days: 14 },
+      "N|N|Y|T": { label: "60 days", days: 60 },
+      "N|N|Y|P": { label: "60 days", days: 60 },
+      "N|N|N|T": { label: "Fix on system upgrade", days: 99999 },
+      "N|N|N|P": { label: "Fix on system upgrade", days: 99999 }
+    };
+    function inKEV(row) {
+      if ((row.exploitation || "").toLowerCase() === "active") return true;
+      // poc / none / unknown: treat as KEV-equivalent when EPSS is elevated.
+      return row.epss !== null && row.epss > 0.3;
+    }
+    function normalizeAutomatable(value) {
+      const v = (value || "").toLowerCase();
+      if (v === "yes") return "Y";
+      if (v === "no") return "N";
+      return null;
+    }
+    function normalizeImpact(value) {
+      const v = (value || "").toLowerCase();
+      if (v === "total") return "T";
+      if (v === "partial") return "P";
+      return null;
+    }
+    function severityFallback(severity) {
+      switch ((severity || "").toUpperCase()) {
+        case "CRITICAL":
+        case "HIGH": return { label: "30 days", days: 30 };
+        case "MEDIUM": return { label: "60 days", days: 60 };
+        default: return { label: "180 days", days: 180 }; // LOW / UNKNOWN / unset
+      }
+    }
+    function remediation(row) {
+      const automatable = normalizeAutomatable(row.automatable);
+      const impact = normalizeImpact(row.impact);
+      if (automatable === null || impact === null) {
+        return severityFallback(row.severity);
+      }
+      const key = [row.exposed ? "Y" : "N", inKEV(row) ? "Y" : "N", automatable, impact].join("|");
+      return REMEDIATION_TABLE[key] || severityFallback(row.severity);
+    }
+    function remediationClass(days) {
+      if (days <= 3) return "sev-CRITICAL";
+      if (days <= 14) return "sev-HIGH";
+      return "";
     }
     function securitySummary(images) {
       const values = [];
@@ -192,7 +262,16 @@
     fillSelect("automatable", rows.map(row => row.automatable));
     fillSelect("exploitation", rows.map(row => row.exploitation));
     fillSelect("impact", rows.map(row => row.impact));
-    const controls = ["namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
+    // Remediation options ordered by urgency (soonest deadline first).
+    [...new Map(rows.map(row => [row.remediation, row.remediationDays])).entries()]
+      .sort((a, b) => a[1] - b[1])
+      .forEach(([label]) => {
+        const option = document.createElement("option");
+        option.value = label;
+        option.textContent = label;
+        document.getElementById("remediation").appendChild(option);
+      });
+    const controls = ["namespace", "exposed", "automatable", "exploitation", "epss", "impact", "remediation"].map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
 
@@ -208,7 +287,8 @@
       { key: "security", type: "string" },
       { key: "automatable", type: "string" },
       { key: "exploitation", type: "string" },
-      { key: "impact", type: "string" }
+      { key: "impact", type: "string" },
+      { key: "remediationDays", type: "number" }
     ];
     const severityRank = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, UNKNOWN: 1 };
 
@@ -277,6 +357,7 @@
         (!filters.automatable || row.automatable === filters.automatable) &&
         (!filters.exploitation || row.exploitation === filters.exploitation) &&
         (!filters.impact || row.impact === filters.impact) &&
+        (!filters.remediation || row.remediation === filters.remediation) &&
         (minEPSS === null || (row.epss !== null && row.epss >= minEPSS))
       );
       if (sortIndex !== null) {
@@ -287,10 +368,11 @@
       tbody.textContent = "";
       filtered.forEach(row => {
         const tr = document.createElement("tr");
-        [row.id, row.severity, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.security, row.automatable, row.exploitation, row.impact].forEach((value, index) => {
+        [row.id, row.severity, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.security, row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
           const td = document.createElement("td");
           td.textContent = value;
           if (index === 1) td.className = "sev-" + row.severity;
+          else if (index === 11) td.className = remediationClass(row.remediationDays);
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
