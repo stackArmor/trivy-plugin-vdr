@@ -527,6 +527,39 @@ func TestCollectExposureObjectsWarnsAndContinuesOnTypedRBACErrors(t *testing.T) 
 	}
 }
 
+func TestCollectExcludesControllerOwnedPods(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		pod("default", "standalone", podSpec(container("app", "example.com/standalone:v1"))),
+		controlledPod("default", "rs-pod", "ReplicaSet", podSpec(container("app", "example.com/deploy:v1"))),
+		controlledPod("default", "sts-pod", "StatefulSet", podSpec(container("app", "example.com/sts:v1"))),
+		controlledPod("default", "job-pod", "Job", podSpec(container("app", "example.com/job:v1"))),
+		controlledPod("default", "operator-pod", "FooKind", podSpec(container("app", "example.com/operator:v1"))),
+	)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, image := range inv.Images {
+		got[image.ImageRef] = true
+	}
+	// Standalone and operator/CRD-owned pods are kept.
+	for _, want := range []string{"example.com/standalone:v1", "example.com/operator:v1"} {
+		if !got[want] {
+			t.Fatalf("expected image %q in inventory, got %v", want, got)
+		}
+	}
+	// Pods owned by collected controllers are skipped (the controller template
+	// would supply these images instead).
+	for _, skip := range []string{"example.com/deploy:v1", "example.com/sts:v1", "example.com/job:v1"} {
+		if got[skip] {
+			t.Fatalf("did not expect controller-owned pod image %q in inventory", skip)
+		}
+	}
+}
+
 func TestSameImageHasMultipleResourceRefs(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		deployment("default", "web", podSpec(container("app", "example.com/shared:v1"))),
@@ -621,6 +654,13 @@ func podSpec(containers ...corev1.Container) corev1.PodSpec {
 
 func pod(namespace, name string, spec corev1.PodSpec) *corev1.Pod {
 	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}, Spec: spec}
+}
+
+func controlledPod(namespace, name, ownerKind string, spec corev1.PodSpec) *corev1.Pod {
+	controller := true
+	p := pod(namespace, name, spec)
+	p.OwnerReferences = []metav1.OwnerReference{{Kind: ownerKind, Name: "owner", Controller: &controller}}
+	return p
 }
 
 func podWithAnnotations(namespace, name string, annotations map[string]string, spec corev1.PodSpec) *corev1.Pod {

@@ -8,6 +8,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 
 - Trivy plugin entrypoint named `vdr`.
 - Kubernetes source subcommand named `k8s`.
+- Workload inventory from Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs, plus standalone Pods. Pods managed by a collected controller are skipped to avoid double-counting; pods owned by other controllers (e.g. operators/CRDs) are still inventoried.
 - Reserved future source subcommands named `ecs` and `image`.
 - JSON and table output mode flags.
 - Finding-centric and resource-centric view flags.
@@ -94,7 +95,7 @@ If cleanup fails after an image scan succeeds, the scan result is kept and a war
 
 ## Reporting
 
-JSON output defaults to a finding-centric report. Each finding includes `affectedResources` so a deduplicated image scan can still be traced back to every Kubernetes resource and container using that image.
+JSON output defaults to a finding-centric report. Each finding includes `affected` — a list of `{resource, exposure}` entries — so a deduplicated image scan can still be traced back to every Kubernetes resource and container using that image, along with that resource's internet exposure.
 
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
@@ -111,6 +112,7 @@ Exposure analysis is intentionally conservative:
 - AWS ALB Ingress and Gateway are public only when the ALB scheme/load balancer configuration is internet-facing.
 - AWS ALB `oidc` and `cognito` auth are recorded as AWS access protection. They are not reported as GCP IAP.
 - Gateway cross-namespace backend references require a matching `ReferenceGrant`.
+- An Ingress with no load balancer provisioned in its status is treated as not serving traffic and is excluded. When a Gateway and an unprovisioned Ingress both target the same Service, the Gateway's exposure applies.
 
 Normal init containers do not inherit internet exposure. Sidecar-style init containers inherit exposure only when their container restart policy is `Always`.
 

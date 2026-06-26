@@ -431,6 +431,49 @@ func TestAnalyzeGatewayRouteAllowsCrossNamespaceBackendRefWithReferenceGrant(t *
 	}
 }
 
+func TestAnalyzeUnprovisionedIngressIsExcludedAndGatewayWins(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("web", "web:v1"))
+	pending := ingress("default", "pending-ing", "gce", "web-svc", nil)
+	pending.Status.LoadBalancer.Ingress = nil // no load balancer provisioned
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{pending},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "public-gw", "gke-l7-global-external-managed"),
+			routeWithBackendRef("HTTPRoute", "default", "route", "public-gw", map[string]any{
+				"name": "web-svc",
+				"port": int64(80),
+			}),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "web", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true via gateway: %#v", exposure)
+	}
+	if exposure.RouteKind == "Ingress" {
+		t.Fatalf("expected gateway exposure to win over unprovisioned ingress, got %#v", exposure)
+	}
+}
+
+func TestAnalyzeUnprovisionedIngressAloneIsNotExposed(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("web", "web:v1"))
+	pending := ingress("default", "pending-ing", "gce", "web-svc", nil)
+	pending.Status.LoadBalancer.Ingress = nil
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{pending},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("Analyze() = %#v, want no exposure for an unprovisioned ingress", got)
+	}
+}
+
 func TestAnalyzeUnstructuredKindCollisionsIgnoreUnexpectedAPIGroups(t *testing.T) {
 	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
 	objects := Objects{
@@ -616,6 +659,9 @@ func ingressWithBackendPort(namespace, name, className, serviceName string, port
 	if className != "" {
 		ing.Spec.IngressClassName = &className
 	}
+	// Provisioned ingress: a load balancer address is assigned. Tests that need an
+	// unprovisioned ingress clear this explicitly.
+	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{{IP: "203.0.113.10"}}
 	return ing
 }
 

@@ -127,6 +127,13 @@ func analyzeIngresses(
 ) []serviceExposure {
 	exposures := make([]serviceExposure, 0)
 	for _, ingress := range ingresses {
+		// An ingress with no provisioned load balancer is not actually serving
+		// traffic, so it does not expose anything. Skipping it also means that
+		// when a Gateway and an unprovisioned Ingress both target a service, the
+		// Gateway's exposure is the one that applies.
+		if !ingressHasLoadBalancer(ingress) {
+			continue
+		}
 		provider, public, evidence := classifyIngress(ingress, classes, classParams)
 		if !public {
 			continue
@@ -161,6 +168,17 @@ func analyzeIngresses(
 		}
 	}
 	return exposures
+}
+
+// ingressHasLoadBalancer reports whether the ingress has a load balancer address
+// assigned in its status (an IP or hostname), i.e. it is actually provisioned.
+func ingressHasLoadBalancer(ingress networkingv1.Ingress) bool {
+	for _, lb := range ingress.Status.LoadBalancer.Ingress {
+		if lb.IP != "" || lb.Hostname != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyIngress(ingress networkingv1.Ingress, classes map[string]networkingv1.IngressClass, classParams map[string]string) (string, bool, string) {
