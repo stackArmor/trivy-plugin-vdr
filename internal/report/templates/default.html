@@ -4,11 +4,35 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VDR Kubernetes Report</title>
+  <script>
+    // Set the theme before first paint to avoid a flash of the wrong colors.
+    (function () {
+      try {
+        var stored = localStorage.getItem("vdr-theme");
+        var theme = stored || (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.dataset.theme = theme;
+      } catch (e) {
+        document.documentElement.dataset.theme = "light";
+      }
+    })();
+  </script>
   <style>
-    :root { color-scheme: light; --bg: #f8fafc; --panel: #ffffff; --ink: #172033; --muted: #5b6475; --line: #d9dee8; --accent: #0f766e; --danger: #b42318; --warn: #b54708; }
+    :root {
+      color-scheme: light;
+      --bg: #f8fafc; --panel: #ffffff; --ink: #172033; --muted: #5b6475; --line: #d9dee8;
+      --accent: #0f766e; --danger: #b42318; --warn: #b54708; --th-bg: #f1f5f9; --field-bg: #ffffff;
+      --hover: #f1f5f9;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0b1220; --panel: #111a2b; --ink: #e6edf6; --muted: #93a1b5; --line: #28344a;
+      --accent: #2dd4bf; --danger: #f87171; --warn: #fbbf24; --th-bg: #1a2940; --field-bg: #0b1220;
+      --hover: #1a2434;
+    }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
     header { padding: 24px 28px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
     h1 { margin: 0 0 8px; font-size: 24px; line-height: 1.2; font-weight: 650; }
     main { padding: 20px 28px 32px; }
     .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
@@ -17,11 +41,18 @@
     .metric strong { display: block; font-size: 24px; margin-top: 4px; }
     .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin-bottom: 16px; }
     label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
-    select, input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px; background: #fff; color: var(--ink); font: inherit; }
+    select, input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px; background: var(--field-bg); color: var(--ink); font: inherit; }
+    button { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; background: var(--field-bg); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
+    button:hover { border-color: var(--accent); }
     table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
     th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
-    th { color: var(--muted); font-size: 12px; background: #f1f5f9; }
+    th { color: var(--muted); font-size: 12px; background: var(--th-bg); }
+    th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+    th.sortable:hover { color: var(--ink); }
+    th[aria-sort="ascending"]::after { content: " \25B2"; }
+    th[aria-sort="descending"]::after { content: " \25BC"; }
     tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: var(--hover); }
     .sev-CRITICAL { color: var(--danger); font-weight: 700; }
     .sev-HIGH { color: var(--warn); font-weight: 650; }
     .muted { color: var(--muted); }
@@ -30,8 +61,13 @@
 </head>
 <body>
   <header>
-    <h1>VDR Kubernetes Report</h1>
-    <div class="muted">Generated {{ .Report.GeneratedAt }}</div>
+    <div class="header-row">
+      <div>
+        <h1>VDR Kubernetes Report</h1>
+        <div class="muted">Generated {{ .Report.GeneratedAt }}</div>
+      </div>
+      <button id="theme-toggle" type="button" aria-label="Toggle dark mode"></button>
+    </div>
   </header>
   <main>
     <section class="summary" aria-label="Summary">
@@ -71,6 +107,20 @@
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
   </main>
   <script>
+    // Theme toggle.
+    const themeButton = document.getElementById("theme-toggle");
+    function applyThemeButton() {
+      const dark = document.documentElement.dataset.theme === "dark";
+      themeButton.textContent = dark ? "☀️ Light" : "🌙 Dark";
+    }
+    applyThemeButton();
+    themeButton.addEventListener("click", () => {
+      const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = next;
+      try { localStorage.setItem("vdr-theme", next); } catch (e) {}
+      applyThemeButton();
+    });
+
     window.__VDR_REPORT__ = {{ .ReportJSON }};
     const report = window.__VDR_REPORT__;
     const rows = [];
@@ -141,6 +191,57 @@
     const controls = ["namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
+
+    // Column sorting. Each entry maps a header (in order) to a row key and type.
+    const columns = [
+      { key: "id", type: "string" },
+      { key: "severity", type: "severity" },
+      { key: "epss", type: "number" },
+      { key: "namespace", type: "string" },
+      { key: "resource", type: "string" },
+      { key: "image", type: "string" },
+      { key: "exposed", type: "bool" },
+      { key: "security", type: "string" },
+      { key: "automatable", type: "string" },
+      { key: "exploitation", type: "string" },
+      { key: "impact", type: "string" }
+    ];
+    const severityRank = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, UNKNOWN: 1 };
+    let sortIndex = null;
+    let sortDir = 1;
+    const headerCells = Array.from(document.querySelectorAll("#findings thead th"));
+    headerCells.forEach((th, index) => {
+      th.classList.add("sortable");
+      th.addEventListener("click", () => {
+        if (sortIndex === index) {
+          sortDir = -sortDir;
+        } else {
+          sortIndex = index;
+          sortDir = 1;
+        }
+        headerCells.forEach((cell, i) => {
+          cell.setAttribute("aria-sort", i === sortIndex ? (sortDir > 0 ? "ascending" : "descending") : "none");
+        });
+        render();
+      });
+    });
+    function compareRows(a, b, column) {
+      if (column.type === "number") {
+        const av = a[column.key];
+        const bv = b[column.key];
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv;
+      }
+      if (column.type === "severity") {
+        return (severityRank[a.severity] || 0) - (severityRank[b.severity] || 0);
+      }
+      if (column.type === "bool") {
+        return (a[column.key] === b[column.key]) ? 0 : (a[column.key] ? 1 : -1);
+      }
+      return String(a[column.key]).localeCompare(String(b[column.key]));
+    }
     function render() {
       const filters = Object.fromEntries(controls.map(control => [control.id, control.value]));
       const minEPSS = filters.epss === "" ? null : Number(filters.epss);
@@ -152,6 +253,10 @@
         (!filters.impact || row.impact === filters.impact) &&
         (minEPSS === null || (row.epss !== null && row.epss >= minEPSS))
       );
+      if (sortIndex !== null) {
+        const column = columns[sortIndex];
+        filtered.sort((a, b) => sortDir * compareRows(a, b, column));
+      }
       const tbody = document.querySelector("#findings tbody");
       tbody.textContent = "";
       filtered.forEach(row => {

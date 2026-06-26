@@ -102,16 +102,31 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 	}
 
-	trivyRunner := scanner.TrivyRunner{ImageSrc: cfg.ImageSrc, CacheDir: cfg.CacheDir, DockerConfigDir: dockerConfigDir, IsolateCache: cfg.CacheDir != ""}
-	if trivyRunner.IsolateCache {
-		logger.Info("downloading Trivy vulnerability database")
-		if dbErr := trivyRunner.EnsureVulnDB(ctx); dbErr != nil {
-			logger.Error("vulnerability database download failed: %v", dbErr)
-			warnings = append(warnings, fmt.Sprintf("vulnerability DB download failed: %v", dbErr))
+	trivyRunner := scanner.TrivyRunner{ImageSrc: cfg.ImageSrc, CacheDir: cfg.CacheDir, DockerConfigDir: dockerConfigDir, Logger: logger}
+	logger.Info("downloading Trivy vulnerability and Java databases")
+	if dbErr := trivyRunner.EnsureDatabases(ctx); dbErr != nil {
+		logger.Error("database download failed: %v", dbErr)
+		warnings = append(warnings, fmt.Sprintf("database download failed: %v", dbErr))
+	} else {
+		logger.Info("databases ready")
+		trivyRunner.SkipDBUpdate = true
+	}
+	trivyRunner = trivyRunner.WithSelfHeal()
+
+	// For parallel scans, give each worker an isolated cache directory (databases
+	// hardlinked from the shared cache, private scan cache) so concurrent scans
+	// don't deadlock on Trivy's shared cache lock.
+	if cfg.ParallelScans > 1 {
+		runnerWithCaches, cleanup, cacheErr := trivyRunner.PrepareWorkerCaches(cfg.ParallelScans)
+		if cacheErr != nil {
+			logger.Warn("could not prepare isolated scan caches (%v); scanning may be unreliable in parallel", cacheErr)
 		} else {
-			logger.Info("vulnerability database ready")
+			trivyRunner = runnerWithCaches
+			defer cleanup()
+			logger.Info("prepared %d isolated scan caches", cfg.ParallelScans)
 		}
 	}
+
 	logger.Info("scanning %d images with Trivy (%d parallel)", len(inventory.Images), cfg.ParallelScans)
 	findings, scanWarnings, err := scanner.ScanInventoryWithOptions(ctx, inventory, trivyRunner, scanner.ScanOptions{
 		Timeout:             cfg.Timeout,
@@ -125,11 +140,18 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	if err != nil {
 		return err
 	}
+	// Per-image failures are already logged inline as they occur (with full
+	// detail) by the scanner; here we only emit a concise aggregated summary.
 	scanFailures := imageFailureCount(scanWarnings)
-	logger.Info("scan complete: %d findings, %d images failed", len(findings), scanFailures)
-	for _, w := range scanWarnings {
-		logger.Warn("%s", warningText(w))
+	if scanFailures > 0 {
+		logger.Warn("%d of %d images failed to scan:", scanFailures, len(inventory.Images))
+		for _, w := range scanWarnings {
+			if w.ImageRef != "" {
+				logger.Warn("  - %s", w.ImageRef)
+			}
+		}
 	}
+	logger.Info("scan complete: %d findings, %d images failed", len(findings), scanFailures)
 
 	if !cfg.SkipEnrichment {
 		logger.Info("enriching findings with EPSS and vulnrichment data")

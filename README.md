@@ -78,11 +78,11 @@ Scan defaults:
 - `--cache-min-free-gb 10`
 - `--cache-min-free-percent 10`
 
-The Trivy image command uses `trivy image --image-src <value> --skip-version-check --format json --scanners vuln --timeout <timeout> <image>`. The default `--image-src remote` pulls each image from its registry.
+`vdr` downloads the Trivy vulnerability and Java databases once up front (`trivy image --download-db-only` / `--download-java-db-only`) and then scans each image with `trivy image --image-src <value> --skip-db-update --skip-java-db-update --skip-version-check --format json --scanners vuln --timeout <timeout> <image>`. The default `--image-src remote` pulls each image from its registry.
 
-To run scans concurrently without corrupting Trivy's shared BoltDB cache, `vdr` downloads the vulnerability database once up front (`trivy image --download-db-only`) and then runs each scan with `--skip-db-update` in its own temporary cache directory, with the downloaded database symlinked in read-only. This keeps the vulnerability DB shared while giving each concurrent scan a private filesystem (fanal) cache, avoiding the cache-lock contention and database corruption that otherwise occur when multiple `trivy image` processes share one cache directory.
+**Safe parallel scanning.** Trivy's scan cache (fanal) is a BoltDB that takes an exclusive lock per scan, so multiple `trivy image` processes cannot share one cache directory — doing so causes lock timeouts, and downloading a database mid-scan corrupts a shared cache (SIGSEGV). `vdr` avoids both: it pre-downloads the databases, then for parallel runs gives each worker its own cache directory with the databases **hardlinked** from the shared cache (no extra disk) and a private scan cache. This makes `--parallel-scans` > 1 safe and fast. If a database is ever found corrupted, `vdr` clears and re-downloads it once automatically (self-heal).
 
-A single image that cannot be pulled or scanned does not abort the run: the failure is recorded as a warning in the report and the remaining images are still scanned and enriched. If any image fails, `vdr` exits with a non-zero status after writing the report.
+A single image that cannot be pulled or scanned does not abort the run: the failure is logged inline and recorded as a warning in the report, the remaining images are still scanned and enriched, and a summary of failed images is printed at the end. If any image fails, `vdr` exits with a non-zero status after writing the report.
 
 Cache cleanup runs once after the image scan phase completes:
 
@@ -98,7 +98,7 @@ JSON output defaults to a finding-centric report. Each finding includes `affecte
 
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
-Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
+Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered) and click-to-sort on every column (severity sorts by rank, EPSS numerically). Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 
 ## Exposure rules
 

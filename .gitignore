@@ -5,3 +5,7 @@ docs/superpowers/
 /vdr
 /vdr.exe
 /dist/
+
+# Scan output artifacts
+output.json
+output.html

@@ -444,72 +444,127 @@ func TestScanInventoryWithOptionsRunsCleanupAfterAllScansComplete(t *testing.T) 
 	}
 }
 
-func TestEnsureVulnDBDownloadsOnce(t *testing.T) {
+func TestEnsureDatabasesDownloadsVulnAndJavaDB(t *testing.T) {
 	fake := &fakeCommandRunner{stdout: []byte("")}
 	runner := TrivyRunner{Binary: "trivy-test", CacheDir: "/tmp/trivy-cache", CommandRunner: fake}
-	if err := runner.EnsureVulnDB(context.Background()); err != nil {
-		t.Fatalf("EnsureVulnDB error: %v", err)
+	if err := runner.EnsureDatabases(context.Background()); err != nil {
+		t.Fatalf("EnsureDatabases error: %v", err)
 	}
-	wantArgs := []string{"image", "--download-db-only", "--skip-version-check", "--cache-dir", "/tmp/trivy-cache"}
+	want := [][]string{
+		{"image", "--download-db-only", "--skip-version-check", "--cache-dir", "/tmp/trivy-cache"},
+		{"image", "--download-java-db-only", "--skip-version-check", "--cache-dir", "/tmp/trivy-cache"},
+	}
+	if !reflect.DeepEqual(fake.callArgs, want) {
+		t.Fatalf("calls = %#v, want %#v", fake.callArgs, want)
+	}
+}
+
+func TestScanImageSkipDBUpdateAddsFlags(t *testing.T) {
+	fake := &fakeCommandRunner{stdout: []byte(`{"Results":[]}`)}
+	runner := TrivyRunner{Binary: "trivy-test", CacheDir: "/tmp/trivy-cache", SkipDBUpdate: true, CommandRunner: fake}
+
+	if _, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second); err != nil {
+		t.Fatalf("ScanImage error: %v", err)
+	}
+	wantArgs := []string{"image", "--cache-dir", "/tmp/trivy-cache", "--skip-db-update", "--skip-java-db-update", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", fake.args, wantArgs)
 	}
 }
 
-func TestScanImageIsolatedCacheUsesTempDirAndSkipsDBUpdate(t *testing.T) {
+func TestPrepareWorkerCachesHardlinksDatabases(t *testing.T) {
 	base := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(base, "db"), 0o755); err != nil {
-		t.Fatalf("seed db dir: %v", err)
-	}
-	fake := &fakeCommandRunner{stdout: []byte(`{"Results":[]}`)}
-	runner := TrivyRunner{Binary: "trivy-test", CacheDir: base, IsolateCache: true, CommandRunner: fake}
-
-	if _, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second); err != nil {
-		t.Fatalf("ScanImage error: %v", err)
-	}
-
-	var cacheDir string
-	skipDB := false
-	for i, a := range fake.args {
-		if a == "--cache-dir" && i+1 < len(fake.args) {
-			cacheDir = fake.args[i+1]
+	for _, sub := range []string{"db", "java-db"} {
+		dir := filepath.Join(base, sub)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
 		}
-		if a == "--skip-db-update" {
-			skipDB = true
+		if err := os.WriteFile(filepath.Join(dir, "data.db"), []byte("payload"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", sub, err)
 		}
 	}
-	if cacheDir == "" || cacheDir == base {
-		t.Fatalf("expected isolated temp cache dir, got %q (base %q)", cacheDir, base)
+
+	runner := TrivyRunner{Binary: "trivy-test", CacheDir: base, CommandRunner: &fakeCommandRunner{}}
+	prepared, cleanup, err := runner.PrepareWorkerCaches(3)
+	if err != nil {
+		t.Fatalf("PrepareWorkerCaches error: %v", err)
 	}
-	if !skipDB {
-		t.Fatalf("expected --skip-db-update in args: %#v", fake.args)
+	if prepared.workerCaches == nil || len(prepared.workerCaches.dirs) != 3 {
+		t.Fatalf("expected 3 worker caches, got %#v", prepared.workerCaches)
+	}
+
+	srcInfo, _ := os.Stat(filepath.Join(base, "db", "data.db"))
+	for _, dir := range prepared.workerCaches.dirs {
+		linked := filepath.Join(dir, "db", "data.db")
+		info, statErr := os.Stat(linked)
+		if statErr != nil {
+			t.Fatalf("worker db missing: %v", statErr)
+		}
+		if !os.SameFile(srcInfo, info) {
+			t.Fatalf("worker db is not a hardlink of the base db")
+		}
+	}
+
+	cleanup()
+	for _, dir := range prepared.workerCaches.dirs {
+		if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+			t.Fatalf("worker cache %s not removed after cleanup", dir)
+		}
 	}
 }
 
-func TestIsolatedCacheDirSymlinksDB(t *testing.T) {
-	base := t.TempDir()
-	dbPath := filepath.Join(base, "db")
-	if err := os.MkdirAll(dbPath, 0o755); err != nil {
-		t.Fatalf("seed db: %v", err)
-	}
-	dir, cleanup, err := isolatedCacheDir(base)
+func TestPrepareWorkerCachesNoopForSerial(t *testing.T) {
+	runner := TrivyRunner{Binary: "trivy-test", CacheDir: t.TempDir(), CommandRunner: &fakeCommandRunner{}}
+	prepared, cleanup, err := runner.PrepareWorkerCaches(1)
 	if err != nil {
-		t.Fatalf("isolatedCacheDir error: %v", err)
+		t.Fatalf("error: %v", err)
 	}
 	defer cleanup()
+	if prepared.workerCaches != nil {
+		t.Fatalf("expected no worker caches for n=1")
+	}
+}
 
-	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, "db"))
-	if err != nil {
-		t.Fatalf("eval symlink: %v", err)
+func TestScanImageSelfHealRetriesOnCorruption(t *testing.T) {
+	fake := &healingFakeRunner{
+		failScans:  1,
+		scanErr:    errors.New("exit status 2: panic: unexpected fault address"),
+		scanStdout: []byte(`{"Results":[]}`),
 	}
-	wantResolved, _ := filepath.EvalSymlinks(dbPath)
-	if resolved != wantResolved {
-		t.Fatalf("db symlink resolves to %q, want %q", resolved, wantResolved)
+	runner := TrivyRunner{Binary: "trivy-test", CacheDir: "/tmp/trivy-cache", SkipDBUpdate: true, CommandRunner: fake}.WithSelfHeal()
+
+	if _, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", time.Minute); err != nil {
+		t.Fatalf("ScanImage error after heal: %v", err)
 	}
-	cleanup()
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("expected temp dir removed after cleanup")
+	if fake.downloads == 0 {
+		t.Fatalf("expected a re-download during heal, got none")
 	}
+	if fake.scans < 2 {
+		t.Fatalf("expected a retry scan, got %d scans", fake.scans)
+	}
+}
+
+// healingFakeRunner fails the first N scans, then succeeds, and counts DB downloads.
+type healingFakeRunner struct {
+	failScans  int
+	scans      int
+	downloads  int
+	scanErr    error
+	scanStdout []byte
+}
+
+func (f *healingFakeRunner) Run(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
+	for _, a := range args {
+		if a == "--download-db-only" || a == "--download-java-db-only" {
+			f.downloads++
+			return nil, nil, nil
+		}
+	}
+	f.scans++
+	if f.scans <= f.failScans {
+		return nil, []byte("panic: unexpected fault address"), f.scanErr
+	}
+	return f.scanStdout, nil, nil
 }
 
 func TestTrivyRunnerDockerEnv(t *testing.T) {
@@ -645,16 +700,18 @@ func TestScanInventoryWithOptionsReturnsContextErrorWhenCanceledBeforeScheduling
 }
 
 type fakeCommandRunner struct {
-	name   string
-	args   []string
-	stdout []byte
-	stderr []byte
-	err    error
+	name     string
+	args     []string
+	callArgs [][]string
+	stdout   []byte
+	stderr   []byte
+	err      error
 }
 
 func (f *fakeCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	f.name = name
 	f.args = append([]string(nil), args...)
+	f.callArgs = append(f.callArgs, append([]string(nil), args...))
 	return f.stdout, f.stderr, f.err
 }
 
