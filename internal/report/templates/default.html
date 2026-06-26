@@ -80,7 +80,7 @@
       <div class="metric"><span>Resources</span><strong>{{ .Report.Summary.Resources }}</strong></div>
       <div class="metric"><span>Images</span><strong>{{ .Report.Summary.Images }}</strong></div>
       <div class="metric"><span>Findings</span><strong>{{ .Report.Summary.Findings }}</strong></div>
-      <div class="metric"><span>Internet exposed</span><strong>{{ .Report.Summary.InternetAccessible }}</strong></div>
+      <div class="metric"><span>Internet-exposed findings</span><strong id="metric-exposed">{{ .Report.Summary.InternetAccessible }}</strong></div>
     </section>
 
     <section class="filters" aria-label="Filters">
@@ -103,7 +103,7 @@
           <th>Namespace</th>
           <th>Resource</th>
           <th>Image</th>
-          <th>Exposure</th>
+          <th>Internet exposure</th>
           <th>Security</th>
           <th>Automatable</th>
           <th>Exploitation</th>
@@ -143,6 +143,9 @@
       const images = resourceReport && resourceReport.images ? resourceReport.images : [];
       const row = {
         id: finding.id || "",
+        // Identity of the underlying finding (CVE + image + package), so the same
+        // finding affecting several resources is counted once in summary metrics.
+        key: [finding.id || "", finding.imageRef || "", finding.packageName || ""].join("|"),
         severity: finding.severity || "",
         epss: typeof epss.score === "number" ? epss.score : null,
         namespace: ref.namespace || "",
@@ -285,6 +288,13 @@
         affected.forEach(entry => addFinding(finding, entry.resource, entry.exposure || finding.exposure, null));
       });
     }
+    // "Internet-exposed findings" summary = distinct findings (CVE + image +
+    // package) with at least one internet-exposed affected resource.
+    const exposedKeys = new Set();
+    rows.forEach(row => { if (row.id && row.exposed) exposedKeys.add(row.key); });
+    const exposedMetric = document.getElementById("metric-exposed");
+    if (exposedMetric) exposedMetric.textContent = String(exposedKeys.size);
+
     function fillSelect(id, values) {
       const select = document.getElementById(id);
       [...new Set(values.filter(Boolean))].sort().forEach(value => {
@@ -375,6 +385,60 @@
         render();
       });
     });
+    // Explain the Internet exposure column on hover of its header.
+    if (headerCells[6]) {
+      headerCells[6].title = [
+        "Whether the affected resource is reachable from the public internet.",
+        "Derived from Kubernetes routing, conservatively:",
+        "",
+        "  yes - a Service in front of the container is fronted by a public load",
+        "        balancer: an external GKE Gateway class, a 'gce' GKE Ingress, or",
+        "        an internet-facing AWS ALB.",
+        "  no  - no such public route exists, the route is internal (e.g.",
+        "        'gce-internal'), or the Ingress has no load balancer provisioned.",
+        "",
+        "Not counted as exposed:",
+        "  - Routes protected by Identity-Aware Proxy (GCPBackendPolicy /",
+        "    BackendConfig iap.enabled=true).",
+        "  - Normal init containers (they do not inherit the pod's exposure).",
+        "Sidecar-style init containers (restartPolicy=Always) DO inherit exposure."
+      ].join("\n");
+    }
+    // Automatable / Exploitation / Technical impact come from CISA Vulnrichment.
+    if (headerCells[8]) {
+      headerCells[8].title = [
+        "Automatable (CISA Vulnrichment ADP, SSVC).",
+        "Can an attacker reliably automate exploitation across many targets",
+        "(reconnaissance, weaponization, delivery, and exploitation)?",
+        "",
+        "  yes   - steps can be automated at scale.",
+        "  no    - cannot be reliably automated (e.g. needs specific config or",
+        "          user interaction).",
+        "  blank - no CISA Vulnrichment record for this CVE."
+      ].join("\n");
+    }
+    if (headerCells[9]) {
+      headerCells[9].title = [
+        "Exploitation (CISA Vulnrichment ADP, SSVC).",
+        "Current state of real-world exploitation:",
+        "",
+        "  active - exploitation observed in the wild (KEV-equivalent).",
+        "  poc    - public proof-of-concept exploit code exists.",
+        "  none   - no known public exploit or active exploitation.",
+        "  blank  - no CISA Vulnrichment record for this CVE."
+      ].join("\n");
+    }
+    if (headerCells[10]) {
+      headerCells[10].title = [
+        "Technical impact (CISA Vulnrichment ADP, SSVC).",
+        "Degree of control gained by successful exploitation:",
+        "",
+        "  total   - full control of the vulnerable component (complete loss of",
+        "            confidentiality, integrity, or availability).",
+        "  partial - limited control or partial impact.",
+        "  blank   - no CISA Vulnrichment record for this CVE."
+      ].join("\n");
+    }
     // Explain the Remediation column on hover of its header.
     if (headerCells[11]) {
       headerCells[11].title = [

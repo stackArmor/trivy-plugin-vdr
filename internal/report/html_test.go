@@ -19,7 +19,7 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	}
 
 	output := buf.String()
-	for _, want := range []string{"Namespace", "Internet exposed", "Automatable", "Exploitation", "EPSS score", "Technical impact", "Security", "privileged", "window.__VDR_REPORT__", "CVE-2026-0001"} {
+	for _, want := range []string{"Namespace", "Internet-exposed findings", "Internet exposure", "Automatable", "Exploitation", "EPSS score", "Technical impact", "Security", "privileged", "window.__VDR_REPORT__", "CVE-2026-0001"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("HTML output missing %q", want)
 		}
