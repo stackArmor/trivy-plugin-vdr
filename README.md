@@ -105,13 +105,14 @@ Each finding shows a **Remediation** priority tier derived from the CISA SSVC de
 
 Tiers (by deadline): **Emergency** (3 days + forensic triage), **Immediate** (3 days), **Urgent** (14 days), **High** (30 days), **Moderate** (60 days), **Low** (180 days), **Deferred** (fix on system upgrade).
 
-- *In KEV* is true when the CVE's exploitation status is `active`, or — when exploitation is `poc`/`none`/unknown — when its EPSS score exceeds 0.3.
-- *Automatable* is taken from CISA Vulnrichment when present (authoritative). When Vulnrichment has no record, it falls back to the CVSS base vector: automatable when `AV:N` or `AV:A`, `AC:L`, `PR:N`, and `UI:N` (~85% correlation with the authoritative SSVC value). CVSS-derived values are shown with a `†` marker.
-- *Publicly exposed* uses the computed internet exposure of the affected resource.
-- When *automatable* or *technical impact* is not available (no CISA Vulnrichment record), the tier falls back to a severity-based **Classic** SLA (Critical/High → 30 days, Medium → 60 days, Low/unknown → 180 days). Classic values are shown in italics with a `*` so they are distinguishable from SSVC-derived tiers.
-- A Classic finding that is **not internet exposed** is downgraded one tier (e.g. High → Moderate). SSVC tiers are not downgraded, since exposure is already one of their inputs.
+Every finding is scored by the SSVC table — there is no severity-based fallback tier. Each of the four inputs is resolved as follows, and any input that still cannot be determined defaults to its low end (not in KEV, not automatable, partial impact):
 
-Hover the **Remediation** column header for an in-report legend covering every tier, the SSVC vs Classic distinction, and the not-exposed downgrade. Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
+- *Publicly exposed* uses the computed internet exposure of the affected resource (always resolvable).
+- *In KEV* is true when the CVE's exploitation status is `active`, or — when exploitation is `poc`/`none`/unknown/absent — when its EPSS score exceeds 0.3; otherwise false.
+- *Automatable* is taken from CISA Vulnrichment when present (authoritative). When Vulnrichment has no record, it falls back to the CVSS base vector: automatable when `AV:N` or `AV:A`, `AC:L`, `PR:N`, and `UI:N` (~85% correlation with the authoritative SSVC value).
+- *Technical impact* is taken from CISA Vulnrichment when present (authoritative). When Vulnrichment has no record, it falls back to the CVSS base vector: **Total** when Confidentiality and Integrity are both `High` (full read+write authority), otherwise **Partial**. Availability and Scope do not change the outcome.
+
+CVSS-derived Automatable and Technical impact values are shown in italics with a `†` marker so they are distinguishable from authoritative CISA Vulnrichment values. Hover the **Remediation** column header for an in-report legend covering every tier and how each input is resolved. Use `--html-template <path>` to override the template with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 
 ## Exposure rules
 

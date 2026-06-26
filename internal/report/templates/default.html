@@ -60,7 +60,7 @@
     .sev-CRITICAL { color: var(--danger); font-weight: 700; }
     .sev-HIGH { color: var(--warn); font-weight: 650; }
     .muted { color: var(--muted); }
-    td.classic { font-style: italic; }
+    td.derived { font-style: italic; }
     .legend { margin-top: 10px; font-size: 12px; color: var(--muted); }
     .empty { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
   </style>
@@ -114,7 +114,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">Remediation tiers follow the CISA SSVC decision table. Italic values marked <em>*</em> are severity-based fallbacks (Classic) used when SSVC inputs (automatable / technical impact) are unavailable. Automatable values marked <em>†</em> are derived from the CVSS vector when CISA Vulnrichment has no record. Hover any value or column header for details.</p>
+    <p class="legend">Remediation tiers follow the CISA SSVC decision table. Automatable and Technical impact come from CISA Vulnrichment; italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Unresolved inputs default to the low end (not in KEV, not automatable, partial impact). Hover any value or column header for details.</p>
   </main>
   <script>
     // Theme toggle.
@@ -157,8 +157,8 @@
         exploitation: vuln.exploitation || "",
         impact: vuln.technicalImpact || ""
       };
-      // CISA Vulnrichment is authoritative for automatability; when it has no
-      // record, fall back to the CVSS base vector.
+      // CISA Vulnrichment is authoritative for automatability and technical
+      // impact; when it has no record for an input, fall back to the CVSS vector.
       row.cvssVector = finding.cvssVector || "";
       row.automatableSource = row.automatable ? "vulnrichment" : "";
       if (!row.automatable) {
@@ -168,10 +168,17 @@
           row.automatableSource = "cvss";
         }
       }
+      row.impactSource = row.impact ? "vulnrichment" : "";
+      if (!row.impact) {
+        const derived = impactLabelFromVector(row.cvssVector);
+        if (derived) {
+          row.impact = derived;
+          row.impactSource = "cvss";
+        }
+      }
       const rem = remediation(row);
       row.remediation = rem.label;        // precise timeline string (tooltip)
       row.remediationDays = rem.days;      // for sorting / color
-      row.remediationMethod = rem.method;  // "ssvc" or "classic"
       row.remediationTier = remediationTier(rem.label); // displayed priority tier
       rows.push(row);
     }
@@ -179,8 +186,9 @@
     // Remediation timeline per the CISA SSVC decision table (Table 1).
     // Inputs: Publicly Exposed (internet exposure), In KEV (active exploitation,
     // or EPSS > 0.3 when exploitation is poc/none/unknown), Automatable, and
-    // Technical Impact. When Automatable or Technical Impact is unknown, fall
-    // back to a severity-based SLA.
+    // Technical Impact. Every finding is scored by this table; unresolved inputs
+    // default to the low end (not exposed already resolves, not in KEV, not
+    // automatable, partial impact).
     const REMEDIATION_TABLE = {
       // exposed | kev | automatable | impact(total/partial)
       "Y|Y|Y|T": { label: "3 days & forensic triage", days: 3 },
@@ -236,38 +244,27 @@
       if (v === "partial") return "P";
       return null;
     }
-    // Severity-based fallback ("Classic") used when SSVC inputs are unavailable.
-    function severityFallback(severity) {
-      switch ((severity || "").toUpperCase()) {
-        case "CRITICAL":
-        case "HIGH": return { label: "30 days", days: 30, method: "classic" };
-        case "MEDIUM": return { label: "60 days", days: 60, method: "classic" };
-        default: return { label: "180 days", days: 180, method: "classic" }; // LOW / UNKNOWN / unset
-      }
+    // Fallback technical impact from a CVSS base vector, used only when CISA
+    // Vulnrichment has no record: Total requires full read+write authority
+    // (Confidentiality:High AND Integrity:High); everything else is Partial.
+    // Availability and Scope do not change the outcome. Handles v3 (C/I) and
+    // v4 (VC/VI) metric names.
+    function impactLabelFromVector(vector) {
+      const m = cvssMetrics(vector);
+      const c = m.C || m.VC;
+      const i = m.I || m.VI;
+      if (!c || !i) return "";
+      return (c === "H" && i === "H") ? "total" : "partial";
     }
-    // Downgrade a Classic result one tier (30 -> 60 -> 180 -> deferred).
-    function downgradeClassic(result) {
-      if (result.days <= 30) return { label: "60 days", days: 60, method: "classic" };
-      if (result.days <= 60) return { label: "180 days", days: 180, method: "classic" };
-      return { label: "Fix on system upgrade", days: 99999, method: "classic" };
-    }
-    function classic(row) {
-      const base = severityFallback(row.severity);
-      // Classic findings that are not internet exposed are one tier less urgent.
-      return row.exposed ? base : downgradeClassic(base);
-    }
+    // Remediation per the CISA SSVC decision table. Every finding is scored;
+    // inputs that cannot be resolved from Vulnrichment or the CVSS vector default
+    // to the low end: not in KEV, not automatable, partial technical impact.
     function remediation(row) {
-      const automatable = normalizeAutomatable(row.automatable);
-      const impact = normalizeImpact(row.impact);
-      if (automatable === null || impact === null) {
-        return classic(row);
-      }
+      const automatable = normalizeAutomatable(row.automatable) || "N";
+      const impact = normalizeImpact(row.impact) || "P";
       const key = [row.exposed ? "Y" : "N", inKEV(row) ? "Y" : "N", automatable, impact].join("|");
       const hit = REMEDIATION_TABLE[key];
-      if (!hit) {
-        return classic(row);
-      }
-      return { label: hit.label, days: hit.days, method: "ssvc" };
+      return { label: hit.label, days: hit.days };
     }
     function remediationClass(days) {
       if (days <= 3) return "sev-CRITICAL";
@@ -467,10 +464,14 @@
         "Technical impact (CISA Vulnrichment ADP, SSVC).",
         "Degree of control gained by successful exploitation:",
         "",
-        "  total   - full control of the vulnerable component (complete loss of",
-        "            confidentiality, integrity, or availability).",
+        "  total   - full read+write authority over the component.",
         "  partial - limited control or partial impact.",
-        "  blank   - no CISA Vulnrichment record for this CVE."
+        "  blank   - no CISA Vulnrichment record and no usable CVSS vector;",
+        "            scored as partial.",
+        "",
+        "Values marked † are derived from the CVSS base vector, used only when",
+        "CISA Vulnrichment has no record: Total when Confidentiality:High AND",
+        "Integrity:High, otherwise Partial."
       ].join("\n");
     }
     // Explain the Remediation column on hover of its header.
@@ -487,12 +488,15 @@
         "  Low        - 180 days",
         "  Deferred   - fix on system upgrade",
         "",
-        "SSVC: computed from publicly exposed, in KEV (active exploitation, or",
-        "EPSS > 0.3 when poc/none/unknown), automatable, and technical impact.",
+        "Computed from four SSVC inputs:",
+        "  - Publicly exposed: internet exposure of the affected resource.",
+        "  - In KEV: active exploitation, or EPSS > 0.3 when poc/none/unknown.",
+        "  - Automatable: CISA Vulnrichment, else derived from the CVSS vector.",
+        "  - Technical impact: CISA Vulnrichment, else derived from the CVSS vector.",
         "",
-        "Classic (italic, marked *): severity-based fallback used when automatable",
-        "or technical impact is unavailable. Classic findings that are NOT internet",
-        "exposed are downgraded one tier."
+        "Inputs that cannot be resolved default to the low end (not in KEV, not",
+        "automatable, partial impact). Values marked † on the Automatable and",
+        "Technical impact columns are CVSS-derived."
       ].join("\n");
     }
     function compareRows(a, b, column) {
@@ -541,17 +545,16 @@
           if (index === 1) {
             td.className = "sev-" + row.severity;
           } else if (index === 8 && row.automatableSource === "cvss") {
-            td.classList.add("classic");
+            td.classList.add("derived");
             td.textContent = value + " †";
-            td.title = "Derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
+            td.title = "Automatable derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
+          } else if (index === 10 && row.impactSource === "cvss") {
+            td.classList.add("derived");
+            td.textContent = value + " †";
+            td.title = "Technical impact derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
           } else if (index === 11) {
             td.className = remediationClass(row.remediationDays);
-            const basis = row.remediationMethod === "classic" ? "Severity-based (Classic)" : "SSVC";
-            td.title = basis + " — " + row.remediation;
-            if (row.remediationMethod === "classic") {
-              td.classList.add("classic");
-              td.textContent = value + " *";
-            }
+            td.title = "SSVC — " + row.remediation;
           }
           tr.appendChild(td);
         });
