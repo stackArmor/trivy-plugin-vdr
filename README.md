@@ -101,11 +101,13 @@ Use `--view resources` for resource-centric JSON or table output. Resource repor
 
 Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a multi-select remediation-timeline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
 
-Each finding shows a **Remediation** timeline derived from the CISA SSVC decision table (publicly exposed, in KEV, automatable, technical impact):
+Each finding shows a **Remediation** priority tier derived from the CISA SSVC decision table (publicly exposed, in KEV, automatable, technical impact). Hover any value for its exact timeline.
+
+Tiers (by deadline): **Emergency** (3 days + forensic triage), **Immediate** (3 days), **Urgent** (14 days), **High** (30 days), **Moderate** (60 days), **Low** (180 days), **Deferred** (fix on system upgrade).
 
 - *In KEV* is true when the CVE's exploitation status is `active`, or — when exploitation is `poc`/`none`/unknown — when its EPSS score exceeds 0.3.
 - *Publicly exposed* uses the computed internet exposure of the affected resource.
-- When *automatable* or *technical impact* is not available (no CISA Vulnrichment record), the timeline falls back to severity: Critical/High → 30 days, Medium → 60 days, Low/unknown → 180 days. Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
+- When *automatable* or *technical impact* is not available (no CISA Vulnrichment record), the tier falls back to a severity-based **Classic** SLA (Critical/High → 30 days, Medium → 60 days, Low/unknown → 180 days). Classic values are shown in italics with a `*` so they are distinguishable from SSVC-derived tiers. Use `--html-template <path>` to override it with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 
 ## Exposure rules
 
