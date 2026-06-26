@@ -114,7 +114,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">Remediation tiers follow the CISA SSVC decision table. Italic values marked <em>*</em> are severity-based fallbacks (Classic) used when SSVC inputs (automatable / technical impact) are unavailable. Hover a remediation value for its exact timeline.</p>
+    <p class="legend">Remediation tiers follow the CISA SSVC decision table. Italic values marked <em>*</em> are severity-based fallbacks (Classic) used when SSVC inputs (automatable / technical impact) are unavailable. Automatable values marked <em>†</em> are derived from the CVSS vector when CISA Vulnrichment has no record. Hover any value or column header for details.</p>
   </main>
   <script>
     // Theme toggle.
@@ -157,6 +157,17 @@
         exploitation: vuln.exploitation || "",
         impact: vuln.technicalImpact || ""
       };
+      // CISA Vulnrichment is authoritative for automatability; when it has no
+      // record, fall back to the CVSS base vector.
+      row.cvssVector = finding.cvssVector || "";
+      row.automatableSource = row.automatable ? "vulnrichment" : "";
+      if (!row.automatable) {
+        const derived = automatableLabelFromVector(row.cvssVector);
+        if (derived) {
+          row.automatable = derived;
+          row.automatableSource = "cvss";
+        }
+      }
       const rem = remediation(row);
       row.remediation = rem.label;        // precise timeline string (tooltip)
       row.remediationDays = rem.days;      // for sorting / color
@@ -199,6 +210,25 @@
       if (v === "yes") return "Y";
       if (v === "no") return "N";
       return null;
+    }
+    // Parse a CVSS vector string ("CVSS:3.1/AV:N/AC:L/...") into a metric map.
+    function cvssMetrics(vector) {
+      const metrics = {};
+      (vector || "").split("/").forEach(part => {
+        const idx = part.indexOf(":");
+        if (idx > 0) metrics[part.slice(0, idx)] = part.slice(idx + 1);
+      });
+      return metrics;
+    }
+    // Fallback automatability from a CVSS base vector, used only when CISA
+    // Vulnrichment has no record for the CVE: network/adjacent reachable, low
+    // attack complexity, no privileges required, and no user interaction.
+    // ~85% correlation with the authoritative SSVC automatable value.
+    function automatableLabelFromVector(vector) {
+      const m = cvssMetrics(vector);
+      if (!m.AV || !m.AC || !m.PR || !m.UI) return "";
+      const reachable = m.AV === "N" || m.AV === "A";
+      return (reachable && m.AC === "L" && m.PR === "N" && m.UI === "N") ? "yes" : "no";
     }
     function normalizeImpact(value) {
       const v = (value || "").toLowerCase();
@@ -414,7 +444,11 @@
         "  yes   - steps can be automated at scale.",
         "  no    - cannot be reliably automated (e.g. needs specific config or",
         "          user interaction).",
-        "  blank - no CISA Vulnrichment record for this CVE."
+        "  blank - no CISA Vulnrichment record and no usable CVSS vector.",
+        "",
+        "Values marked † are derived from the CVSS base vector, used only when",
+        "CISA Vulnrichment has no record: automatable when AV:N or AV:A, AC:L,",
+        "PR:N, and UI:N (~85% correlation with the authoritative SSVC value)."
       ].join("\n");
     }
     if (headerCells[9]) {
@@ -506,6 +540,10 @@
           td.textContent = value;
           if (index === 1) {
             td.className = "sev-" + row.severity;
+          } else if (index === 8 && row.automatableSource === "cvss") {
+            td.classList.add("classic");
+            td.textContent = value + " †";
+            td.title = "Derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
           } else if (index === 11) {
             td.className = remediationClass(row.remediationDays);
             const basis = row.remediationMethod === "classic" ? "Severity-based (Classic)" : "SSVC";
