@@ -120,16 +120,43 @@ func namespacesForCollection(opts Options) ([]string, error) {
 	return namespaces, nil
 }
 
+// collectedControllerKinds are the controller kinds whose pod templates this
+// collector already inventories. Pods owned by one of these are redundant and
+// are skipped so each workload is counted once. A Deployment owns its pods via a
+// ReplicaSet, and a CronJob via a Job.
+var collectedControllerKinds = map[string]bool{
+	"ReplicaSet":  true,
+	"StatefulSet": true,
+	"DaemonSet":   true,
+	"Job":         true,
+}
+
 func (c *Collector) collectPods(ctx context.Context, namespace string, builder *inventoryBuilder) error {
 	pods, err := c.Client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 	for _, pod := range pods.Items {
+		// Only inventory standalone pods. Pods managed by a controller we already
+		// collect (Deployment/ReplicaSet, StatefulSet, DaemonSet, Job/CronJob) are
+		// covered by that controller's template; pods owned by other controllers
+		// (e.g. operators/CRDs) are kept so their images are not missed.
+		if ownedByCollectedController(pod) {
+			continue
+		}
 		ref := model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 		builder.addResource(ref, pod.Spec, pod.Annotations, pod.Labels)
 	}
 	return nil
+}
+
+func ownedByCollectedController(pod corev1.Pod) bool {
+	for _, owner := range pod.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && collectedControllerKinds[owner.Kind] {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Collector) collectDeployments(ctx context.Context, namespace string, builder *inventoryBuilder) error {

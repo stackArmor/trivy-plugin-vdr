@@ -129,7 +129,7 @@
     function addFinding(finding, resource, exposure, resourceReport) {
       const vuln = finding.vulnrichment || {};
       const epss = finding.epss || {};
-      const ref = resource || (finding.affectedResources && finding.affectedResources[0]) || {};
+      const ref = resource || (finding.affected && finding.affected[0] && finding.affected[0].resource) || {};
       const images = resourceReport && resourceReport.images ? resourceReport.images : [];
       rows.push({
         id: finding.id || "",
@@ -170,9 +170,8 @@
       });
     } else {
       findings.forEach(finding => {
-        const exposure = finding.exposure;
-        const affected = finding.affectedResources || [{}];
-        affected.forEach(ref => addFinding(finding, ref, exposure, null));
+        const affected = (finding.affected && finding.affected.length) ? finding.affected : [{}];
+        affected.forEach(entry => addFinding(finding, entry.resource, entry.exposure || finding.exposure, null));
       });
     }
     function fillSelect(id, values) {

@@ -59,21 +59,24 @@ type SecurityProfile struct {
 }
 
 type Finding struct {
-	ID                string        `json:"id"`
-	ImageRef          string        `json:"imageRef"`
-	NormalizedImage   string        `json:"normalizedImage,omitempty"`
-	PackageName       string        `json:"packageName,omitempty"`
-	InstalledVersion  string        `json:"installedVersion,omitempty"`
-	FixedVersion      string        `json:"fixedVersion,omitempty"`
-	Severity          string        `json:"severity"`
-	Status            string        `json:"status,omitempty"`
-	Title             string        `json:"title,omitempty"`
-	Description       string        `json:"description,omitempty"`
-	References        []string      `json:"references,omitempty"`
-	EPSS              *EPSS         `json:"epss,omitempty"`
-	Vulnrichment      *Vulnrichment `json:"vulnrichment,omitempty"`
-	Exposure          *Exposure     `json:"exposure,omitempty"`
-	AffectedResources []ResourceRef `json:"affectedResources,omitempty"`
+	ID               string        `json:"id"`
+	ImageRef         string        `json:"imageRef"`
+	NormalizedImage  string        `json:"normalizedImage,omitempty"`
+	PackageName      string        `json:"packageName,omitempty"`
+	InstalledVersion string        `json:"installedVersion,omitempty"`
+	FixedVersion     string        `json:"fixedVersion,omitempty"`
+	Severity         string        `json:"severity"`
+	Status           string        `json:"status,omitempty"`
+	Title            string        `json:"title,omitempty"`
+	Description      string        `json:"description,omitempty"`
+	References       []string      `json:"references,omitempty"`
+	EPSS             *EPSS         `json:"epss,omitempty"`
+	Vulnrichment     *Vulnrichment `json:"vulnrichment,omitempty"`
+	Exposure         *Exposure     `json:"exposure,omitempty"`
+	// AffectedResources is the internal list of resources using this image. It is
+	// not serialized; the public, richer representation is Affected (each resource
+	// plus its exposure).
+	AffectedResources []ResourceRef `json:"-"`
 	Affected          []Affected    `json:"affected,omitempty"`
 }
 
