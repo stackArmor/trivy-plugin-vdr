@@ -10,9 +10,21 @@
 \usepackage{enumitem}
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,backgrounds,calc}
+\usepackage[most]{tcolorbox}
 \usepackage[hidelinks]{hyperref}
 
 \emergencystretch=3em  % absorb the occasional unbreakable prose line
+
+% Plain-language callout: a non-technical summary readers can rely on without
+% reading the math around it.
+\newtcolorbox{plain}{
+  enhanced, breakable,
+  colback=Sepia!7, colframe=Sepia!55, boxrule=0.4pt, arc=2pt,
+  left=7pt, right=7pt, top=4pt, bottom=4pt,
+  fontupper=\small,
+  coltitle=Sepia!72!black, fonttitle=\bfseries\sffamily\footnotesize,
+  title={IN PLAIN TERMS}
+}
 
 % --- palette ---
 \definecolor{crit}{HTML}{C0392B}
@@ -76,6 +88,14 @@ and \rfckw{may} are to be interpreted as described in RFC~2119.
 \end{description}
 
 \section{Motivation: the gap between VDR/VER and the scanner}
+\begin{plain}
+A scanner tells you a flaw exists and how severe it is \emph{in the abstract}.
+FedRAMP asks a different question: how bad is this flaw \emph{for the agency}, on
+\emph{this exact system}, and how fast must we fix it? A ``low''-rated flaw on the
+database holding everyone's records can matter more than a ``high'' on a throwaway
+test box. This memo gives one consistent, repeatable way to answer FedRAMP's
+question --- instead of leaving it to each analyst's judgment.
+\end{plain}
 A vulnerability scanner emits, per finding, a CVE identifier, a qualitative
 severity, and (often) a CVSS Base vector. FedRAMP Rev5 VDR/VER, by contrast, asks
 the provider to answer a different question: \emph{what is the potential impact on
@@ -91,6 +111,13 @@ provider. An ad-hoc or analyst-by-analyst classifier is neither reproducible nor
 defensible. This memo supplies a deterministic one.
 
 \section{Key insight: FedRAMP's requirements are CVSS Environmental metrics}
+\begin{plain}
+You don't need a brand-new risk formula. The industry-standard CVSS scoring system
+already has a built-in way to say ``this system is especially critical, so weight
+its flaws more heavily.'' That built-in knob is exactly what FedRAMP's ``impact on
+the agency'' is asking for. We simply turn the knob on, instead of inventing
+something new.
+\end{plain}
 The central claim of this memo is that FedRAMP's notion of ``impact on the agency''
 maps, almost one-to-one, onto metrics that already exist in the CVSS v3.1
 specification's \emph{Environmental} group. The Environmental group exists for
@@ -122,6 +149,14 @@ two VER axes. The arithmetic that turns those inputs into a defensible impact
 magnitude is the published CVSS Environmental formula.
 
 \section{The model}
+\begin{plain}
+Two questions decide everything. (1)~\textbf{How much damage} could this flaw do to
+\emph{this} system? (2)~Does the system hold \textbf{one agency's} data or
+\textbf{many}? Question~1 produces a word --- Minimal, Narrow, Disruptive, or
+Debilitating. Question~2 decides whether a ``Disruptive'' or ``Debilitating'' result
+counts once or is escalated because several agencies are exposed. Together they pick
+the final N1--N5 level.
+\end{plain}
 We define PAIN as a function of a \emph{severity} term and a \emph{scope} term:
 \[
 \text{PAIN}(\text{finding}) \;=\; f\big(\,\text{SEVERITY},\ \text{SCOPE}\,\big).
@@ -135,9 +170,35 @@ select the N-level.
 
 \section{The mathematics}
 \label{sec:math}
+\begin{plain}
+This is the engine room --- you can skim the equations and still follow the idea.
+Every flaw can hurt three things: \textbf{secrecy}, \textbf{correctness}, and
+\textbf{uptime}. For each, we multiply ``how badly the flaw breaks it'' by ``how much
+this system depends on it,'' then combine the three into a single damage score
+between 0 and 1. Finally we translate that score into a plain word. Bigger number =
+more damage. The only place human judgment enters is the three cut-points that decide
+where one word becomes the next.
+\end{plain}
 All constants below are taken \emph{verbatim} from the CVSS v3.1 specification; only
 the normalization and the word thresholds (Section~\ref{sec:thresholds}) are
 additions.
+
+\begin{plain}
+\textbf{What the symbols mean.}
+\begin{itemize}[leftmargin=1.3em,nosep,topsep=2pt]
+\item $C, I, A$ --- how badly \emph{this flaw} breaks secrecy, correctness, and
+  uptime (from the CVE's CVSS vector). None / Low / High become $0$ / $0.22$ / $0.56$.
+\item $\mathrm{CR},\mathrm{IR},\mathrm{AR}$ --- how much \emph{this system} needs
+  secrecy, correctness, and uptime (from its archetype). Low / Medium / High become
+  $0.5$ / $1.0$ / $1.5$.
+\item $\mathrm{ISC}$ --- the three combined into one ``damage to this system'' number.
+\item $S$ --- that damage rescaled to a clean $0$--$1$ range.
+\item $W$ --- the plain English word $S$ maps to.
+\item $m,\ m^{*}$ --- does the system serve one agency ($0$) or many ($1$)?
+  $m^{*}$ adds the ``shared-infrastructure'' escalation.
+\item $\theta_1,\theta_2,\theta_3$ --- the three cut-points where the word changes.
+\end{itemize}
+\end{plain}
 
 \paragraph{Impact metric weights.}
 Each of the affected vulnerability's Confidentiality, Integrity and Availability
@@ -221,6 +282,11 @@ Crucially the floor \rfckw{must not} invent impact on a dimension the CVE marks
 None ($X=0$ stays $0$); \code{partial} or absent leaves the vector unchanged.
 
 \section{Fail-safe behavior}
+\begin{plain}
+If a system hasn't been classified yet, we assume the worst, not the best --- it
+scores high and shows up loudly until someone classifies it. Silence never makes a
+problem look smaller than it is.
+\end{plain}
 Missing metadata \rfckw{must not} \emph{lower} PAIN. An asset that carries no
 classification \rfckw{should} resolve to a deliberately conservative default
 (e.g.\ CR/IR/AR all High), which scores loudly and surfaces the asset for
@@ -229,6 +295,13 @@ proven otherwise.''
 
 \section{Remediation: the VDR-TFR-PVR matrix}
 \label{sec:remediation}
+\begin{plain}
+The N-level says \emph{how bad}; this step says \emph{how fast}. Two real-world facts
+tighten the clock: is the flaw actually being exploited (or very likely to be), and
+is the system reachable from the internet? More severe + more exploitable + more
+exposed = less time to fix. A lookup table turns those into a concrete deadline,
+stricter for higher-assurance providers.
+\end{plain}
 The remediation deadline is selected by three values: the provider Certification
 Class, the PAIN level, and an exploitability \emph{column} derived from the two VER
 axes:
@@ -248,6 +321,11 @@ The day-valued tables are given in Appendix~\ref{app:matrix}. PAIN-1 carries no
 FedRAMP deadline.
 
 \section{Worked examples}
+\begin{plain}
+The same formula, run by hand on realistic cases. Watch the \emph{same}
+vulnerability land at very different N-levels depending only on which system it sits
+on --- that is the entire point of the method.
+\end{plain}
 We use $C,I,A$ for impacts and CR/IR/AR for requirements; all arithmetic follows
 Eqs.~\eqref{eq:isc}--\eqref{eq:pain}.
 
@@ -301,6 +379,13 @@ dimensions floor to $0.56$, giving $S=1.0 \Rightarrow \text{Debilitating}
 
 \section{Assigning CR/IR/AR: archetypes (an example, not a standard)}
 \label{sec:archetypes}
+\begin{plain}
+Rather than hand-rate every server, we sort systems into a short list of ``types''
+--- a database, a login service, a cache, a message bus, and so on --- and each type
+comes with its criticality pre-filled. Tag a system with its type and the scoring is
+automatic. Our list is only an \emph{example}: every provider should tailor its own
+to the data it actually holds.
+\end{plain}
 The model in Section~\ref{sec:math} is only as good as the CR/IR/AR assignment that
 feeds it. Assigning requirements per individual asset does not scale and invites
 drift. A practical mechanism is to define a small catalog of \emph{asset
@@ -325,6 +410,11 @@ in different archetypes by role --- an in-memory store used as a cache is
 \code{identity-secrets}, and used as a job broker is \code{data-backbone}.
 
 \section{Determinism, governance, and defensibility}
+\begin{plain}
+Because it is a fixed formula, two people scoring the same flaw get the same answer
+--- and you can show your work to an auditor line by line. The only adjustable dials
+are locked down as managed settings, not left for anyone to change on a whim.
+\end{plain}
 \begin{itemize}[leftmargin=1.4em]
 \item \textbf{Determinism.} Given the same (CVE vector, archetype, VER axes), the
   method yields the same PAIN and deadline on every run and for every analyst.
@@ -338,7 +428,16 @@ in different archetypes by role --- an in-memory store used as a cache is
   selected matrix cell.
 \end{itemize}
 
-\section{Reference architecture and sample scan}
+\section{Reference architectures and sample scans}
+\begin{plain}
+Two end-to-end pictures: a typical single-agency system, and a stricter shared
+system serving several agencies. Each box is tagged with its type; the tables show
+what the scan would report. Notice how the shared, multi-agency, high-assurance
+system earns far tighter deadlines --- hours, not months --- for the same kinds of
+flaws.
+\end{plain}
+
+\subsection{Single-agency, Class C}
 Figure~\ref{fig:arch} shows a representative deployment with each component tagged
 by archetype. Table~\ref{tab:scan} shows the corresponding per-finding output for a
 fictional Class~C, single-agency offering. The PAIN column is computed by the method
@@ -395,7 +494,7 @@ make the decoupling explicit.
 \begin{table}[h]
 \centering
 \renewcommand{\arraystretch}{1.3}
-\setlength{\tabcolsep}{5pt}
+\setlength{\tabcolsep}{4pt}
 \footnotesize
 \begin{tabular}{l l c c c c r}
 \toprule
@@ -417,8 +516,93 @@ High-availability-requirement asset (Example~3).}
 \label{tab:scan}
 \end{table}
 
+\subsection{Multi-agency, Class D}
+Figure~\ref{fig:archd} is a shared, multi-tenant platform serving \emph{several}
+agencies at the highest assurance (Class~D). Because the shared components carry more
+than one agency's data, the scope flag is set on them, and the amplifier types
+(\code{identity-secrets}, \code{data-backbone}, \code{config-actuation},
+\code{platform-foundation}) escalate accordingly. Table~\ref{tab:scand} shows the
+result: the same families of flaws now remediate in \emph{hours}.
+
+\begin{figure}[h]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\sffamily\small,
+  node distance=10mm and 14mm,
+  box/.style={draw=rule,rounded corners,fill=white,minimum height=9mm,minimum width=24mm,align=center,thick},
+  edge/.style={-{Stealth[length=2mm]},draw=infoblue,thick},
+  tag/.style={font=\ttfamily\scriptsize,fill=tagbg,inner sep=1.5pt,rounded corners}
+]
+\node[box] (net) {Internet};
+\node[box,below=of net] (gw) {API gateway};
+\node[box,below=of gw] (app) {Tenant pods};
+\node[box,right=26mm of app] (idp) {Shared IdP\\+ KMS};
+\node[box,below=of app] (bus) {Shared event bus};
+\node[box,right=26mm of bus] (db) {Agency datastores};
+\node[box,left=22mm of app] (dns) {Shared DNS};
+\node[box,left=22mm of bus] (argo) {GitOps / ArgoCD};
+\node[box,right=26mm of idp] (audit) {Audit log store};
+
+\draw[edge] (net) -- (gw);
+\draw[edge] (gw) -- (app);
+\draw[edge] (app) -- (idp);
+\draw[edge] (app) -- (bus);
+\draw[edge] (bus) -- (db);
+\draw[edge,dashed] (dns) -- (app);
+\draw[edge,dashed] (argo) -- (app);
+
+\node[tag,below=0.5mm of net.south] {n/a};
+\node[tag,below=0.5mm of gw.south] {public-edge};
+\node[tag,below=0.5mm of app.south] {app-tier};
+\node[tag,below=0.5mm of idp.south] {identity-secrets};
+\node[tag,below=0.5mm of bus.south] {data-backbone};
+\node[tag,below=0.5mm of db.south] {data-sensitive};
+\node[tag,below=0.5mm of dns.south] {platform-foundation};
+\node[tag,below=0.5mm of argo.south] {config-actuation};
+\node[tag,below=0.5mm of audit.south] {security-tooling};
+\end{tikzpicture}%
+}
+\caption{Multi-agency reference architecture; shared components serve several
+agencies, so amplifier types escalate to multi-agency scope.}
+\label{fig:archd}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{4pt}
+\footnotesize
+\begin{tabular}{l l c c c c r}
+\toprule
+\textbf{CVE} & \textbf{Resource (archetype)} & \textbf{Classical} & \textbf{EPSS} & \textbf{Internet} & \textbf{PAIN} & \textbf{Remediation} \\
+\midrule
+CVE-2026-2001 & gateway \tagn{(public-edge)}         & \cellcolor{crit!25}CRITICAL & 0.90 & yes & \cellcolor{crit!30}N5 & 12 hours \\
+CVE-2026-2002 & shared-idp \tagn{(identity-secrets)} & \cellcolor{crit!25}CRITICAL & 0.95 & no  & \cellcolor{crit!30}N5 & 1 day \\
+CVE-2026-2003 & event-bus \tagn{(data-backbone)}     & \cellcolor{low!30}LOW       & 0.80 & no  & \cellcolor{crit!30}N5 & 1 day \\
+CVE-2026-2004 & agency-db \tagn{(data-sensitive)}    & \cellcolor{high!25}HIGH     & 0.40 & no  & \cellcolor{crit!30}N5 & 8 days \\
+CVE-2026-2005 & tenant-pod \tagn{(app-tier)}         & \cellcolor{med!35}MEDIUM    & 0.10 & no  & \cellcolor{med!35}N3 & 64 days \\
+CVE-2026-2006 & shared-dns \tagn{(platform-foundation)} & \cellcolor{med!35}MEDIUM & 0.05 & no  & \cellcolor{low!30}N2 & 192 days \\
+\bottomrule
+\end{tabular}
+\caption{Sample VDR scan output (fictional data; Class~D, multi-agency). Multi-agency
+scope escalates Disruptive/Debilitating findings, and Class~D carries the tightest
+deadlines --- an internet-facing exploitable flaw on the shared edge remediates in
+\textbf{12 hours} (CVE-2026-2001). CVE-2026-2003 again shows a \emph{Low} vendor
+severity at N5 (availability DoS on the shared backbone). A confidentiality leak on
+shared DNS (CVE-2026-2006) stays N2 --- ``Narrow'' does not escalate with scope.}
+\label{tab:scand}
+\end{table}
+
 \section{Relationship to CVSS v4.0}
 \label{sec:v4}
+\begin{plain}
+CVSS has a newer version (4.0) that changes how a flaw's impact is described and
+scored. We build on the older 3.1 because it exposes the clean, transparent formula
+this method depends on. Findings that only have a 4.0 score can still be handled with
+a reasonable approximation, and in practice most published scores are still 3.1
+today.
+\end{plain}
 This method is expressed in CVSS v3.1 terms because the v3.1 Environmental group
 provides a closed-form Modified Impact Sub-Score (Eq.~\eqref{eq:isc}) with explicit
 CR/IR/AR multipliers. CVSS v4.0 reworks impact into Vulnerable-System
@@ -431,6 +615,11 @@ implementation \rfckw{should} prefer the v3.1 vector and \rfckw{may} treat v4.0 
 this approximation until a native v4.0 environmental scorer is warranted.
 
 \section{Security Considerations}
+\begin{plain}
+The method trusts the type-tags on each system. If someone mislabels a critical
+system as trivial, its flaws will look smaller than they really are --- so the tags
+must be protected like any other security setting.
+\end{plain}
 The method's integrity depends on the trustworthiness of two inputs: the asset
 archetype tags and the VER axes (EPSS / exploitation / reachability). Tag spoofing
 that \emph{lowers} an archetype is a downgrade attack; the fail-safe default and
