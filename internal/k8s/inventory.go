@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -19,7 +20,17 @@ type Options struct {
 	Namespaces            []string
 	AllNamespaces         bool
 	IncludeZeroDaemonSets bool
+	// ClusterConfigMapNamespace/Name locate the cluster-wide FedRAMP metadata
+	// ConfigMap (cluster default class / multi-agency). Defaults: kube-system /
+	// vdr-fedramp.
+	ClusterConfigMapNamespace string
+	ClusterConfigMapName      string
 }
+
+const (
+	defaultClusterConfigMapNamespace = "kube-system"
+	defaultClusterConfigMapName      = "vdr-fedramp"
+)
 
 type Collector struct {
 	Client      kubernetes.Interface
@@ -91,7 +102,70 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 		}
 	}
 
+	// Namespace-level FedRAMP metadata and cluster-wide defaults are best-effort:
+	// they enrich scoring but must not fail the scan if RBAC or the ConfigMap is
+	// absent.
+	c.collectNamespaceMetadata(ctx, opts, &builder)
+	c.collectClusterDefaults(ctx, opts, &builder)
+
 	return builder.finish(), nil
+}
+
+// collectNamespaceMetadata records each in-scope namespace's object labels so
+// scoring can resolve namespace-level archetype/multi-agency/class metadata.
+func (c *Collector) collectNamespaceMetadata(ctx context.Context, opts Options, builder *inventoryBuilder) {
+	labels := map[string]map[string]string{}
+	if opts.AllNamespaces || len(opts.Namespaces) == 0 {
+		list, err := c.Client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return
+		}
+		for _, ns := range list.Items {
+			if len(ns.Labels) > 0 {
+				labels[ns.Name] = ns.Labels
+			}
+		}
+	} else {
+		for _, name := range opts.Namespaces {
+			ns, err := c.Client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				continue
+			}
+			if len(ns.Labels) > 0 {
+				labels[ns.Name] = ns.Labels
+			}
+		}
+	}
+	if len(labels) > 0 {
+		builder.inventory.Namespaces = labels
+	}
+}
+
+// collectClusterDefaults reads the cluster-wide FedRAMP metadata ConfigMap
+// (e.g. class, multiAgency). Best-effort: a missing ConfigMap is not an error.
+func (c *Collector) collectClusterDefaults(ctx context.Context, opts Options, builder *inventoryBuilder) {
+	nsName := opts.ClusterConfigMapNamespace
+	if nsName == "" {
+		nsName = defaultClusterConfigMapNamespace
+	}
+	cmName := opts.ClusterConfigMapName
+	if cmName == "" {
+		cmName = defaultClusterConfigMapName
+	}
+	cm, err := c.Client.CoreV1().ConfigMaps(nsName).Get(ctx, cmName, metav1.GetOptions{})
+	if err != nil {
+		builder.inventory.Warnings = append(builder.inventory.Warnings, fmt.Sprintf(
+			"cluster FedRAMP ConfigMap %s/%s not read (%v); PAIN scoring uses built-in defaults (Class B, single-agency) and has no tenant archetype rules",
+			nsName, cmName, err))
+		return
+	}
+	if len(cm.Data) == 0 {
+		builder.inventory.Warnings = append(builder.inventory.Warnings, fmt.Sprintf(
+			"cluster FedRAMP ConfigMap %s/%s has no data; PAIN scoring uses built-in defaults (Class B, single-agency)",
+			nsName, cmName))
+		return
+	}
+	builder.inventory.ClusterDefaults = cm.Data
 }
 
 func namespacesForCollection(opts Options) ([]string, error) {
@@ -145,7 +219,7 @@ func (c *Collector) collectPods(ctx context.Context, namespace string, builder *
 			continue
 		}
 		ref := model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
-		builder.addResource(ref, pod.Spec, pod.Annotations, pod.Labels)
+		builder.addResource(ref, pod.Spec, pod.Annotations, pod.Labels, pod.Labels)
 	}
 	return nil
 }
@@ -166,7 +240,7 @@ func (c *Collector) collectDeployments(ctx context.Context, namespace string, bu
 	}
 	for _, deployment := range deployments.Items {
 		ref := workloadRef("apps/v1", "Deployment", deployment.Namespace, deployment.Name)
-		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations, deployment.Spec.Template.Labels)
+		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations, deployment.Labels, deployment.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -178,7 +252,7 @@ func (c *Collector) collectStatefulSets(ctx context.Context, namespace string, b
 	}
 	for _, statefulSet := range statefulSets.Items {
 		ref := workloadRef("apps/v1", "StatefulSet", statefulSet.Namespace, statefulSet.Name)
-		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations, statefulSet.Spec.Template.Labels)
+		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations, statefulSet.Labels, statefulSet.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -193,7 +267,7 @@ func (c *Collector) collectDaemonSets(ctx context.Context, namespace string, inc
 			continue
 		}
 		ref := workloadRef("apps/v1", "DaemonSet", daemonSet.Namespace, daemonSet.Name)
-		builder.addResource(ref, daemonSet.Spec.Template.Spec, daemonSet.Spec.Template.Annotations, daemonSet.Spec.Template.Labels)
+		builder.addResource(ref, daemonSet.Spec.Template.Spec, daemonSet.Spec.Template.Annotations, daemonSet.Labels, daemonSet.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -205,7 +279,7 @@ func (c *Collector) collectJobs(ctx context.Context, namespace string, builder *
 	}
 	for _, job := range jobs.Items {
 		ref := workloadRef("batch/v1", "Job", job.Namespace, job.Name)
-		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations, job.Spec.Template.Labels)
+		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations, job.Labels, job.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -217,7 +291,7 @@ func (c *Collector) collectCronJobs(ctx context.Context, namespace string, build
 	}
 	for _, cronJob := range cronJobs.Items {
 		ref := workloadRef("batch/v1", "CronJob", cronJob.Namespace, cronJob.Name)
-		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec, cronJob.Spec.JobTemplate.Spec.Template.Annotations, cronJob.Spec.JobTemplate.Spec.Template.Labels)
+		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec, cronJob.Spec.JobTemplate.Spec.Template.Annotations, cronJob.Labels, cronJob.Spec.JobTemplate.Spec.Template.Labels)
 	}
 	return nil
 }
@@ -236,8 +310,13 @@ type inventoryBuilder struct {
 	images    map[string]*model.ImageInventory
 }
 
-func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, labels map[string]string) {
-	resourceInventory := model.ResourceInventory{Resource: resource, Labels: copyStringMap(labels)}
+// addResource records a workload. workloadLabels are the labels on the workload
+// object itself (e.g. Deployment.metadata.labels) and templateLabels are the pod
+// template labels. They are merged into ResourceInventory.Labels with the pod
+// template winning on conflict, so VDR archetype tags applied at either level
+// (Helm values.labels render to the workload object) are visible to scoring.
+func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string) {
+	resourceInventory := model.ResourceInventory{Resource: resource, Labels: mergeLabels(workloadLabels, templateLabels)}
 	for _, c := range spec.Containers {
 		b.addContainer(&resourceInventory, resource, spec, annotations, c, "container")
 	}
@@ -292,6 +371,22 @@ func copyStringMap(values map[string]string) map[string]string {
 		copied[key] = value
 	}
 	return copied
+}
+
+// mergeLabels combines workload-object labels with pod-template labels. The pod
+// template wins on key conflict. Returns nil when both are empty.
+func mergeLabels(workload, template map[string]string) map[string]string {
+	if len(workload) == 0 && len(template) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(workload)+len(template))
+	for k, v := range workload {
+		merged[k] = v
+	}
+	for k, v := range template {
+		merged[k] = v
+	}
+	return merged
 }
 
 func containerSecurity(spec corev1.PodSpec, annotations map[string]string, c corev1.Container) *model.ContainerSecurity {

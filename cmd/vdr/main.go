@@ -19,6 +19,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/registry"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/report"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scanner"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
 
 // errCompletedWithFailures signals that the run finished and wrote its report,
@@ -72,6 +73,10 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	logger.Info("inventory: %d workloads, %d unique images", len(inventory.Resources), len(inventory.Images))
 
 	var warnings []string
+	for _, w := range inventory.Warnings {
+		logger.Warn("%s", w)
+	}
+	warnings = append(warnings, inventory.Warnings...)
 
 	var dockerConfigDir string
 	if !cfg.SkipRegistryAuth {
@@ -177,11 +182,31 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		exposures = exposure.Analyze(inventory, objects)
 	}
 
+	scoringConfig := scoring.Default()
+	if cfg.ScoringConfig != "" {
+		loaded, scErr := scoring.Load(cfg.ScoringConfig)
+		if scErr != nil {
+			return fmt.Errorf("load scoring config: %w", scErr)
+		}
+		scoringConfig = loaded
+		logger.Info("loaded PAIN scoring config from %s", cfg.ScoringConfig)
+	}
+	// Cluster-wide FedRAMP defaults (class, multi-agency) from the in-cluster
+	// ConfigMap override the config-file defaults.
+	if len(inventory.ClusterDefaults) > 0 {
+		if applyErr := scoringConfig.ApplyClusterDefaults(inventory.ClusterDefaults); applyErr != nil {
+			logger.Warn("ignoring invalid cluster FedRAMP config from ConfigMap: %v", applyErr)
+		} else {
+			logger.Info("applied cluster FedRAMP defaults (class=%s, default archetype=%s)", scoringConfig.Defaults.Class, scoringConfig.Defaults.Archetype)
+		}
+	}
+
 	primary := report.Build(inventory, findings, exposures, report.Options{
 		View:        cfg.View,
 		MinSeverity: cfg.MinSeverity,
 		MinEPSS:     cfg.MinEPSS,
 		Warnings:    warnings,
+		Scoring:     scoringConfig,
 	})
 	if err := writePrimaryReport(stdout, cfg.Output, cfg.Format, primary); err != nil {
 		return err
@@ -192,6 +217,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			MinSeverity: cfg.MinSeverity,
 			MinEPSS:     cfg.MinEPSS,
 			Warnings:    warnings,
+			Scoring:     scoringConfig,
 		})
 		if err := writeHTMLReport(cfg.HTMLOutput, cfg.HTMLTemplate, htmlReport); err != nil {
 			return err
