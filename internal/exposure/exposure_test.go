@@ -1,6 +1,7 @@
 package exposure
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
@@ -625,20 +626,49 @@ func TestAnalyzeUnprovisionedLoadBalancerServiceNotExposed(t *testing.T) {
 	}
 }
 
-func TestAnalyzeNodePortServiceIsAdvisoryNotInternetReachable(t *testing.T) {
+func nodePortService(labelValue string) corev1.Service {
 	svc := service("default", "np", map[string]string{"app": "x"})
 	svc.Spec.Type = corev1.ServiceTypeNodePort
 	svc.Spec.Ports = []corev1.ServicePort{{Port: 80, NodePort: 30080}}
-	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+	if labelValue != "" {
+		svc.Labels = map[string]string{"vdr.fedramp.io/internet-reachable-nodePort": labelValue}
+	}
+	return svc
+}
 
-	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
-	ref := resourceRef("default", "x", "app", "container", "")
-	ex := got[ref]
+func TestAnalyzeNodePortUnlabeledIsAdvisoryMentioningLabel(t *testing.T) {
+	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+	got := Analyze(inv, Objects{Services: []corev1.Service{nodePortService("")}})
+	ex := got[resourceRef("default", "x", "app", "container", "")]
 	if ex.InternetAccessible {
-		t.Errorf("NodePort must not be counted internet-reachable")
+		t.Errorf("unlabeled NodePort must not be counted internet-reachable")
 	}
 	if ex.RouteKind != "Service/NodePort" || len(ex.Evidence) == 0 {
-		t.Errorf("NodePort should be recorded as an advisory with evidence; got %+v", ex)
+		t.Fatalf("NodePort should be an advisory with evidence; got %+v", ex)
+	}
+	if !strings.Contains(strings.Join(ex.Evidence, " "), "vdr.fedramp.io/internet-reachable-nodePort") {
+		t.Errorf("advisory evidence should mention the label; got %v", ex.Evidence)
+	}
+}
+
+func TestAnalyzeNodePortLabelTrueIsInternetReachable(t *testing.T) {
+	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+	got := Analyze(inv, Objects{Services: []corev1.Service{nodePortService("true")}})
+	ex := got[resourceRef("default", "x", "app", "container", "")]
+	if !ex.InternetAccessible {
+		t.Errorf("NodePort labeled true should be internet-reachable; got %+v", ex)
+	}
+}
+
+func TestAnalyzeNodePortLabelFalseNotReachable(t *testing.T) {
+	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+	got := Analyze(inv, Objects{Services: []corev1.Service{nodePortService("false")}})
+	ex := got[resourceRef("default", "x", "app", "container", "")]
+	if ex.InternetAccessible {
+		t.Errorf("NodePort labeled false must not be internet-reachable; got %+v", ex)
+	}
+	if ex.RouteKind != "Service/NodePort" {
+		t.Errorf("RouteKind = %q, want Service/NodePort", ex.RouteKind)
 	}
 }
 

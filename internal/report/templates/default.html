@@ -158,6 +158,8 @@
         resource: [ref.kind, ref.name, ref.containerName].filter(Boolean).join("/"),
         image: finding.imageRef || images.map(image => image.imageRef).filter(Boolean).join(","),
         exposed: !!(exposure && exposure.internetAccessible),
+        exposureKind: (exposure && exposure.routeKind) || "",
+        exposureEvidence: (exposure && Array.isArray(exposure.evidence)) ? exposure.evidence : [],
         security: securitySummary(images),
         automatable: vuln.automatable || "",
         exploitation: vuln.exploitation || "",
@@ -563,7 +565,8 @@
       tbody.textContent = "";
       filtered.forEach(row => {
         const tr = document.createElement("tr");
-        [row.id, row.severity, row.pain, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
+        const exposureLabel = row.exposed ? "yes" : (row.exposureKind === "Service/NodePort" ? "nodeport" : "no");
+        [row.id, row.severity, row.pain, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, exposureLabel, row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
           const td = document.createElement("td");
           td.textContent = value;
           if (index === 1) {
@@ -577,6 +580,9 @@
           } else if (index === 5) {
             const tip = resourceTooltip(row);
             if (tip) td.title = tip;
+          } else if (index === 7 && row.exposureKind === "Service/NodePort") {
+            td.title = row.exposureEvidence.join("\n") ||
+              "NodePort service; node-IP reachability unverified. Set vdr.fedramp.io/internet-reachable-nodePort: true|false on the Service.";
           } else if (index === 8 && row.automatableSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
