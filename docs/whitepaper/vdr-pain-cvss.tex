@@ -135,7 +135,7 @@ according to the criticality of the affected asset in \emph{its} environment.
 Asset data sensitivity / FIPS-199 C-I-A categorization & Security Requirements
 \code{CR}, \code{IR}, \code{AR} \\
 Magnitude of potential agency impact & Modified Impact Sub-Score (\code{ISC}) \\
-Likely exploitable (VER) & \code{LEV}: exploit maturity / EPSS threshold \\
+Likely exploitable (VER) & \code{LEV}: exploit maturity (CISA Vulnrichment) / EPSS threshold \\
 Internet reachable (VER) & \code{IRV}: deployment/network context \\
 Single- vs.\ multi-agency blast radius & scope multiplier on the PAIN tier \\
 Provider Certification Class & selector of the remediation deadline table \\
@@ -169,6 +169,43 @@ CR/IR/AR. \textbf{SCOPE} answers ``how many agencies' data does the asset hold?'
 word (Minimal, Narrow, Disruptive, Debilitating); the word and scope together
 select the N-level.
 
+\section{Two threat inputs from CISA Vulnrichment}
+\label{sec:enrichment}
+\begin{plain}
+Beyond the CVE's own CVSS vector, the method pulls in two facts about each flaw from
+\emph{CISA Vulnrichment} --- CISA's Authorized Data Publisher (ADP) enrichment of CVE
+records: how the flaw is actually being exploited, and how much control exploitation
+grants. One tightens the remediation \emph{clock}; the other can raise the PAIN
+\emph{level}. Both are optional: without them the method falls back to the CVSS vector
+and EPSS alone.
+\end{plain}
+
+Two distinct inputs feed two distinct stages:
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Exploitation state} (active / PoC / none) $\rightarrow$ the
+  \textbf{remediation clock}. ``active'' makes a finding Likely Exploitable (LEV)
+  regardless of its EPSS probability, moving it to a faster remediation column
+  (Section~\ref{sec:remediation}).
+\item \textbf{Technical impact} (total / partial) $\rightarrow$ the \textbf{PAIN
+  level}. ``total'' floors the in-scope CVSS impact to High before the CR/IR/AR
+  weighting, which can push a finding up a tier (Section~\ref{sec:math}).
+\end{itemize}
+
+\noindent How it plays in --- three quick illustrations (Class~C, single-agency):
+\begin{itemize}[leftmargin=1.4em]
+\item \emph{Exploitation moves the clock.} An N3 finding with EPSS $0.30$ (below
+  threshold) sits in the slow column: \textbf{128 days}. Mark it
+  \code{exploitation = active} and it becomes LEV --- the deadline drops to
+  \textbf{16 days} (internet-reachable) or 32 days (not).
+\item \emph{Technical impact moves the level.} A ``weak'' RCE (low impact across
+  C/I/A) on a High/High/High asset scores Disruptive $\rightarrow$ \textbf{N3}. Mark
+  it \code{technical impact = total} and the in-scope dimensions floor to High,
+  scoring Debilitating $\rightarrow$ \textbf{N4} (worked in Example~5).
+\item \emph{Neither present.} No active exploitation, sub-threshold EPSS, and
+  partial/absent technical impact $\rightarrow$ the finding is scored purely on its
+  CVSS vector and stays in the slow column at its base tier.
+\end{itemize}
+
 \section{The mathematics}
 \label{sec:math}
 \begin{plain}
@@ -195,8 +232,8 @@ additions.
 \item $\mathrm{ISC}$ --- the three combined into one ``damage to this system'' number.
 \item $S$ --- that damage rescaled to a clean $0$--$1$ range.
 \item $W$ --- the plain English word $S$ maps to.
-\item $m,\ m^{*}$ --- does the system serve one agency ($0$) or many ($1$)?
-  $m^{*}$ adds the ``shared-infrastructure'' escalation.
+\item $m$ --- does the system serve one agency ($0$) or many ($1$)? Resolved
+  hierarchically from the workload/namespace/cluster tags.
 \item $\theta_1,\theta_2,\theta_3$ --- the three cut-points where the word changes.
 \end{itemize}
 \end{plain}
@@ -250,23 +287,19 @@ implementation \rfckw{must} treat them as governed configuration rather than an
 in-band, ad-hoc setting.
 
 \paragraph{Scope and the N-level.}
-Let $m \in \{0,1\}$ be the asset's multi-agency flag. Some asset classes are
-\emph{scope amplifiers} (shared infrastructure whose compromise crosses tenant
-boundaries); for those, an offering that itself serves more than one agency
-($\textsc{cso}_{>1}$) is treated as multi-agency regardless of the per-asset flag:
-\begin{equation}
-m^{*} \;=\; m \ \lor\ \big(\text{amplifier} \ \land\ \textsc{cso}_{>1}\big).
-\label{eq:scope}
-\end{equation}
-The N-level follows from the word and effective scope:
+Let $m \in \{0,1\}$ be the asset's multi-agency flag, resolved most-specific-first:
+workload label, then namespace label, then a namespace glob, then the cluster
+default (Section~\ref{sec:archetypes}). Scope is purely hierarchical --- an asset is
+multi-agency only if it (or its namespace, or the cluster) is tagged so. The N-level
+follows from the word and scope:
 \begin{equation}
 \text{PAIN} =
 \begin{cases}
 \text{N1} & W=\text{Minimal} \\
 \text{N2} & W=\text{Narrow} \\
-\text{N3} & W=\text{Disruptive},\ m^{*}=0 \\
-\text{N4} & W=\text{Disruptive},\ m^{*}=1 \ \ \text{or}\ \ W=\text{Debilitating},\ m^{*}=0 \\
-\text{N5} & W=\text{Debilitating},\ m^{*}=1
+\text{N3} & W=\text{Disruptive},\ m=0 \\
+\text{N4} & W=\text{Disruptive},\ m=1 \ \ \text{or}\ \ W=\text{Debilitating},\ m=0 \\
+\text{N5} & W=\text{Debilitating},\ m=1
 \end{cases}
 \label{eq:pain}
 \end{equation}
@@ -346,7 +379,7 @@ $C\!=\!I\!=\!A\!=\!0.56$ (High), CR=IR=AR=$1.5$ (High), $m=1$.
 \begin{align*}
 \mathrm{ISC} &= \min\!\big[\,1-(1-0.84)^3,\ 0.915\,\big] = \min[\,0.9959,\ 0.915\,] = 0.915, \\
 S &= 0.915/0.915 = 1.000 \;\Rightarrow\; W=\text{Debilitating}, \\
-m^{*}&=1 \;\Rightarrow\; \boxed{\text{N5}}.
+m=1 \;\Rightarrow\; \boxed{\text{N5}}.
 \end{align*}
 
 \paragraph{Example 2 --- the same CVE on a sandbox, single-agency.}
@@ -363,7 +396,7 @@ A CVE with $C\!=\!0,\ I\!=\!0,\ A\!=\!0.56$ (e.g.\ a parser DoS), on an asset wi
 CR=IR=AR=$1.5$, $m=0$. EPSS $=0.76$, not internet-reachable.
 \begin{align*}
 \mathrm{ISC} &= 1-(1-0)(1-0)(1-0.84) = 1-0.16 = 0.84, \\
-S &= 0.84/0.915 = 0.918 \;\Rightarrow\; W=\text{Debilitating},\ m^{*}=0 \;\Rightarrow\; \boxed{\text{N4}}.
+S &= 0.84/0.915 = 0.918 \;\Rightarrow\; W=\text{Debilitating},\ m=0 \;\Rightarrow\; \boxed{\text{N4}}.
 \end{align*}
 The single dimension $A\!\cdot\!\mathrm{AR}=0.84$ alone clears the Debilitating bar.
 Remediation: LEV (EPSS $\ge 0.70$) $\land$ NIRV; at Class C this is
@@ -401,8 +434,8 @@ to the data it actually holds.
 The model in Section~\ref{sec:math} is only as good as the CR/IR/AR assignment that
 feeds it. Assigning requirements per individual asset does not scale and invites
 drift. A practical mechanism is to define a small catalog of \emph{asset
-archetypes}, each carrying a fixed CR/IR/AR and an amplifier flag, and to tag each
-asset with one archetype.
+archetypes}, each carrying a fixed CR/IR/AR, and to tag each asset with one
+archetype.
 
 \begin{quote}\itshape
 The archetype catalog in Appendix~\ref{app:catalog} is illustrative. A conforming
@@ -530,11 +563,10 @@ High-availability-requirement asset (Example~3).}
 
 \subsection{Multi-agency, Class D}
 Figure~\ref{fig:archd} is a shared, multi-tenant platform serving \emph{several}
-agencies at the highest assurance (Class~D). Because the shared components carry more
-than one agency's data, the scope flag is set on them, and the amplifier types
-(\code{identity-secrets}, \code{data-backbone}, \code{config-actuation},
-\code{platform-foundation}) escalate accordingly. Table~\ref{tab:scand} shows the
-result: the same families of flaws now remediate in \emph{hours}.
+agencies at the highest assurance (Class~D). Its shared components carry more than
+one agency's data, so they are tagged multi-agency (here via the cluster default,
+with single-agency tenant workloads tagged as the exceptions). Table~\ref{tab:scand}
+shows the result: the same families of flaws now remediate in \emph{hours}.
 
 \begin{figure}[H]
 \centering
@@ -576,7 +608,7 @@ result: the same families of flaws now remediate in \emph{hours}.
 \end{tikzpicture}%
 }
 \caption{Multi-agency reference architecture; shared components serve several
-agencies, so amplifier types escalate to multi-agency scope.}
+agencies and are tagged multi-agency.}
 \label{fig:archd}
 \end{figure}
 
@@ -654,33 +686,33 @@ each CSP to publish its own.
 \appendix
 \section{Example archetype catalog}
 \label{app:catalog}
-Illustrative only (see Section~\ref{sec:archetypes}). ``Amp'' marks scope amplifiers.
+Illustrative only (see Section~\ref{sec:archetypes}).
 
 \begin{table}[H]
 \centering
 \renewcommand{\arraystretch}{1.2}
 \footnotesize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{l l c c c c >{\raggedright\arraybackslash}p{0.30\textwidth}}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{l l c c c >{\raggedright\arraybackslash}p{0.34\textwidth}}
 \toprule
-\textbf{Archetype} & \textbf{Lens} & \textbf{CR} & \textbf{IR} & \textbf{AR} & \textbf{Amp} & \textbf{Typical members} \\
+\textbf{Archetype} & \textbf{Lens} & \textbf{CR} & \textbf{IR} & \textbf{AR} & \textbf{Typical members} \\
 \midrule
-\code{cicd-pipeline}      & control & H & H & H & \checkmark & build/deploy runners, artifact signing, registries \\
-\code{orchestrator}       & control & H & H & H & \checkmark & control plane, etcd, scheduler, coordination \\
-\code{config-actuation}   & control & H & H & H & \checkmark & IaC/GitOps, schema registry, admin/migration \\
-\code{identity-secrets}   & control & H & H & H & \checkmark & IdP/SSO, KMS, secrets managers, session stores \\
-\code{security-tooling}   & control & H & H & M &            & scanners, SIEM, EDR, runtime security \\
-\code{change-record}      & control & M & M & M &            & ITSM/ticketing (record only) \\
-\code{platform-foundation}& control & L & H & H & \checkmark & DNS, NTP, service discovery, L4 internal LBs (metadata only) \\
-\code{data-sensitive}     & data    & H & H & H &            & PII/CUI datastores \\
-\code{data-backbone}      & data    & H & H & H & \checkmark & queues, brokers, the system-of-record DB \\
-\code{app-tier}           & data    & M & M & H &            & stateless services, APIs, UIs, caches \\
-\code{batch-analytics}    & data    & M & M & L &            & ETL, reporting, analytics jobs \\
-\code{public-edge}        & data    & L & L & H &            & load balancers, public web, ingress \\
-\code{internal-tooling}   & data    & L & L & L &            & dashboards, metrics/log agents \\
-\code{dev-test}           & data    & L & L & L &            & non-production \\
+\code{cicd-pipeline}      & control & H & H & H & build/deploy runners, artifact signing, registries \\
+\code{orchestrator}       & control & H & H & H & control plane, etcd, scheduler, coordination \\
+\code{config-actuation}   & control & H & H & H & IaC/GitOps, schema registry, admin/migration \\
+\code{identity-secrets}   & control & H & H & H & IdP/SSO, KMS, secrets managers, session stores \\
+\code{security-tooling}   & control & H & H & M & scanners, SIEM, EDR, runtime security \\
+\code{change-record}      & control & M & M & M & ITSM/ticketing (record only) \\
+\code{platform-foundation}& control & L & H & H & DNS, NTP, service discovery, L4 internal LBs (metadata only) \\
+\code{data-sensitive}     & data    & H & H & H & PII/CUI datastores \\
+\code{data-backbone}      & data    & H & H & H & queues, brokers, the system-of-record DB \\
+\code{app-tier}           & data    & M & M & H & stateless services, APIs, UIs, caches \\
+\code{batch-analytics}    & data    & M & M & L & ETL, reporting, analytics jobs \\
+\code{public-edge}        & data    & L & L & H & load balancers, public web, ingress \\
+\code{internal-tooling}   & data    & L & L & L & dashboards, metrics/log agents \\
+\code{dev-test}           & data    & L & L & L & non-production \\
 \midrule
-\code{unclassified}       & ---     & H & H & H &            & fail-safe default for untagged assets \\
+\code{unclassified}       & ---     & H & H & H & fail-safe default for untagged assets \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -764,10 +796,20 @@ and the fact that an implementation \rfckw{may} change it.
   vendor SSVC decision, a commercial threat-intelligence feed, or the CISA KEV
   catalog). EPSS, by contrast, supplies the statistical exploitation \emph{likelihood}
   (item~2); the two are complementary.
-\item \textbf{Scope-amplifier escalation.} Certain archetypes (shared infrastructure)
-  are flagged amplifiers and escalate to multi-agency scope when the offering serves
-  more than one agency, regardless of the per-asset tag (Eq.~\ref{eq:scope}). This is
-  our construct, not a FedRAMP one.
+\item \textbf{Scope is purely hierarchical.} An asset is multi-agency only if it ---
+  or its namespace, or the cluster default --- is tagged so (most-specific wins);
+  there is no automatic per-archetype escalation. (An earlier draft auto-escalated
+  ``shared-infrastructure'' archetypes to multi-agency; we removed that in favor of
+  explicit, operator-controlled tagging.)
+\item \textbf{``Archetype'', not ``type''.} We classify assets by their
+  \emph{role/usage pattern}, not their intrinsic kind, and the label reflects that:
+  the same software lands in different archetypes by how it is used (an in-memory
+  store is \code{app-tier} as a cache, \code{identity-secrets} as a session store,
+  \code{data-backbone} as a broker). ``Type'' would wrongly suggest an intrinsic
+  property of the software and collides with overloaded terms (e.g.\ Kubernetes
+  Service \code{type}); ``archetype'' names the pattern an asset matches in the
+  estate. An adopter \rfckw{may} rename the label, but the role-not-kind semantics
+  should be preserved.
 \item \textbf{Fail-safe defaults to conservative High.} An unclassified asset defaults
   to CR/IR/AR all High so it scores loudly, rather than to a low default. ``Unknown''
   is treated as serious until classified.
