@@ -111,7 +111,7 @@ Every finding is scored against the FedRAMP Rev5 VDR model: a **PAIN** rating (P
 
 ### PAIN = f(severity, scope)
 
-- **Severity** is the CVE's CVSS impact vector (which of Confidentiality/Integrity/Availability it touches) re-weighted by the asset's `CR/IR/AR` requirements, which come from its **asset archetype**. CISA Vulnrichment **technical impact** refines this as a *floor*: when `total`, each in-scope CVSS dimension is raised to High before weighting; it never invents impact on a dimension the CVE does not touch, and `partial`/absent leaves the CVSS vector unchanged. The weighted impact maps to a word — Minimal → N1, Narrow → N2, Disruptive, Debilitating.
+- **Severity** is the CVE's CVSS impact vector (which of Confidentiality/Integrity/Availability it touches) re-weighted by the asset's `CR/IR/AR` requirements, which come from its **asset archetype**. CISA Vulnrichment **technical impact** refines this as a *floor*: when `total`, each in-scope CVSS dimension is raised to High before weighting; it never invents impact on a dimension the CVE does not touch, and `partial`/absent leaves the CVSS vector unchanged. The weighted impact maps to a word — Minimal → N1, Narrow → N2, Disruptive, Debilitating. The scalar cut points for those words are calibratable via `wordThresholds` in the scoring config (defaults: Narrow 0.25, Disruptive 0.55, Debilitating 0.85).
 - **Scope** is whether the asset serves one agency or more than one. Disruptive → N3 (single) / N4 (multi); Debilitating → N4 (single) / N5 (multi).
 
 ### Asset archetypes
