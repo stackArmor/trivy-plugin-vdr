@@ -318,6 +318,13 @@ $0.70$):
 \qquad
 \text{IRV} = \text{asset is internet-reachable}.
 \]
+Here \emph{internet-reachable} means the asset is fronted by a \textbf{public-facing
+load balancer or route whose edge does not itself enforce authentication}. A route
+gated by native edge authentication --- an identity-aware proxy or equivalent that
+authenticates every request before it reaches the workload --- is treated as
+\emph{not} internet-reachable (NIRV), on the view that an unauthenticated attacker
+cannot reach the vulnerable surface. (How a given platform's routes and edge
+authentication are discovered is an implementation concern, out of scope here.)
 The day-valued tables are given in Appendix~\ref{app:matrix}. PAIN-1 carries no
 FedRAMP deadline.
 
@@ -727,6 +734,12 @@ and the fact that an implementation \rfckw{may} change it.
 \item \textbf{LEV is a union, not a blend.} A finding is Likely Exploitable if
   EPSS $\ge \theta_{\text{epss}}$ \emph{or} exploitation is observed ``active'' ---
   whichever fires, with no weighting between them.
+\item \textbf{Internet-reachability counts edge authentication as a mitigation.} We
+  define IRV as ``fronted by a public load balancer/route whose edge does not enforce
+  authentication.'' A route gated by a native identity-aware proxy (or equivalent) is
+  treated as \emph{not} internet-reachable, on the view that an unauthenticated
+  attacker cannot reach the vulnerable surface. An adopter wanting a stricter posture
+  \rfckw{may} count any public route as IRV regardless of edge authentication.
 \item \textbf{Impact-only severity, normalized by $0.915$.} We take CVSS's
   \emph{Modified Impact Sub-Score} and rescale it to $[0,1]$ (Eq.~\ref{eq:s}) rather
   than computing the full 0--10 environmental score. PAIN is about \emph{impact on the
