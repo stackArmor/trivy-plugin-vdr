@@ -635,9 +635,9 @@ func normalizeReq(req string) string {
 }
 
 // defaultWordThresholds is the built-in calibration: Minimal < 0.25, Narrow <
-// 0.55, Disruptive < 0.85, else Debilitating. The cut points are the model's one
+// 0.55, Disruptive < 0.80, else Debilitating. The cut points are the model's one
 // calibratable judgment and may be overridden via config (wordThresholds).
-var defaultWordThresholds = WordThresholds{Narrow: 0.25, Disruptive: 0.55, Debilitating: 0.85}
+var defaultWordThresholds = WordThresholds{Narrow: 0.25, Disruptive: 0.55, Debilitating: 0.80}
 
 // wordFromScalar maps the normalized environmental impact scalar to a FedRAMP
 // customer-effect word using the configured thresholds, falling back to the
