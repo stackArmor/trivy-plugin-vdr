@@ -241,7 +241,7 @@ W(S) \;=\;
 \text{Disruptive} & \theta_2 \le S < \theta_3 \\
 \text{Debilitating} & S \ge \theta_3
 \end{cases}
-\qquad (\theta_1,\theta_2,\theta_3) = (0.25,\ 0.55,\ 0.85).
+\qquad (\theta_1,\theta_2,\theta_3) = (0.25,\ 0.55,\ 0.80).
 \label{eq:word}
 \end{equation}
 The cut points are the model's \emph{one} calibratable judgment. They
@@ -697,5 +697,63 @@ N2 & 96 & 160 & 192 & 48 & 128 & 192 & 24  & 96 & 192 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\section{Explicit design opinions (calibratable choices)}
+\label{app:opinions}
+\begin{plain}
+Everything in this section is a \emph{judgment call} we made --- not something
+FedRAMP or CVSS dictates. We collect them in one place so reviewers can challenge
+each one, and so any adopter knows exactly which dials are theirs to turn. None of
+these is load-bearing for the \emph{method}; they are the parameters the method runs
+on.
+\end{plain}
+
+The method deliberately separates standardized arithmetic (Section~\ref{sec:math})
+from a small set of explicit opinions. Each item below states the value we use, why,
+and the fact that an implementation \rfckw{may} change it.
+
+\begin{enumerate}[leftmargin=1.7em]
+\item \textbf{PAIN word thresholds $(\theta_1,\theta_2,\theta_3) = (0.25,\,0.55,\,0.80)$.}
+  The cut points that turn the impact scalar $S$ into
+  Minimal/Narrow/Disruptive/Debilitating (Eq.~\ref{eq:word}). This is the single most
+  consequential opinion --- it sets where a finding crosses an N-level boundary. The
+  values should reproduce senior-analyst triage on a back-tested sample; an adopter
+  \rfckw{should} re-calibrate against its own rated findings and \rfckw{must} treat
+  the result as governed configuration.
+\item \textbf{EPSS Likely-Exploitable threshold $\theta_{\text{epss}} = 0.70$.}
+  The EPSS probability at or above which a finding is treated as LEV
+  (Section~\ref{sec:remediation}). Higher means fewer findings on the fast track;
+  FedRAMP leaves the framework to the provider.
+\item \textbf{LEV is a union, not a blend.} A finding is Likely Exploitable if
+  EPSS $\ge \theta_{\text{epss}}$ \emph{or} exploitation is observed ``active'' ---
+  whichever fires, with no weighting between them.
+\item \textbf{Impact-only severity, normalized by $0.915$.} We take CVSS's
+  \emph{Modified Impact Sub-Score} and rescale it to $[0,1]$ (Eq.~\ref{eq:s}) rather
+  than computing the full 0--10 environmental score. PAIN is about \emph{impact on the
+  asset}, so we intentionally drop the exploitability half of the base score (and the
+  $6.42$ coefficient) from the severity term; exploitability re-enters separately as
+  the LEV/IRV remediation columns.
+\item \textbf{Technical impact is a floor, not the primary signal.} ``technical
+  impact = total'' raises each \emph{in-scope} CVSS dimension to High; it never
+  invents impact on a dimension the CVE marks None, and ``partial''/absent leaves the
+  vector unchanged. (An earlier draft made technical impact primary with CVSS as the
+  fallback; we reversed that.)
+\item \textbf{Scope-amplifier escalation.} Certain archetypes (shared infrastructure)
+  are flagged amplifiers and escalate to multi-agency scope when the offering serves
+  more than one agency, regardless of the per-asset tag (Eq.~\ref{eq:scope}). This is
+  our construct, not a FedRAMP one.
+\item \textbf{Fail-safe defaults to conservative High.} An unclassified asset defaults
+  to CR/IR/AR all High so it scores loudly, rather than to a low default. ``Unknown''
+  is treated as serious until classified.
+\item \textbf{CVSS v3.1, not v4.0.} We build on v3.1's closed-form environmental
+  formula; v4.0 findings are approximated by mapping VC/VI/VA onto $C/I/A$
+  (Section~\ref{sec:v4}).
+\item \textbf{The archetype catalog and its CR/IR/AR values
+  (Appendix~\ref{app:catalog}).} Illustrative only --- each CSP \rfckw{should} derive
+  its own from its system categorization.
+\item \textbf{The remediation deadline values (Appendix~\ref{app:matrix}).}
+  Representative of a plausible VDR-TFR-PVR profile; the authoritative day counts
+  follow FedRAMP and the provider's Certification-Class commitments.
+\end{enumerate}
 
 \end{document}
