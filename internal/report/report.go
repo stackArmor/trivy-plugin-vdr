@@ -615,6 +615,9 @@ func formatExposure(exposure *model.Exposure) string {
 	if exposure.Protection != nil && exposure.Protection.Enabled {
 		return "protected"
 	}
+	if exposure.RouteKind == "Service/NodePort" {
+		return "nodeport"
+	}
 	return "no"
 }
 
