@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
@@ -724,21 +725,41 @@ func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
 				},
 			})
 		case corev1.ServiceTypeNodePort:
-			exposures = append(exposures, serviceExposure{
-				serviceNamespace: svc.Namespace,
-				serviceName:      svc.Name,
-				exposure: model.Exposure{
-					InternetAccessible: false,
-					RouteKind:          "Service/NodePort",
-					RouteName:          svc.Name,
-					Evidence: []string{fmt.Sprintf(
-						"Service %s/%s is type=NodePort (%s); reachable on node IPs only if nodes have public addresses and firewall/security-group rules permit -- not counted as internet-reachable. Verify node exposure.",
-						svc.Namespace, svc.Name, nodePortList(svc))},
-				},
-			})
+			exposures = append(exposures, nodePortExposure(svc))
 		}
 	}
 	return exposures
+}
+
+// nodePortReachableLabel lets an operator declare whether a NodePort Service is
+// actually internet-reachable (true) or not (false), since the cluster alone can't
+// determine it. When absent, the Service is treated as an unverified advisory.
+const nodePortReachableLabel = "vdr.fedramp.io/internet-reachable-nodePort"
+
+func nodePortExposure(svc corev1.Service) serviceExposure {
+	ports := nodePortList(svc)
+	ex := model.Exposure{RouteKind: "Service/NodePort", RouteName: svc.Name}
+	if val, ok := svc.Labels[nodePortReachableLabel]; ok {
+		if b, err := strconv.ParseBool(strings.TrimSpace(val)); err == nil {
+			ex.InternetAccessible = b
+			if b {
+				ex.Evidence = []string{fmt.Sprintf(
+					"Service %s/%s is type=NodePort (%s), explicitly marked internet-reachable by label %s=true.",
+					svc.Namespace, svc.Name, ports, nodePortReachableLabel)}
+			} else {
+				ex.Evidence = []string{fmt.Sprintf(
+					"Service %s/%s is type=NodePort (%s), explicitly marked not internet-reachable by label %s=false.",
+					svc.Namespace, svc.Name, ports, nodePortReachableLabel)}
+			}
+			return serviceExposure{serviceNamespace: svc.Namespace, serviceName: svc.Name, exposure: ex}
+		}
+	}
+	// Missing or unparseable label: unverified, not counted as internet-reachable.
+	ex.InternetAccessible = false
+	ex.Evidence = []string{fmt.Sprintf(
+		"Service %s/%s is type=NodePort (%s); node-IP reachability is unverified and is NOT counted as internet-reachable. Set label %s: \"true\" or \"false\" on the Service to classify it (true if the nodes are internet-facing with the node port reachable).",
+		svc.Namespace, svc.Name, ports, nodePortReachableLabel)}
+	return serviceExposure{serviceNamespace: svc.Namespace, serviceName: svc.Name, exposure: ex}
 }
 
 func serviceHasLoadBalancerAddress(svc corev1.Service) bool {

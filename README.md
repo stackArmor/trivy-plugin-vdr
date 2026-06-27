@@ -157,6 +157,8 @@ Exposure analysis is intentionally conservative:
 - AWS ALB `oidc` and `cognito` auth are recorded as AWS access protection. They are not reported as GCP IAP.
 - Gateway cross-namespace backend references require a matching `ReferenceGrant`.
 - An Ingress with no load balancer provisioned in its status is treated as not serving traffic and is excluded. When a Gateway and an unprovisioned Ingress both target the same Service, the Gateway's exposure applies.
+- A `Service` of type `LoadBalancer` with a provisioned external address (and no internal-scheme annotation — GKE `networking.gke.io/load-balancer-type: Internal`, AWS `aws-load-balancer-scheme: internal`, Azure `azure-load-balancer-internal: "true"`) marks the pods it selects internet-reachable. This is how **ingress/gateway controller pods** (Traefik, ingress-nginx, Envoy) — which the load balancer forwards to directly — are detected, structurally, without naming the controller. The AWS ALB controller has no in-cluster data-path pod, so it is correctly not flagged.
+- A `Service` of type `NodePort` is **not** counted as internet-reachable by default, because node-IP reachability depends on the nodes having public IPs and permissive firewall rules — which the cluster can't determine. Set the label `vdr.fedramp.io/internet-reachable-nodePort: "true"` (or `"false"`) on the Service to classify it; when the label is absent the finding shows `nodeport` and its tooltip points to the label. (`true` makes it count toward IRV and the remediation deadline.)
 
 Normal init containers do not inherit internet exposure. Sidecar-style init containers inherit exposure only when their container restart policy is `Always`.
 
