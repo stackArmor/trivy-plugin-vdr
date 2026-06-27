@@ -11,6 +11,7 @@
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,backgrounds,calc}
 \usepackage[most]{tcolorbox}
+\usepackage{float}
 \usepackage[hidelinks]{hyperref}
 
 \emergencystretch=3em  % absorb the occasional unbreakable prose line
@@ -124,7 +125,7 @@ specification's \emph{Environmental} group. The Environmental group exists for
 exactly this purpose: to let the consuming organization re-score a vulnerability
 according to the criticality of the affected asset in \emph{its} environment.
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \renewcommand{\arraystretch}{1.25}
 \begin{tabular}{>{\raggedright\arraybackslash}p{0.44\textwidth} >{\raggedright\arraybackslash}p{0.44\textwidth}}
@@ -444,7 +445,7 @@ fictional Class~C, single-agency offering. The PAIN column is computed by the me
 above; the Classical Severity column is the scanner's qualitative rating, shown to
 make the decoupling explicit.
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
@@ -491,7 +492,7 @@ make the decoupling explicit.
 \label{fig:arch}
 \end{figure}
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \renewcommand{\arraystretch}{1.3}
 \setlength{\tabcolsep}{4pt}
@@ -524,7 +525,7 @@ than one agency's data, the scope flag is set on them, and the amplifier types
 \code{platform-foundation}) escalate accordingly. Table~\ref{tab:scand} shows the
 result: the same families of flaws now remediate in \emph{hours}.
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
@@ -568,7 +569,7 @@ agencies, so amplifier types escalate to multi-agency scope.}
 \label{fig:archd}
 \end{figure}
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \renewcommand{\arraystretch}{1.3}
 \setlength{\tabcolsep}{4pt}
@@ -644,7 +645,7 @@ each CSP to publish its own.
 \label{app:catalog}
 Illustrative only (see Section~\ref{sec:archetypes}). ``Amp'' marks scope amplifiers.
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \renewcommand{\arraystretch}{1.2}
 \footnotesize
@@ -679,7 +680,7 @@ Days; $0.5 = 12$ hours. Columns in order LEV+IRV / LEV+NIRV / NLEV. PAIN-1 has n
 FedRAMP deadline (any class). Values illustrative of a representative VDR-TFR-PVR
 profile.
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \footnotesize
 \renewcommand{\arraystretch}{1.2}
