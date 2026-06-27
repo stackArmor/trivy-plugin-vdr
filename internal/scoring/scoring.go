@@ -246,6 +246,11 @@ func (c *Config) validate() error {
 	if c.Defaults.Class != "" && normalizeClass(c.Defaults.Class) == "" {
 		return fmt.Errorf("defaults.class %q must be one of A, B, C, D", c.Defaults.Class)
 	}
+	if c.Defaults.Archetype != "" {
+		if _, ok := c.Archetypes[c.Defaults.Archetype]; !ok {
+			return fmt.Errorf("defaults.archetype %q is not a known archetype", c.Defaults.Archetype)
+		}
+	}
 	return nil
 }
 
