@@ -58,6 +58,88 @@ func TestCollectsWorkloadTemplateLabels(t *testing.T) {
 	requireResourceLabels(t, inv, "web", map[string]string{"app": "web", "tier": "frontend"})
 }
 
+func TestMergesWorkloadAndTemplateLabels(t *testing.T) {
+	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
+	// Workload-object labels (e.g. from Helm values.labels) plus pod-template labels;
+	// the pod template wins on a key conflict, the rest are unioned.
+	deploy.Labels = map[string]string{"vdr.fedramp.io/asset-archetype": "app-tier", "tier": "workload"}
+	deploy.Spec.Template.Labels = map[string]string{"app": "web", "tier": "template"}
+	client := fake.NewSimpleClientset(deploy)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	requireResourceLabels(t, inv, "web", map[string]string{
+		"vdr.fedramp.io/asset-archetype": "app-tier",
+		"app":                            "web",
+		"tier":                           "template", // template wins over workload
+	})
+}
+
+func TestCollectsNamespaceMetadata(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "prod",
+		Labels: map[string]string{"vdr.fedramp.io/class": "C", "vdr.fedramp.io/multi-agency": "true"},
+	}}
+	deploy := deployment("prod", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
+	client := fake.NewSimpleClientset(ns, deploy)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	got := inv.Namespaces["prod"]
+	want := map[string]string{"vdr.fedramp.io/class": "C", "vdr.fedramp.io/multi-agency": "true"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Namespaces[prod] = %#v, want %#v", got, want)
+	}
+}
+
+func TestCollectsClusterDefaultsConfigMap(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "vdr-fedramp"},
+		Data:       map[string]string{"class": "C", "multiAgency": "false"},
+	}
+	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
+	client := fake.NewSimpleClientset(cm, deploy)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if inv.ClusterDefaults["class"] != "C" || inv.ClusterDefaults["multiAgency"] != "false" {
+		t.Fatalf("ClusterDefaults = %#v, want class=C multiAgency=false", inv.ClusterDefaults)
+	}
+	for _, w := range inv.Warnings {
+		if strings.Contains(w, "vdr-fedramp") {
+			t.Errorf("unexpected ConfigMap warning when present: %q", w)
+		}
+	}
+}
+
+func TestWarnsWhenClusterConfigMapMissing(t *testing.T) {
+	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
+	client := fake.NewSimpleClientset(deploy) // no vdr-fedramp ConfigMap
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if inv.ClusterDefaults != nil {
+		t.Errorf("ClusterDefaults = %#v, want nil when ConfigMap absent", inv.ClusterDefaults)
+	}
+	found := false
+	for _, w := range inv.Warnings {
+		if strings.Contains(w, "kube-system/vdr-fedramp") && strings.Contains(w, "built-in defaults") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning about the missing ConfigMap, got %#v", inv.Warnings)
+	}
+}
+
 func TestCollectsStatefulSetImages(t *testing.T) {
 	client := fake.NewSimpleClientset(statefulSet("data", "db", podSpec(
 		container("postgres", "postgres:16"),

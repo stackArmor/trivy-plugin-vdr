@@ -153,17 +153,19 @@ func RenderJSON(w io.Writer, report model.Report) error {
 func RenderTable(w io.Writer, report model.Report) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if len(report.Resources) > 0 {
-		if _, err := fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tCONTAINER\tIMAGE\tEXPOSED\tFINDINGS"); err != nil {
+		if _, err := fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tCONTAINER\tIMAGE\tEXPOSED\tPAIN\tREMEDIATION\tFINDINGS"); err != nil {
 			return err
 		}
 		for _, resource := range report.Resources {
-			if _, err := fmt.Fprintf(tw, "%s\t%s/%s\t%s\t%s\t%s\t%d\n",
+			if _, err := fmt.Fprintf(tw, "%s\t%s/%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
 				resource.Resource.Namespace,
 				resource.Resource.Kind,
 				resource.Resource.Name,
 				resource.Resource.ContainerName,
 				formatResourceImages(resource.Images),
 				formatExposure(resource.Exposure),
+				worstPainTier(resource.Findings),
+				soonestRemediation(resource.Findings),
 				len(resource.Findings),
 			); err != nil {
 				return err
@@ -511,6 +513,37 @@ func formatEPSS(epss *model.EPSS) string {
 		return ""
 	}
 	return fmt.Sprintf("%.3f", epss.Score)
+}
+
+// worstPainTier returns the highest PAIN tier among a resource's findings.
+func worstPainTier(findings []model.Finding) string {
+	best := ""
+	bestRank := 0
+	for _, f := range findings {
+		if f.Pain == nil {
+			continue
+		}
+		if r := scoring.Rank(f.Pain.Tier); r > bestRank {
+			bestRank, best = r, f.Pain.Tier
+		}
+	}
+	return best
+}
+
+// soonestRemediation returns the shortest FedRAMP deadline among a resource's
+// findings (findings with no deadline are ignored).
+func soonestRemediation(findings []model.Finding) string {
+	best := ""
+	bestDays := math.Inf(1)
+	for _, f := range findings {
+		if f.Remediation == nil || f.Remediation.DeadlineDays < 0 {
+			continue
+		}
+		if f.Remediation.DeadlineDays < bestDays {
+			bestDays, best = f.Remediation.DeadlineDays, f.Remediation.Deadline
+		}
+	}
+	return best
 }
 
 func formatPain(pain *model.Pain) string {

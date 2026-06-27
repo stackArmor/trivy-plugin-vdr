@@ -12,7 +12,8 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Reserved future source subcommands named `ecs` and `image`.
 - JSON and table output mode flags.
 - Finding-centric and resource-centric view flags.
-- Optional standalone HTML report with per-finding remediation timelines (CISA SSVC) and filter controls for severity (multi-select), namespace, internet exposure, automatable, exploitation status, EPSS score, technical impact, and remediation timeline (both multi-select).
+- Per-finding FedRAMP Rev5 VDR **PAIN** (Potential Agency Impact, N1–N5) and **VDR-TFR-PVR** remediation deadline, driven by an asset-archetype classification (see [PAIN scoring and remediation](#pain-scoring-and-remediation)).
+- Optional standalone HTML report with per-finding PAIN and FedRAMP remediation deadlines, plus filter controls for severity (multi-select), PAIN, namespace, internet exposure, automatable, exploitation status, EPSS score, technical impact, and remediation deadline (multi-select).
 - Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
 - Automatic private-registry authentication from Kubernetes `imagePullSecrets`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
 - Resilient scanning: a single image that fails to pull or scan is reported as a warning and the run continues, producing a partial (still enriched) report.
@@ -35,6 +36,7 @@ trivy vdr k8s --no-gcloud-auth --no-ecr-auth
 trivy vdr k8s --quiet
 trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.html
 trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
+trivy vdr k8s --all-namespaces --scoring-config vdr-scoring.yaml
 ```
 
 Future source commands are reserved but not implemented yet: `trivy vdr ecs` and `trivy vdr image`.
@@ -99,20 +101,49 @@ JSON output defaults to a finding-centric report. Each finding includes `affecte
 
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
-Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a multi-select remediation-timeline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
+Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a PAIN filter, a multi-select remediation-deadline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
 
-Each finding shows a **Remediation** priority tier derived from the CISA SSVC decision table (publicly exposed, in KEV, automatable, technical impact). Hover any value for its exact timeline.
+Each finding shows its **PAIN** tier and a FedRAMP **Remediation** deadline (see [PAIN scoring and remediation](#pain-scoring-and-remediation)). Automatable, Exploitation, and Technical impact from CISA Vulnrichment are also shown for context; CVSS-derived Automatable and Technical impact values are rendered in italics with a `†` marker so they are distinguishable from authoritative Vulnrichment values. Hover any value or column header for an in-report explanation. Use `--html-template <path>` to override the template with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 
-Tiers (by deadline): **Emergency** (3 days + forensic triage), **Immediate** (3 days), **Urgent** (14 days), **High** (30 days), **Moderate** (60 days), **Low** (180 days), **Deferred** (fix on system upgrade).
+## PAIN scoring and remediation
 
-Every finding is scored by the SSVC table — there is no severity-based fallback tier. Each of the four inputs is resolved as follows, and any input that still cannot be determined defaults to its low end (not in KEV, not automatable, partial impact):
+Every finding is scored against the FedRAMP Rev5 VDR model: a **PAIN** rating (Potential Agency Impact, N1–N5) and a **VDR-TFR-PVR** remediation deadline. PAIN and the deadline appear in the JSON (`pain`, `remediation`), the table, and the HTML report.
 
-- *Publicly exposed* uses the computed internet exposure of the affected resource (always resolvable).
-- *In KEV* is true when the CVE's exploitation status is `active`, or — when exploitation is `poc`/`none`/unknown/absent — when its EPSS score exceeds 0.3; otherwise false.
-- *Automatable* is taken from CISA Vulnrichment when present (authoritative). When Vulnrichment has no record, it falls back to the CVSS base vector: automatable when `AV:N` or `AV:A`, `AC:L`, `PR:N`, and `UI:N` (~85% correlation with the authoritative SSVC value).
-- *Technical impact* is taken from CISA Vulnrichment when present (authoritative). When Vulnrichment has no record, it falls back to the CVSS base vector: **Total** when Confidentiality and Integrity are both `High` (full read+write authority), otherwise **Partial**. Availability and Scope do not change the outcome.
+### PAIN = f(severity, scope)
 
-CVSS-derived Automatable and Technical impact values are shown in italics with a `†` marker so they are distinguishable from authoritative CISA Vulnrichment values. Hover the **Remediation** column header for an in-report legend covering every tier and how each input is resolved. Use `--html-template <path>` to override the template with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
+- **Severity** is the CVE's CVSS impact vector (which of Confidentiality/Integrity/Availability it touches) re-weighted by the asset's `CR/IR/AR` requirements, which come from its **asset archetype**. CISA Vulnrichment **technical impact** refines this as a *floor*: when `total`, each in-scope CVSS dimension is raised to High before weighting; it never invents impact on a dimension the CVE does not touch, and `partial`/absent leaves the CVSS vector unchanged. The weighted impact maps to a word — Minimal → N1, Narrow → N2, Disruptive, Debilitating.
+- **Scope** is whether the asset serves one agency or more than one. Disruptive → N3 (single) / N4 (multi); Debilitating → N4 (single) / N5 (multi).
+
+### Asset archetypes
+
+An archetype assigns the `CR/IR/AR` requirements (e.g. `identity-secrets` and `data-backbone` are H/H/H, `app-tier` is M/M/H, `internal-tooling` is L/L/L). It is resolved most-specific-first:
+
+```
+workload label vdr.fedramp.io/asset-archetype
+  → namespace label
+  → name rule   (cluster ConfigMap; first match wins)
+  → namespace rule (cluster ConfigMap; first match wins)
+  → built-in "unclassified" cluster-default (H/H/H — noisy N4, surfaces for classification)
+```
+
+Tag workloads you control with `vdr.fedramp.io/asset-archetype: <archetype>`. Cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot carry the label are classified by name/namespace rules in the ConfigMap instead.
+
+### Remediation deadline
+
+```
+deadline = matrix[ Certification Class ][ PAIN ][ column ]
+  column = LEV+IRV | LEV+NIRV | NLEV
+  LEV (likely exploitable) = EPSS >= 0.70  OR  exploitation = active
+  IRV (internet reachable) = the affected resource is internet-reachable
+```
+
+So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively exploited asset. The EPSS LEV cutoff (0.70) is built into the plugin. PAIN-1 findings have no FedRAMP deadline. In the findings view the finding-level PAIN/deadline is the most urgent across all affected resources.
+
+### Cluster configuration
+
+The provider **Certification Class** (A/B/C/D), the **agency scope**, and the archetype **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in **`kube-system`** — no flag required. It carries the scalar keys `class` and `multiAgency`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (catalog, algorithm, EPSS threshold, and the `unclassified` default). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules).
+
+See [`examples/configmaps/`](examples/configmaps/) for starter GKE, EKS, and AKS ConfigMaps. The optional `--scoring-config <file>` flag layers a local YAML/JSON config under the ConfigMap for testing or non-cluster use.
 
 ## Exposure rules
 

@@ -307,6 +307,18 @@ namespaceRules:
 	}
 }
 
+func TestValidateRejectsUnknownDefaultArchetype(t *testing.T) {
+	cfg := Default()
+	cfg.Defaults.Archetype = "does-not-exist"
+	if err := cfg.validate(); err == nil {
+		t.Error("expected error for unknown defaults.archetype")
+	}
+	// The built-in default ("unclassified") is in the catalog, so it validates.
+	if err := Default().validate(); err != nil {
+		t.Errorf("built-in Default() should validate: %v", err)
+	}
+}
+
 func TestLoadRejectsUnknownArchetype(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "bad.yaml")
