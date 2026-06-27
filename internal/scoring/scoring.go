@@ -605,13 +605,16 @@ func normalizeReq(req string) string {
 	}
 }
 
+// wordFromScalar maps the normalized environmental impact scalar to a FedRAMP
+// customer-effect word. The cut points are the model's one calibratable judgment;
+// the Debilitating bar is set at 0.85.
 func wordFromScalar(s float64) string {
 	switch {
 	case s < 0.25:
 		return "Minimal"
 	case s < 0.55:
 		return "Narrow"
-	case s < 0.80:
+	case s < 0.85:
 		return "Disruptive"
 	default:
 		return "Debilitating"

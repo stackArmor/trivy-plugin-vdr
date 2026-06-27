@@ -307,6 +307,21 @@ namespaceRules:
 	}
 }
 
+func TestWordThresholds(t *testing.T) {
+	cases := []struct {
+		s    float64
+		want string
+	}{
+		{0.24, "Minimal"}, {0.25, "Narrow"}, {0.54, "Narrow"}, {0.55, "Disruptive"},
+		{0.80, "Disruptive"}, {0.84, "Disruptive"}, {0.85, "Debilitating"}, {1.0, "Debilitating"},
+	}
+	for _, c := range cases {
+		if got := wordFromScalar(c.s); got != c.want {
+			t.Errorf("wordFromScalar(%.2f) = %s, want %s", c.s, got, c.want)
+		}
+	}
+}
+
 func TestValidateRejectsUnknownDefaultArchetype(t *testing.T) {
 	cfg := Default()
 	cfg.Defaults.Archetype = "does-not-exist"
