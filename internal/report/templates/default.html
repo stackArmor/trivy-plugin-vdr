@@ -88,7 +88,7 @@
     </section>
 
     <section class="filters" aria-label="Filters">
-      <div class="filter"><span>Severity</span><div id="severity" class="checkboxes" role="group" aria-label="Severity"></div></div>
+      <div class="filter"><span>Classical severity</span><div id="severity" class="checkboxes" role="group" aria-label="Classical severity"></div></div>
       <label>PAIN (agency impact)<select id="pain"><option value="">All</option></select></label>
       <label>Namespace<select id="namespace"><option value="">All</option></select></label>
       <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
@@ -103,7 +103,7 @@
       <thead>
         <tr>
           <th>CVE</th>
-          <th>Severity</th>
+          <th>Classical Severity</th>
           <th>PAIN</th>
           <th>EPSS</th>
           <th>Namespace</th>
@@ -414,6 +414,19 @@
         render();
       });
     });
+    // Explain the Classical Severity column on hover of its header.
+    if (headerCells[1]) {
+      headerCells[1].title = [
+        "Classical Severity — the scanner's rolled-up CVSS base severity (qualitative).",
+        "It factors exploitability and scope and is independent of PAIN.",
+        "",
+        "PAIN instead uses only the CVSS impact vector (C/I/A) re-weighted by the",
+        "asset archetype's CR/IR/AR — so a 'LOW' CVE can still score high PAIN on a",
+        "high-requirement asset (e.g. an availability DoS on a data-backbone).",
+        "",
+        "Hover a value to see its CVSS vector."
+      ].join("\n");
+    }
     // Explain the PAIN column on hover of its header.
     if (headerCells[2]) {
       headerCells[2].title = [
@@ -555,6 +568,7 @@
           td.textContent = value;
           if (index === 1) {
             td.className = "sev-" + row.severity;
+            td.title = row.cvssVector ? ("CVSS vector: " + row.cvssVector) : "no CVSS vector";
           } else if (index === 2) {
             if (row.pain) {
               td.className = "pain-" + row.pain;
