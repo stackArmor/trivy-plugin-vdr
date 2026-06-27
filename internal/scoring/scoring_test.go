@@ -380,6 +380,28 @@ func TestConfigurableWordThresholds(t *testing.T) {
 	}
 }
 
+func TestClusterConfigMapCannotSetThresholds(t *testing.T) {
+	cfg := Default() // built-in 0.25/0.55/0.85
+	// A ConfigMap embedded doc that tries to lower the Debilitating bar must be ignored.
+	err := cfg.ApplyClusterDefaults(map[string]string{
+		"class":        "C",
+		"scoring.yaml": "wordThresholds:\n  debilitating: 0.50\nnameRules:\n  - {namespace: kube-system, match: \"calico*\", archetype: orchestrator}\n",
+	})
+	if err != nil {
+		t.Fatalf("ApplyClusterDefaults: %v", err)
+	}
+	if cfg.WordThresholds != defaultWordThresholds {
+		t.Errorf("ConfigMap changed thresholds to %+v; want built-in %+v (ConfigMap must not set thresholds)", cfg.WordThresholds, defaultWordThresholds)
+	}
+	// The rest of the ConfigMap still applies.
+	if cfg.Defaults.Class != "C" {
+		t.Errorf("Class = %s, want C (other ConfigMap keys still apply)", cfg.Defaults.Class)
+	}
+	if got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "calico-node"}).Archetype; got != "orchestrator" {
+		t.Errorf("nameRule from ConfigMap not applied: archetype=%s", got)
+	}
+}
+
 func TestValidateRejectsUnknownDefaultArchetype(t *testing.T) {
 	cfg := Default()
 	cfg.Defaults.Archetype = "does-not-exist"

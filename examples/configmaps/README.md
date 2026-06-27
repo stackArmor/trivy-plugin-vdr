@@ -32,18 +32,13 @@ The ConfigMap carries:
 - `scoring.yaml` — `nameRules` / `namespaceRules` assigning archetypes to the
   cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`,
   `amazon-cloudwatch`, `azure-*`, …) that cannot carry `vdr.fedramp.io/*` labels
-  because their managed reconcilers revert manual changes. The same `scoring.yaml`
-  can override any built-in default — including the calibratable PAIN word
-  thresholds (defaults shown):
+  because their managed reconcilers revert manual changes.
 
-  ```yaml
-  scoring.yaml: |
-    wordThresholds:
-      narrow: 0.25        # S below this is Minimal
-      disruptive: 0.55    # S at/above this is Disruptive
-      debilitating: 0.85  # S at/above this is Debilitating
-    nameRules: [ ... ]
-  ```
+> **Governance:** the calibratable PAIN word thresholds (`wordThresholds`) are
+> **not** read from this ConfigMap — a `wordThresholds` block in the ConfigMap's
+> `scoring.yaml` is ignored. They can only be changed via a governed
+> `--scoring-config` file (or left at the built-in defaults 0.25 / 0.55 / 0.85), so
+> the scoring calibration isn't altered by ad-hoc in-cluster edits.
 
 Workloads you control should instead carry the label directly:
 

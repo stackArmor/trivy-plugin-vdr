@@ -227,6 +227,11 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	if len(data) == 0 {
 		return nil
 	}
+	// The PAIN word thresholds are a governance/calibration decision and are
+	// intentionally NOT overridable from the in-cluster ConfigMap (which a cluster
+	// operator could change ad hoc); only --scoring-config or the built-in default
+	// may set them. Preserve whatever is already in effect across the merge.
+	savedThresholds := c.WordThresholds
 	for _, key := range []string{"scoring.yaml", "scoring", "config.yaml", "config"} {
 		doc, ok := data[key]
 		if !ok || strings.TrimSpace(doc) == "" {
@@ -237,6 +242,7 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 		}
 		break
 	}
+	c.WordThresholds = savedThresholds
 	if v := normalizeClass(data["class"]); v != "" {
 		c.Defaults.Class = v
 	}
