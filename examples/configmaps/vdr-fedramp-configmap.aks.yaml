@@ -1,0 +1,59 @@
+---
+# Example trivy-plugin-vdr scoring ConfigMap for an AKS cluster.
+#
+# The plugin reads kube-system/vdr-fedramp from the cluster automatically (no
+# --scoring-config flag needed) and deep-merges the embedded scoring.yaml over its
+# built-in rubric. The built-in rubric already provides the full archetype catalog,
+# the algorithm, the EPSS LEV threshold (0.70), and the H/H/H "unclassified"
+# cluster-default archetype for new/unclassified resources — so this file only
+# carries cluster-wide Class/scope and the rules for AKS-managed,
+# shared-responsibility components that cannot carry vdr.fedramp.io/* labels.
+#
+# If this ConfigMap is missing, the plugin warns and falls back to its built-in
+# defaults (Class B, single-agency, no tenant rules).
+#
+# Apply with:  kubectl apply -f vdr-fedramp-configmap.aks.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vdr-fedramp
+  namespace: kube-system
+data:
+  # --- cluster-wide scalars (override anything the embedded doc sets) ---
+  class: "B"            # set to your FedRAMP Certification Class: A, B, C, or D
+  multiAgency: "false"  # "true" if this cluster serves more than one agency
+
+  scoring.yaml: |
+    # First match wins. nameRules win over namespaceRules. namespace is an optional
+    # glob on the workload namespace; match is a glob on the workload name.
+    nameRules:
+      # Microsoft Entra Workload Identity / AAD pod identity credential broker.
+      - {namespace: kube-system, match: "azure-wi-webhook*", archetype: identity-secrets}
+      - {namespace: kube-system, match: "aad-pod-identity*", archetype: identity-secrets}
+      # Azure CNI dataplane, network policy, masq, and kube-proxy.
+      - {namespace: kube-system, match: "azure-cns*", archetype: orchestrator}
+      - {namespace: kube-system, match: "azure-npm*", archetype: orchestrator}
+      - {namespace: kube-system, match: "azure-ip-masq-agent*", archetype: orchestrator}
+      - {namespace: kube-system, match: kube-proxy, archetype: orchestrator}
+      - {namespace: kube-system, match: "konnectivity-agent*", archetype: orchestrator}
+      - {namespace: kube-system, match: "cloud-node-manager*", archetype: orchestrator}
+      # Storage CSI drivers (Azure Disk / File / Blob).
+      - {namespace: kube-system, match: "csi-*", archetype: orchestrator}
+      # Cluster DNS.
+      - {namespace: kube-system, match: "coredns*", archetype: app-tier}
+      # Azure Policy / Gatekeeper admission enforcement.
+      - {namespace: kube-system, match: "azure-policy*", archetype: security-tooling}
+      # Application Gateway Ingress Controller (provisions public app gateways).
+      - {namespace: kube-system, match: "ingress-appgw*", archetype: public-edge}
+
+    namespaceRules:
+      # OPA Gatekeeper policy enforcement.
+      - {match: gatekeeper-system, archetype: security-tooling}
+      # Calico network policy (if enabled).
+      - {match: calico-system, archetype: orchestrator}
+      # Azure Monitor / Container Insights and other Azure-managed add-on namespaces.
+      - {match: "azure-*", archetype: internal-tooling}
+      - {match: "aks-*", archetype: internal-tooling}
+      # Everything else in kube-system (metrics-server, ama-* agents, coredns
+      # autoscaler, etc.) is low-privilege node/observability infra.
+      - {match: kube-system, archetype: internal-tooling}
