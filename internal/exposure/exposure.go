@@ -66,6 +66,7 @@ func Analyze(inventory *model.Inventory, objects Objects) map[model.ResourceRef]
 	serviceExposures := make([]serviceExposure, 0)
 	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, backendConfigs)...)
 	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, gateways, awsGatewayPublic, gcpBackendPolicies, referenceGrants)...)
+	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services)...)
 
 	result := map[model.ResourceRef]model.Exposure{}
 	for _, item := range serviceExposures {
@@ -686,6 +687,126 @@ func applyWorkloadExposure(result map[model.ResourceRef]model.Exposure, resource
 		}
 		mergeExposure(result, ref, containerExposure)
 	}
+}
+
+// analyzeServiceExposure marks workloads fronted directly by an externally-scoped
+// Service. A type=LoadBalancer Service with a provisioned external address and no
+// internal-scheme annotation directly exposes the pods it selects -- this is how
+// ingress/gateway controller pods (Traefik, ingress-nginx, Envoy gateways) and any
+// directly-LB-published app become internet-reachable, independent of any Ingress
+// or Gateway resource. A NodePort Service is recorded as an advisory only: it is
+// reachable on node IPs, but whether that is internet-reachable depends on the
+// nodes having public IPs and permissive firewall/security-group rules, which is
+// not determinable from the cluster -- so it is deliberately NOT counted as
+// internet-reachable (it does not inflate IRV or the remediation deadline).
+func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
+	var exposures []serviceExposure
+	for _, svc := range services {
+		switch svc.Spec.Type {
+		case corev1.ServiceTypeLoadBalancer:
+			if !serviceHasLoadBalancerAddress(svc) {
+				continue // load balancer not provisioned yet
+			}
+			if internal, _ := serviceInternalLB(svc); internal {
+				continue // internal-scheme load balancer is not internet-reachable
+			}
+			exposures = append(exposures, serviceExposure{
+				serviceNamespace: svc.Namespace,
+				serviceName:      svc.Name,
+				exposure: model.Exposure{
+					InternetAccessible: true,
+					Provider:           lbProvider(svc),
+					RouteKind:          "Service/LoadBalancer",
+					RouteName:          svc.Name,
+					Evidence: []string{fmt.Sprintf(
+						"Service %s/%s is type=LoadBalancer with a provisioned external address (%s); the pods it selects are directly internet-reachable",
+						svc.Namespace, svc.Name, serviceLBAddress(svc))},
+				},
+			})
+		case corev1.ServiceTypeNodePort:
+			exposures = append(exposures, serviceExposure{
+				serviceNamespace: svc.Namespace,
+				serviceName:      svc.Name,
+				exposure: model.Exposure{
+					InternetAccessible: false,
+					RouteKind:          "Service/NodePort",
+					RouteName:          svc.Name,
+					Evidence: []string{fmt.Sprintf(
+						"Service %s/%s is type=NodePort (%s); reachable on node IPs only if nodes have public addresses and firewall/security-group rules permit -- not counted as internet-reachable. Verify node exposure.",
+						svc.Namespace, svc.Name, nodePortList(svc))},
+				},
+			})
+		}
+	}
+	return exposures
+}
+
+func serviceHasLoadBalancerAddress(svc corev1.Service) bool {
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.IP != "" || ing.Hostname != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func serviceLBAddress(svc corev1.Service) string {
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.Hostname != "" {
+			return ing.Hostname
+		}
+		if ing.IP != "" {
+			return ing.IP
+		}
+	}
+	return "external"
+}
+
+// serviceInternalLB reports whether a type=LoadBalancer Service is scoped to an
+// internal (non-internet) load balancer, via the well-known per-cloud annotations.
+func serviceInternalLB(svc corev1.Service) (bool, string) {
+	get := func(k string) string { return strings.ToLower(strings.TrimSpace(svc.Annotations[k])) }
+	switch {
+	case get("networking.gke.io/load-balancer-type") == "internal":
+		return true, "GKE internal load balancer"
+	case get("cloud.google.com/load-balancer-type") == "internal":
+		return true, "GKE (legacy) internal load balancer"
+	case get("service.beta.kubernetes.io/aws-load-balancer-scheme") == "internal":
+		return true, "AWS internal load balancer"
+	case get("service.beta.kubernetes.io/aws-load-balancer-internal") == "true",
+		get("service.beta.kubernetes.io/aws-load-balancer-internal") == "0.0.0.0/0":
+		return true, "AWS (legacy) internal load balancer"
+	case get("service.beta.kubernetes.io/azure-load-balancer-internal") == "true":
+		return true, "Azure internal load balancer"
+	}
+	return false, ""
+}
+
+func lbProvider(svc corev1.Service) string {
+	for k := range svc.Annotations {
+		switch {
+		case strings.Contains(k, "aws-load-balancer"):
+			return "aws"
+		case strings.Contains(k, "gke.io"), strings.Contains(k, "cloud.google.com"):
+			return "gcp"
+		case strings.Contains(k, "azure-load-balancer"):
+			return "azure"
+		}
+	}
+	return ""
+}
+
+func nodePortList(svc corev1.Service) string {
+	var ports []string
+	for _, p := range svc.Spec.Ports {
+		if p.NodePort != 0 {
+			ports = append(ports, fmt.Sprintf("%d", p.NodePort))
+		}
+	}
+	if len(ports) == 0 {
+		return "node ports"
+	}
+	return "node ports " + strings.Join(ports, ",")
 }
 
 func mergeExposure(result map[model.ResourceRef]model.Exposure, ref model.ResourceRef, exposure model.Exposure) {

@@ -578,6 +578,70 @@ func TestResourceInventoryRequiresLabelsForSelectorResolution(t *testing.T) {
 	}
 }
 
+func TestAnalyzeLoadBalancerServiceExposesControllerPods(t *testing.T) {
+	// An ingress-nginx controller is reached via its own type=LoadBalancer Service,
+	// not via any Ingress backend. The LB Service should mark the controller pods
+	// internet-reachable.
+	svc := service("ingress-nginx", "ingress-nginx-controller", map[string]string{"app.kubernetes.io/component": "controller"})
+	svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "203.0.113.10"}}
+	inv := inventoryWithWorkload("ingress-nginx", "ingress-nginx-controller",
+		map[string]string{"app.kubernetes.io/component": "controller"},
+		containerImage("controller", "registry.k8s.io/ingress-nginx/controller:v1"))
+
+	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
+	ref := resourceRef("ingress-nginx", "ingress-nginx-controller", "controller", "container", "")
+	if !got[ref].InternetAccessible {
+		t.Fatalf("controller pod should be internet-reachable via type=LoadBalancer; got %+v", got[ref])
+	}
+	if got[ref].RouteKind != "Service/LoadBalancer" {
+		t.Errorf("RouteKind = %q, want Service/LoadBalancer", got[ref].RouteKind)
+	}
+}
+
+func TestAnalyzeInternalLoadBalancerServiceNotExposed(t *testing.T) {
+	svc := serviceWithAnnotations("default", "internal-lb", map[string]string{"app": "x"},
+		map[string]string{"networking.gke.io/load-balancer-type": "Internal"})
+	svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.5"}}
+	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+
+	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
+	ref := resourceRef("default", "x", "app", "container", "")
+	if got[ref].InternetAccessible {
+		t.Errorf("internal-scheme LB must not be internet-reachable; got %+v", got[ref])
+	}
+}
+
+func TestAnalyzeUnprovisionedLoadBalancerServiceNotExposed(t *testing.T) {
+	svc := service("default", "lb", map[string]string{"app": "x"})
+	svc.Spec.Type = corev1.ServiceTypeLoadBalancer // no Status address yet
+	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+
+	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
+	ref := resourceRef("default", "x", "app", "container", "")
+	if got[ref].InternetAccessible {
+		t.Errorf("unprovisioned LB must not be internet-reachable; got %+v", got[ref])
+	}
+}
+
+func TestAnalyzeNodePortServiceIsAdvisoryNotInternetReachable(t *testing.T) {
+	svc := service("default", "np", map[string]string{"app": "x"})
+	svc.Spec.Type = corev1.ServiceTypeNodePort
+	svc.Spec.Ports = []corev1.ServicePort{{Port: 80, NodePort: 30080}}
+	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+
+	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
+	ref := resourceRef("default", "x", "app", "container", "")
+	ex := got[ref]
+	if ex.InternetAccessible {
+		t.Errorf("NodePort must not be counted internet-reachable")
+	}
+	if ex.RouteKind != "Service/NodePort" || len(ex.Evidence) == 0 {
+		t.Errorf("NodePort should be recorded as an advisory with evidence; got %+v", ex)
+	}
+}
+
 func inventoryWithWorkload(namespace, name string, labels map[string]string, images ...model.ContainerImage) *model.Inventory {
 	return &model.Inventory{
 		Resources: []model.ResourceInventory{{
