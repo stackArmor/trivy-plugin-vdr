@@ -325,8 +325,12 @@ authenticates every request before it reaches the workload --- is treated as
 \emph{not} internet-reachable (NIRV), on the view that an unauthenticated attacker
 cannot reach the vulnerable surface. (How a given platform's routes and edge
 authentication are discovered is an implementation concern, out of scope here.)
-The day-valued tables are given in Appendix~\ref{app:matrix}. PAIN-1 carries no
-FedRAMP deadline.
+
+Both the exploitation state here and the technical impact in
+Section~\ref{sec:math} are sourced from \emph{CISA Vulnrichment}, an Authorized Data
+Publisher (ADP) in the CVE Program; that choice is itself a design opinion (see
+Appendix~\ref{app:opinions}). The day-valued tables are given in
+Appendix~\ref{app:matrix}. PAIN-1 carries no FedRAMP deadline.
 
 \section{Worked examples}
 \begin{plain}
@@ -751,6 +755,15 @@ and the fact that an implementation \rfckw{may} change it.
   invents impact on a dimension the CVE marks None, and ``partial''/absent leaves the
   vector unchanged. (An earlier draft made technical impact primary with CVSS as the
   fallback; we reversed that.)
+\item \textbf{CISA Vulnrichment as the authoritative enrichment source.} The
+  exploitation state (active / PoC / none) and the technical impact (total / partial)
+  are taken from \emph{CISA Vulnrichment}, CISA's Authorized Data Publisher (ADP)
+  enrichment of CVE records. Deferring to an ADP's assessment --- rather than a
+  bespoke or purely commercial judgment --- keeps these inputs authoritative and
+  governed; an adopter \rfckw{may} substitute or augment with another source (a
+  vendor SSVC decision, a commercial threat-intelligence feed, or the CISA KEV
+  catalog). EPSS, by contrast, supplies the statistical exploitation \emph{likelihood}
+  (item~2); the two are complementary.
 \item \textbf{Scope-amplifier escalation.} Certain archetypes (shared infrastructure)
   are flagged amplifiers and escalate to multi-agency scope when the offering serves
   more than one agency, regardless of the per-asset tag (Eq.~\ref{eq:scope}). This is
