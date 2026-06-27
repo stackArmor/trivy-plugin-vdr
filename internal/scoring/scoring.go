@@ -72,11 +72,22 @@ type Defaults struct {
 	Class       string `json:"class" yaml:"class"`
 }
 
+// WordThresholds are the (calibratable) cut points on the normalized
+// environmental impact scalar S (0..1) that map it to a FedRAMP customer-effect
+// word: S < Narrow => Minimal; < Disruptive => Narrow; < Debilitating =>
+// Disruptive; else Debilitating. Must be strictly ascending within (0, 1].
+type WordThresholds struct {
+	Narrow       float64 `json:"narrow" yaml:"narrow"`
+	Disruptive   float64 `json:"disruptive" yaml:"disruptive"`
+	Debilitating float64 `json:"debilitating" yaml:"debilitating"`
+}
+
 // Config is the full scoring rubric.
 type Config struct {
 	Archetypes     map[string]Archetype `json:"archetypes" yaml:"archetypes"`
 	LabelKeys      LabelKeys            `json:"labelKeys" yaml:"labelKeys"`
 	Defaults       Defaults             `json:"defaults" yaml:"defaults"`
+	WordThresholds WordThresholds       `json:"wordThresholds" yaml:"wordThresholds"`
 	NamespaceRules []NamespaceRule      `json:"namespaceRules" yaml:"namespaceRules"`
 	NameRules      []NameRule           `json:"nameRules" yaml:"nameRules"`
 	// MultiAgencyNamespaces are namespace globs whose workloads are treated as
@@ -179,6 +190,7 @@ func Default() *Config {
 			Archetype:   "unclassified",
 			Class:       "B",
 		},
+		WordThresholds:            defaultWordThresholds,
 		LEVEPSSThreshold:          0.70,
 		CSOServesMultipleAgencies: false,
 	}
@@ -257,6 +269,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("defaults.archetype %q is not a known archetype", c.Defaults.Archetype)
 		}
 	}
+	if t := c.WordThresholds; t != (WordThresholds{}) {
+		if !(t.Narrow > 0 && t.Narrow < t.Disruptive && t.Disruptive < t.Debilitating && t.Debilitating <= 1) {
+			return fmt.Errorf("wordThresholds must be strictly ascending within (0,1]: got narrow=%g disruptive=%g debilitating=%g", t.Narrow, t.Disruptive, t.Debilitating)
+		}
+	}
 	return nil
 }
 
@@ -281,7 +298,7 @@ func (c *Config) Score(in Input) Result {
 	cr, ir, ar := weight(a.CR), weight(a.IR), weight(a.AR)
 	isc := 1 - ((1 - cImp*cr) * (1 - iImp*ir) * (1 - aImp*ar))
 	s := math.Min(isc, 0.915) / 0.915
-	word := wordFromScalar(s)
+	word := c.wordFromScalar(s)
 
 	multi := c.resolveMultiAgency(in.Namespace, in.Labels, in.NamespaceLabels)
 	effectiveMulti := multi || forceMulti || (a.Amplifier && c.CSOServesMultipleAgencies)
@@ -611,16 +628,25 @@ func normalizeReq(req string) string {
 	}
 }
 
+// defaultWordThresholds is the built-in calibration: Minimal < 0.25, Narrow <
+// 0.55, Disruptive < 0.85, else Debilitating. The cut points are the model's one
+// calibratable judgment and may be overridden via config (wordThresholds).
+var defaultWordThresholds = WordThresholds{Narrow: 0.25, Disruptive: 0.55, Debilitating: 0.85}
+
 // wordFromScalar maps the normalized environmental impact scalar to a FedRAMP
-// customer-effect word. The cut points are the model's one calibratable judgment;
-// the Debilitating bar is set at 0.85.
-func wordFromScalar(s float64) string {
+// customer-effect word using the configured thresholds, falling back to the
+// built-in defaults when they are unset (zero-value config).
+func (c *Config) wordFromScalar(s float64) string {
+	t := c.WordThresholds
+	if t.Narrow == 0 && t.Disruptive == 0 && t.Debilitating == 0 {
+		t = defaultWordThresholds
+	}
 	switch {
-	case s < 0.25:
+	case s < t.Narrow:
 		return "Minimal"
-	case s < 0.55:
+	case s < t.Disruptive:
 		return "Narrow"
-	case s < 0.85:
+	case s < t.Debilitating:
 		return "Disruptive"
 	default:
 		return "Debilitating"

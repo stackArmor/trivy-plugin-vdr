@@ -328,6 +328,7 @@ func TestPlatformFoundationArchetype(t *testing.T) {
 }
 
 func TestWordThresholds(t *testing.T) {
+	cfg := Default()
 	cases := []struct {
 		s    float64
 		want string
@@ -336,9 +337,46 @@ func TestWordThresholds(t *testing.T) {
 		{0.80, "Disruptive"}, {0.84, "Disruptive"}, {0.85, "Debilitating"}, {1.0, "Debilitating"},
 	}
 	for _, c := range cases {
-		if got := wordFromScalar(c.s); got != c.want {
+		if got := cfg.wordFromScalar(c.s); got != c.want {
 			t.Errorf("wordFromScalar(%.2f) = %s, want %s", c.s, got, c.want)
 		}
+	}
+	// Zero-value config falls back to the built-in thresholds (never all-Debilitating).
+	if got := (&Config{}).wordFromScalar(0.5); got != "Narrow" {
+		t.Errorf("zero-value config wordFromScalar(0.5) = %s, want Narrow (fallback)", got)
+	}
+}
+
+func TestConfigurableWordThresholds(t *testing.T) {
+	// Override only the Debilitating bar; the rest keep their defaults.
+	cfg := Default()
+	cfg.WordThresholds.Debilitating = 0.95
+	if got := cfg.wordFromScalar(0.90); got != "Disruptive" {
+		t.Errorf("with Debilitating=0.95, S=0.90 = %s, want Disruptive", got)
+	}
+	if got := cfg.wordFromScalar(0.96); got != "Debilitating" {
+		t.Errorf("with Debilitating=0.95, S=0.96 = %s, want Debilitating", got)
+	}
+
+	// Loaded from a config file (partial override merges over defaults).
+	dir := t.TempDir()
+	file := filepath.Join(dir, "t.yaml")
+	if err := os.WriteFile(file, []byte("wordThresholds:\n  debilitating: 0.90\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(file)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.WordThresholds.Narrow != 0.25 || loaded.WordThresholds.Disruptive != 0.55 || loaded.WordThresholds.Debilitating != 0.90 {
+		t.Errorf("merged thresholds = %+v, want narrow=0.25 disruptive=0.55 debilitating=0.90", loaded.WordThresholds)
+	}
+
+	// Non-ascending thresholds are rejected.
+	bad := Default()
+	bad.WordThresholds = WordThresholds{Narrow: 0.6, Disruptive: 0.5, Debilitating: 0.85}
+	if err := bad.validate(); err == nil {
+		t.Error("expected error for non-ascending wordThresholds")
 	}
 }
 
