@@ -697,18 +697,6 @@ column --- carries real exploitation probability and earns a tighter clock than
 genuinely quiet vulnerabilities ($\le 0.30$); and the $>0.75$ / actively-exploited
 flaws earn a clock tighter than today's single LEV tier provides.
 
-\paragraph{Do we add PAIN levels N6--N8? Our judgment: no.} It is tempting to extend
-the N1--N5 scale to absorb the new urgency, but that would conflate the two axes the
-method deliberately keeps separate. \textbf{PAIN is the \emph{impact} axis} --- how
-badly exploitation would hurt the agency --- and N1--N5 already exhausts FedRAMP's
-customer-effect definitions (there is no impact beyond ``Debilitating on more than
-one agency''). \textbf{Exploitability is a separate axis}, already expressed as the
-remediation \emph{column}. VLEV therefore adds a \emph{more-urgent column}, not new
-rows: PAIN stays N1--N5 and stays aligned with FedRAMP's existing definitions, while
-the deadline keys on (Class, PAIN, \emph{exploitability band}, reachability). An
-``N7'' would have no coherent meaning on the impact axis, so we keep impact and
-likelihood orthogonal.
-
 \paragraph{Effect on the timelines, by Class.} VLEV introduces a new tightest column
 --- roughly half the current LEV+IRV deadline, floored at 12 hours. The existing LEV
 deadlines carry over to the new $0.30$--$0.75$ band, and NLEV (now $\le 0.30$) keeps
