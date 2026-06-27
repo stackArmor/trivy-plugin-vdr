@@ -39,8 +39,10 @@ data:
       - {namespace: kube-system, match: "cloud-node-manager*", archetype: orchestrator}
       # Storage CSI drivers (Azure Disk / File / Blob).
       - {namespace: kube-system, match: "csi-*", archetype: orchestrator}
-      # Cluster DNS.
-      - {namespace: kube-system, match: "coredns*", archetype: app-tier}
+      # Cluster DNS. platform-foundation is for METADATA-ONLY foundation services
+      # (DNS/NTP/discovery/plain L4 LBs): CR:L (recon only), IR:H, AR:H. Anything
+      # that terminates TLS or sees payload belongs in app-tier instead.
+      - {namespace: kube-system, match: "coredns*", archetype: platform-foundation}
       # Azure Policy / Gatekeeper admission enforcement.
       - {namespace: kube-system, match: "azure-policy*", archetype: security-tooling}
       # Application Gateway Ingress Controller (provisions public app gateways).

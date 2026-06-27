@@ -307,6 +307,26 @@ namespaceRules:
 	}
 }
 
+func TestPlatformFoundationArchetype(t *testing.T) {
+	cfg := Default()
+	a, ok := cfg.Archetypes["platform-foundation"]
+	if !ok {
+		t.Fatal("platform-foundation archetype missing from built-in catalog")
+	}
+	if a.CR != "L" || a.IR != "H" || a.AR != "H" || !a.Amplifier {
+		t.Errorf("platform-foundation = %+v, want CR:L IR:H AR:H amplifier:true", a)
+	}
+	lbl := map[string]string{"vdr.fedramp.io/asset-archetype": "platform-foundation"}
+	// Availability DoS (A:H) => N4 single-agency (DNS outage is debilitating).
+	if got := cfg.Score(Input{CVSSVector: vecDoSHigh, Labels: lbl}).Tier; got != "N4" {
+		t.Errorf("A:H DoS Tier = %s, want N4", got)
+	}
+	// Confidentiality-only High (C:H) => N2 (metadata recon only, CR:L).
+	if got := cfg.Score(Input{CVSSVector: vecConfHi, Labels: lbl}).Tier; got != "N2" {
+		t.Errorf("C:H Tier = %s, want N2 (CR:L)", got)
+	}
+}
+
 func TestWordThresholds(t *testing.T) {
 	cases := []struct {
 		s    float64
