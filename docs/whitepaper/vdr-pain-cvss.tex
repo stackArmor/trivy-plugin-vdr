@@ -1,0 +1,511 @@
+\documentclass[11pt]{article}
+
+\usepackage[letterpaper,margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[table,dvipsnames]{xcolor}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,backgrounds,calc}
+\usepackage[hidelinks]{hyperref}
+
+\emergencystretch=3em  % absorb the occasional unbreakable prose line
+
+% --- palette ---
+\definecolor{crit}{HTML}{C0392B}
+\definecolor{high}{HTML}{E67E22}
+\definecolor{med}{HTML}{F1C40F}
+\definecolor{low}{HTML}{27AE60}
+\definecolor{infoblue}{HTML}{2C3E50}
+\definecolor{tagbg}{HTML}{ECF0F1}
+\definecolor{rule}{HTML}{BDC3C7}
+
+\newcommand{\tagn}[1]{{\footnotesize\ttfamily #1}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\rfckw}[1]{\textsc{#1}}
+
+\title{\bfseries A Deterministic, CVSS--Environmental Method for\\
+FedRAMP Rev5 VDR/VER Vulnerability Prioritization}
+\author{stackArmor \\ \small Draft Whitepaper / Request for Comments}
+\date{June 2026 \quad\textbar\quad Status: Informational Draft}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+FedRAMP Rev5 introduces a Vulnerability Disclosure Report (VDR) and Vulnerability
+Evaluation Requirements (VER) that define \emph{Potential Agency Impact} (PAIN,
+levels N1--N5) and a remediation--timeframe matrix, together with evaluation rules
+for likely exploitability and internet reachability. FedRAMP deliberately does
+\emph{not} prescribe how to derive a PAIN level from an individual vulnerability on
+a specific asset. This memo argues that the missing classifier already exists, in
+standardized form, as the \textbf{Environmental metric group of CVSS}: the
+Confidentiality, Integrity and Availability \emph{Requirements} (CR/IR/AR) and the
+Modified Impact Sub-Score were designed precisely to re-weight a vulnerability's
+impact by what is at stake in a given deployment. We present a closed-form,
+reproducible mapping from FedRAMP's requirements onto CVSS Environmental metrics,
+derive PAIN and the remediation deadline from it, and give fully worked
+calculations. We also present an \emph{example} mechanism --- ``asset archetypes''
+--- for assigning CR/IR/AR systematically, while emphasizing that each Cloud Service
+Provider (CSP) \rfckw{should} derive its own assignment from its system
+categorization. A reference architecture and a sample scan complete the memo.
+\end{abstract}
+
+\tableofcontents
+
+\section{Status of This Memo and Terminology}
+This document is an informational draft circulated for comment. It does not define
+a FedRAMP requirement; it proposes a standardized \emph{method} for satisfying
+existing VDR/VER requirements.
+
+The key words \rfckw{must}, \rfckw{must not}, \rfckw{should}, \rfckw{should not},
+and \rfckw{may} are to be interpreted as described in RFC~2119.
+
+\begin{description}[leftmargin=1.5em,style=nextline]
+\item[PAIN] Potential Agency Impact, the FedRAMP N1--N5 rating of a finding.
+\item[CR/IR/AR] The CVSS Environmental Confidentiality / Integrity / Availability
+  \emph{Requirements} of an asset.
+\item[ISC] Impact Sub-Score (here, the CVSS \emph{Modified} Impact Sub-Score).
+\item[LEV / NLEV] Likely Exploitable / Not Likely Exploitable (a VER axis).
+\item[IRV / NIRV] Internet Reachable / Not Internet Reachable (a VER axis).
+\item[Class] The provider Certification Class (A--D) selecting a remediation table.
+\end{description}
+
+\section{Motivation: the gap between VDR/VER and the scanner}
+A vulnerability scanner emits, per finding, a CVE identifier, a qualitative
+severity, and (often) a CVSS Base vector. FedRAMP Rev5 VDR/VER, by contrast, asks
+the provider to answer a different question: \emph{what is the potential impact on
+the agency if this vulnerability is exploited on this asset, and how quickly must
+it therefore be remediated?} The two are not the same. A ``Low''-rated CVE on a
+crown-jewel datastore can carry more agency impact than a ``High''-rated CVE on a
+throwaway sandbox.
+
+FedRAMP supplies the \emph{output} vocabulary (the PAIN buckets and the remediation
+matrix) and the \emph{evaluation axes} (likely-exploitable, internet-reachable) but
+leaves the \emph{classifier} --- the function from (CVE, asset) to PAIN --- to the
+provider. An ad-hoc or analyst-by-analyst classifier is neither reproducible nor
+defensible. This memo supplies a deterministic one.
+
+\section{Key insight: FedRAMP's requirements are CVSS Environmental metrics}
+The central claim of this memo is that FedRAMP's notion of ``impact on the agency''
+maps, almost one-to-one, onto metrics that already exist in the CVSS v3.1
+specification's \emph{Environmental} group. The Environmental group exists for
+exactly this purpose: to let the consuming organization re-score a vulnerability
+according to the criticality of the affected asset in \emph{its} environment.
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.44\textwidth} >{\raggedright\arraybackslash}p{0.44\textwidth}}
+\toprule
+\textbf{FedRAMP VDR/VER concept} & \textbf{CVSS mechanism that satisfies it} \\
+\midrule
+Asset data sensitivity / FIPS-199 C-I-A categorization & Security Requirements
+\code{CR}, \code{IR}, \code{AR} \\
+Magnitude of potential agency impact & Modified Impact Sub-Score (\code{ISC}) \\
+Likely exploitable (VER) & \code{LEV}: exploit maturity / EPSS threshold \\
+Internet reachable (VER) & \code{IRV}: deployment/network context \\
+Single- vs.\ multi-agency blast radius & scope multiplier on the PAIN tier \\
+Provider Certification Class & selector of the remediation deadline table \\
+\bottomrule
+\end{tabular}
+\caption{FedRAMP requirements fall directly onto CVSS Environmental metrics.}
+\end{table}
+
+The consequence is that a conforming implementation need not invent a bespoke
+risk algebra. It need only (a) assign each asset its CR/IR/AR, and (b) evaluate the
+two VER axes. The arithmetic that turns those inputs into a defensible impact
+magnitude is the published CVSS Environmental formula.
+
+\section{The model}
+We define PAIN as a function of a \emph{severity} term and a \emph{scope} term:
+\[
+\text{PAIN}(\text{finding}) \;=\; f\big(\,\text{SEVERITY},\ \text{SCOPE}\,\big).
+\]
+\textbf{SEVERITY} answers ``how badly does this vulnerability's impact land on
+\emph{this} asset?'' --- the CVE's impact metrics re-weighted by the asset's
+CR/IR/AR. \textbf{SCOPE} answers ``how many agencies' data does the asset hold?''
+--- single (1) or multiple ($>1$). SEVERITY is mapped to a FedRAMP customer-effect
+word (Minimal, Narrow, Disruptive, Debilitating); the word and scope together
+select the N-level.
+
+\section{The mathematics}
+\label{sec:math}
+All constants below are taken \emph{verbatim} from the CVSS v3.1 specification; only
+the normalization and the word thresholds (Section~\ref{sec:thresholds}) are
+additions.
+
+\paragraph{Impact metric weights.}
+Each of the affected vulnerability's Confidentiality, Integrity and Availability
+impact metrics ($C$, $I$, $A$), read from the CVSS Base vector, takes a weight:
+\[
+C, I, A \in \{\,\text{None}=0,\quad \text{Low}=0.22,\quad \text{High}=0.56\,\}.
+\]
+
+\paragraph{Security Requirement weights.}
+Each asset's Requirement (CR, IR, AR) takes a multiplier:
+\[
+\mathrm{CR},\mathrm{IR},\mathrm{AR} \in \{\,\text{Low}=0.5,\quad \text{Medium}=1.0,\quad \text{High}=1.5\,\}.
+\]
+
+\paragraph{Modified Impact Sub-Score.}
+The per-dimension impacts and requirements combine as a probabilistic union --- the
+share of the asset left uncompromised on each dimension is multiplied, and the
+complement is the overall impact:
+\begin{equation}
+\mathrm{ISC} \;=\; \min\!\Big[\,1 - \big(1 - C\!\cdot\!\mathrm{CR}\big)\big(1 - I\!\cdot\!\mathrm{IR}\big)\big(1 - A\!\cdot\!\mathrm{AR}\big),\ \ 0.915\,\Big].
+\label{eq:isc}
+\end{equation}
+The cap $0.915 = 1-(1-0.56)^3$ is the CVSS ceiling (all-High impact at Medium
+requirements). We then normalize to a unit scalar:
+\begin{equation}
+S \;=\; \frac{\mathrm{ISC}}{0.915} \ \in\ [0,1].
+\label{eq:s}
+\end{equation}
+
+\paragraph{Severity word.}
+\label{sec:thresholds}
+$S$ is bucketed into a FedRAMP customer-effect word by three cut points
+$(\theta_1,\theta_2,\theta_3)$:
+\begin{equation}
+W(S) \;=\;
+\begin{cases}
+\text{Minimal} & S < \theta_1 \\
+\text{Narrow} & \theta_1 \le S < \theta_2 \\
+\text{Disruptive} & \theta_2 \le S < \theta_3 \\
+\text{Debilitating} & S \ge \theta_3
+\end{cases}
+\qquad (\theta_1,\theta_2,\theta_3) = (0.25,\ 0.55,\ 0.85).
+\label{eq:word}
+\end{equation}
+The cut points are the model's \emph{one} calibratable judgment. They
+\rfckw{should} be documented and back-tested against analyst-rated findings, and an
+implementation \rfckw{must} treat them as governed configuration rather than an
+in-band, ad-hoc setting.
+
+\paragraph{Scope and the N-level.}
+Let $m \in \{0,1\}$ be the asset's multi-agency flag. Some asset classes are
+\emph{scope amplifiers} (shared infrastructure whose compromise crosses tenant
+boundaries); for those, an offering that itself serves more than one agency
+($\textsc{cso}_{>1}$) is treated as multi-agency regardless of the per-asset flag:
+\begin{equation}
+m^{*} \;=\; m \ \lor\ \big(\text{amplifier} \ \land\ \textsc{cso}_{>1}\big).
+\label{eq:scope}
+\end{equation}
+The N-level follows from the word and effective scope:
+\begin{equation}
+\text{PAIN} =
+\begin{cases}
+\text{N1} & W=\text{Minimal} \\
+\text{N2} & W=\text{Narrow} \\
+\text{N3} & W=\text{Disruptive},\ m^{*}=0 \\
+\text{N4} & W=\text{Disruptive},\ m^{*}=1 \ \ \text{or}\ \ W=\text{Debilitating},\ m^{*}=0 \\
+\text{N5} & W=\text{Debilitating},\ m^{*}=1
+\end{cases}
+\label{eq:pain}
+\end{equation}
+
+\paragraph{Technical-impact floor (optional refinement).}
+Where an authoritative source (e.g.\ CISA Vulnrichment SSVC) provides a
+\emph{technical impact} of \code{total}, the impacts that the CVE \emph{does} touch
+may be floored to High before Eq.~\eqref{eq:isc}:
+\[
+\hat{X} = \begin{cases} 0.56 & X>0 \ \text{and}\ \text{tech.\ impact}=\code{total} \\ X & \text{otherwise} \end{cases}
+\qquad X \in \{C,I,A\}.
+\]
+Crucially the floor \rfckw{must not} invent impact on a dimension the CVE marks
+None ($X=0$ stays $0$); \code{partial} or absent leaves the vector unchanged.
+
+\section{Fail-safe behavior}
+Missing metadata \rfckw{must not} \emph{lower} PAIN. An asset that carries no
+classification \rfckw{should} resolve to a deliberately conservative default
+(e.g.\ CR/IR/AR all High), which scores loudly and surfaces the asset for
+classification rather than hiding it. ``Unknown'' is treated as ``serious until
+proven otherwise.''
+
+\section{Remediation: the VDR-TFR-PVR matrix}
+\label{sec:remediation}
+The remediation deadline is selected by three values: the provider Certification
+Class, the PAIN level, and an exploitability \emph{column} derived from the two VER
+axes:
+\[
+\text{deadline} = M\big[\,\text{Class}\,\big]\big[\,\text{PAIN}\,\big]\big[\,\text{column}\,\big],
+\qquad
+\text{column} \in \{\,\text{LEV+IRV},\ \text{LEV+NIRV},\ \text{NLEV}\,\}.
+\]
+where, for a provider-selected EPSS threshold $\theta_{\text{epss}}$ (this memo uses
+$0.70$):
+\[
+\text{LEV} \;=\; \big(\text{EPSS} \ge \theta_{\text{epss}}\big)\ \lor\ \big(\text{exploitation} = \text{active}\big),
+\qquad
+\text{IRV} = \text{asset is internet-reachable}.
+\]
+The day-valued tables are given in Appendix~\ref{app:matrix}. PAIN-1 carries no
+FedRAMP deadline.
+
+\section{Worked examples}
+We use $C,I,A$ for impacts and CR/IR/AR for requirements; all arithmetic follows
+Eqs.~\eqref{eq:isc}--\eqref{eq:pain}.
+
+\paragraph{Example 1 --- RCE on a crown-jewel datastore, multi-agency.}
+$C\!=\!I\!=\!A\!=\!0.56$ (High), CR=IR=AR=$1.5$ (High), $m=1$.
+\begin{align*}
+\mathrm{ISC} &= \min\!\big[\,1-(1-0.84)^3,\ 0.915\,\big] = \min[\,0.9959,\ 0.915\,] = 0.915, \\
+S &= 0.915/0.915 = 1.000 \;\Rightarrow\; W=\text{Debilitating}, \\
+m^{*}&=1 \;\Rightarrow\; \boxed{\text{N5}}.
+\end{align*}
+
+\paragraph{Example 2 --- the same CVE on a sandbox, single-agency.}
+$C\!=\!I\!=\!A\!=\!0.56$, CR=IR=AR=$0.5$ (Low), $m=0$.
+\begin{align*}
+\mathrm{ISC} &= 1-(1-0.28)^3 = 1-0.72^3 = 0.6268, \\
+S &= 0.6268/0.915 = 0.685 \;\Rightarrow\; \text{Disruptive} \;\Rightarrow\; \boxed{\text{N3}}.
+\end{align*}
+Identical vulnerability, opposite ends of the matrix --- the asset half of the
+score (CR/IR/AR) is doing the work.
+
+\paragraph{Example 3 --- availability-only DoS on a message backbone.}
+A CVE with $C\!=\!0,\ I\!=\!0,\ A\!=\!0.56$ (e.g.\ a parser DoS), on an asset with
+CR=IR=AR=$1.5$, $m=0$. EPSS $=0.76$, not internet-reachable.
+\begin{align*}
+\mathrm{ISC} &= 1-(1-0)(1-0)(1-0.84) = 1-0.16 = 0.84, \\
+S &= 0.84/0.915 = 0.918 \;\Rightarrow\; W=\text{Debilitating},\ m^{*}=0 \;\Rightarrow\; \boxed{\text{N4}}.
+\end{align*}
+The single dimension $A\!\cdot\!\mathrm{AR}=0.84$ alone clears the Debilitating bar.
+Remediation: LEV (EPSS $\ge 0.70$) $\land$ NIRV; at Class C this is
+$M[\text{C}][\text{N4}][\text{LEV+NIRV}] = 8$ days. Note this finding may carry a
+\emph{Low} vendor severity --- PAIN is decoupled from the qualitative label.
+
+\paragraph{Example 4 --- information disclosure on a metadata-only service.}
+$C\!=\!0.56,\ I\!=\!0,\ A\!=\!0$, on an asset with CR=$0.5$ (Low), IR=AR=$1.5$.
+\begin{align*}
+\mathrm{ISC} &= 1-(1-0.28)(1)(1) = 0.28, \\
+S &= 0.28/0.915 = 0.306 \;\Rightarrow\; W=\text{Narrow} \;\Rightarrow\; \boxed{\text{N2}}.
+\end{align*}
+A confidentiality leak on a service that holds only operational metadata is
+reconnaissance, not a debilitating breach --- captured by the low CR.
+
+\paragraph{Example 5 --- the technical-impact floor.}
+A ``weak'' RCE with $C\!=\!I\!=\!A\!=\!0.22$ (Low) on a High/High/High asset,
+single-agency. Without the floor:
+\(
+\mathrm{ISC}=1-(1-0.33)^3=0.699,\ S=0.764\Rightarrow\text{Disruptive}\Rightarrow\text{N3}.
+\)
+If an authoritative source reports technical impact \code{total}, the touched
+dimensions floor to $0.56$, giving $S=1.0 \Rightarrow \text{Debilitating}
+\Rightarrow \boxed{\text{N4}}$.
+
+\section{Assigning CR/IR/AR: archetypes (an example, not a standard)}
+\label{sec:archetypes}
+The model in Section~\ref{sec:math} is only as good as the CR/IR/AR assignment that
+feeds it. Assigning requirements per individual asset does not scale and invites
+drift. A practical mechanism is to define a small catalog of \emph{asset
+archetypes}, each carrying a fixed CR/IR/AR and an amplifier flag, and to tag each
+asset with one archetype.
+
+\begin{quote}\itshape
+The archetype catalog in Appendix~\ref{app:catalog} is illustrative. A conforming
+implementation \rfckw{must} derive its CR/IR/AR assignment from its own system
+categorization (FIPS-199 impact levels, data inventory, authorization boundary). It
+\rfckw{may} adopt the example catalog as a starting point, but each CSP
+\rfckw{should} own and justify its mapping. Two providers with different data
+inventories can legitimately assign the same software different requirements.
+\end{quote}
+
+The classification rule we recommend is \emph{control-plane lens first}: if an
+asset can deploy, orchestrate, hold cross-estate credentials, or actuate
+configuration, classify it by that control function regardless of the data it
+stores; otherwise classify by the data it holds. The same physical software lands
+in different archetypes by role --- an in-memory store used as a cache is
+\code{app-tier}, the same software used as a session/token store is
+\code{identity-secrets}, and used as a job broker is \code{data-backbone}.
+
+\section{Determinism, governance, and defensibility}
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Determinism.} Given the same (CVE vector, archetype, VER axes), the
+  method yields the same PAIN and deadline on every run and for every analyst.
+\item \textbf{Two human inputs only.} An asset needs exactly two tags
+  (\code{asset-archetype}, \code{multi-agency}); everything else is derived.
+\item \textbf{Governed calibration.} The word thresholds
+  (Eq.~\eqref{eq:word}) and the EPSS threshold are the only tunable knobs and
+  \rfckw{must} live in governed configuration, not in ad-hoc cluster state.
+\item \textbf{Auditability.} Each finding can carry the full derivation: the
+  resolved archetype and its source, CR/IR/AR, $S$, the word, the scope, and the
+  selected matrix cell.
+\end{itemize}
+
+\section{Reference architecture and sample scan}
+Figure~\ref{fig:arch} shows a representative deployment with each component tagged
+by archetype. Table~\ref{tab:scan} shows the corresponding per-finding output for a
+fictional Class~C, single-agency offering. The PAIN column is computed by the method
+above; the Classical Severity column is the scanner's qualitative rating, shown to
+make the decoupling explicit.
+
+\begin{figure}[h]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\sffamily\small,
+  node distance=10mm and 14mm,
+  box/.style={draw=rule,rounded corners,fill=white,minimum height=9mm,minimum width=24mm,align=center,thick},
+  edge/.style={-{Stealth[length=2mm]},draw=infoblue,thick},
+  tag/.style={font=\ttfamily\scriptsize,fill=tagbg,inner sep=1.5pt,rounded corners}
+]
+\node[box] (net) {Internet};
+\node[box,below=of net] (ing) {Ingress / LB};
+\node[box,below=of ing] (web) {Web frontend};
+\node[box,right=26mm of web] (auth) {Auth + Redis\\(sessions)};
+\node[box,below=of web] (api) {API service};
+\node[box,below=of api] (kafka) {Kafka};
+\node[box,right=26mm of kafka] (pg) {Postgres};
+\node[box,left=22mm of api] (dns) {CoreDNS};
+\node[box,left=22mm of kafka] (cicd) {CI/CD runner};
+\node[box,right=26mm of auth] (siem) {SIEM / EDR};
+
+\draw[edge] (net) -- (ing);
+\draw[edge] (ing) -- (web);
+\draw[edge] (web) -- (api);
+\draw[edge] (web) -- (auth);
+\draw[edge] (api) -- (kafka);
+\draw[edge] (api) -- (pg);
+\draw[edge] (kafka) -- (pg);
+\draw[edge,dashed] (cicd) -- (api);
+\draw[edge,dashed] (dns) -- (api);
+
+\node[tag,below=0.5mm of net.south] {n/a};
+\node[tag,below=0.5mm of ing.south] {public-edge};
+\node[tag,below=0.5mm of web.south] {app-tier};
+\node[tag,below=0.5mm of auth.south] {identity-secrets};
+\node[tag,below=0.5mm of api.south] {app-tier};
+\node[tag,below=0.5mm of kafka.south] {data-backbone};
+\node[tag,below=0.5mm of pg.south] {data-sensitive};
+\node[tag,below=0.5mm of dns.south] {platform-foundation};
+\node[tag,below=0.5mm of cicd.south] {cicd-pipeline};
+\node[tag,below=0.5mm of siem.south] {security-tooling};
+\end{tikzpicture}%
+}
+\caption{Reference architecture; each node carries its \code{asset-archetype} tag.}
+\label{fig:arch}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{5pt}
+\footnotesize
+\begin{tabular}{l l c c c c r}
+\toprule
+\textbf{CVE} & \textbf{Resource (archetype)} & \textbf{Classical} & \textbf{EPSS} & \textbf{Internet} & \textbf{PAIN} & \textbf{Remediation} \\
+\midrule
+CVE-2026-1001 & ingress \tagn{(public-edge)}        & \cellcolor{crit!25}CRITICAL & 0.97 & yes & \cellcolor{high!35}N4 & 4 days \\
+CVE-2026-1002 & payments-db \tagn{(data-sensitive)} & \cellcolor{crit!25}CRITICAL & 0.94 & no  & \cellcolor{high!35}N4 & 8 days \\
+CVE-2026-1003 & redis \tagn{(identity-secrets)}     & \cellcolor{high!25}HIGH     & 0.50 & no  & \cellcolor{high!35}N4 & 64 days \\
+CVE-2026-1004 & kafka \tagn{(data-backbone)}        & \cellcolor{low!30}LOW       & 0.76 & no  & \cellcolor{high!35}N4 & 8 days \\
+CVE-2026-1005 & web \tagn{(app-tier)}               & \cellcolor{med!35}MEDIUM    & 0.20 & yes & \cellcolor{med!35}N3 & 128 days \\
+CVE-2026-1006 & coredns \tagn{(platform-foundation)}& \cellcolor{med!35}MEDIUM    & 0.08 & no  & \cellcolor{low!30}N2 & 192 days \\
+\bottomrule
+\end{tabular}
+\caption{Sample VDR scan output (fictional data; Class~C, single-agency). PAIN is
+computed from the archetype's CR/IR/AR and the CVE impact vector; the deadline is
+$M[\text{C}][\text{PAIN}][\text{column}]$. Note CVE-2026-1004: a \emph{Low} vendor
+severity still yields N4 because it is an availability-High DoS on a
+High-availability-requirement asset (Example~3).}
+\label{tab:scan}
+\end{table}
+
+\section{Relationship to CVSS v4.0}
+\label{sec:v4}
+This method is expressed in CVSS v3.1 terms because the v3.1 Environmental group
+provides a closed-form Modified Impact Sub-Score (Eq.~\eqref{eq:isc}) with explicit
+CR/IR/AR multipliers. CVSS v4.0 reworks impact into Vulnerable-System
+(\code{VC/VI/VA}) and Subsequent-System (\code{SC/SI/SA}) metrics, removes the
+\code{Scope} metric, and scores via a lookup ``MacroVector'' rather than a formula;
+CR/IR/AR persist but feed that lookup. A v4.0-only finding can be \emph{approximated}
+by mapping \code{VC/VI/VA} onto $C/I/A$ in Eq.~\eqref{eq:isc}, at the cost of
+ignoring Subsequent-System impact. While NVD remains v3.1-dominant, an
+implementation \rfckw{should} prefer the v3.1 vector and \rfckw{may} treat v4.0 via
+this approximation until a native v4.0 environmental scorer is warranted.
+
+\section{Security Considerations}
+The method's integrity depends on the trustworthiness of two inputs: the asset
+archetype tags and the VER axes (EPSS / exploitation / reachability). Tag spoofing
+that \emph{lowers} an archetype is a downgrade attack; the fail-safe default and
+governed calibration mitigate accidental under-classification, but tag assignment
+\rfckw{should} be controlled like any other security configuration. The method does
+not detect vulnerabilities; it prioritizes the output of a scanner and inherits that
+scanner's coverage and accuracy.
+
+\section{Conclusion}
+FedRAMP Rev5 VDR/VER specifies the vocabulary and the axes of vulnerability
+prioritization but leaves the classifier unspecified. That classifier need not be
+invented: the CVSS Environmental metric group already encodes ``re-weight impact by
+what is at stake,'' which is precisely the agency-impact question. By assigning each
+asset its CR/IR/AR --- via archetypes or any other systematic scheme the CSP owns
+--- and evaluating the two VER axes, a provider obtains a deterministic, auditable,
+and standards-grounded PAIN and remediation deadline for every finding. We offer the
+example archetype catalog not as a standard but as an existence proof; we encourage
+each CSP to publish its own.
+
+\appendix
+\section{Example archetype catalog}
+\label{app:catalog}
+Illustrative only (see Section~\ref{sec:archetypes}). ``Amp'' marks scope amplifiers.
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.2}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l l c c c c >{\raggedright\arraybackslash}p{0.30\textwidth}}
+\toprule
+\textbf{Archetype} & \textbf{Lens} & \textbf{CR} & \textbf{IR} & \textbf{AR} & \textbf{Amp} & \textbf{Typical members} \\
+\midrule
+\code{cicd-pipeline}      & control & H & H & H & \checkmark & build/deploy runners, artifact signing, registries \\
+\code{orchestrator}       & control & H & H & H & \checkmark & control plane, etcd, scheduler, coordination \\
+\code{config-actuation}   & control & H & H & H & \checkmark & IaC/GitOps, schema registry, admin/migration \\
+\code{identity-secrets}   & control & H & H & H & \checkmark & IdP/SSO, KMS, secrets managers, session stores \\
+\code{security-tooling}   & control & H & H & M &            & scanners, SIEM, EDR, runtime security \\
+\code{change-record}      & control & M & M & M &            & ITSM/ticketing (record only) \\
+\code{platform-foundation}& control & L & H & H & \checkmark & DNS, NTP, service discovery, L4 internal LBs (metadata only) \\
+\code{data-sensitive}     & data    & H & H & H &            & PII/CUI datastores \\
+\code{data-backbone}      & data    & H & H & H & \checkmark & queues, brokers, the system-of-record DB \\
+\code{app-tier}           & data    & M & M & H &            & stateless services, APIs, UIs, caches \\
+\code{batch-analytics}    & data    & M & M & L &            & ETL, reporting, analytics jobs \\
+\code{public-edge}        & data    & L & L & H &            & load balancers, public web, ingress \\
+\code{internal-tooling}   & data    & L & L & L &            & dashboards, metrics/log agents \\
+\code{dev-test}           & data    & L & L & L &            & non-production \\
+\midrule
+\code{unclassified}       & ---     & H & H & H &            & fail-safe default for untagged assets \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Remediation deadline matrices}
+\label{app:matrix}
+Days; $0.5 = 12$ hours. Columns in order LEV+IRV / LEV+NIRV / NLEV. PAIN-1 has no
+FedRAMP deadline (any class). Values illustrative of a representative VDR-TFR-PVR
+profile.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{l ccc @{\hspace{2em}} ccc @{\hspace{2em}} ccc}
+\toprule
+& \multicolumn{3}{c}{\textbf{Class A / B}} & \multicolumn{3}{c}{\textbf{Class C}} & \multicolumn{3}{c}{\textbf{Class D}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}
+\textbf{PAIN} & L+I & L+N & NLEV & L+I & L+N & NLEV & L+I & L+N & NLEV \\
+\midrule
+N5 & 4  & 8   & 32  & 2  & 4   & 16  & 0.5 & 1  & 8  \\
+N4 & 8  & 32  & 64  & 4  & 8   & 64  & 2   & 8  & 32 \\
+N3 & 32 & 64  & 192 & 16 & 32  & 128 & 8   & 16 & 64 \\
+N2 & 96 & 160 & 192 & 48 & 128 & 192 & 24  & 96 & 192 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}
