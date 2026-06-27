@@ -28,15 +28,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Archetype maps an asset class to its CVSS environmental requirements and
-// whether it is a "scope amplifier" (shared infrastructure whose compromise
-// crosses tenant boundaries).
+// Archetype maps an asset class to its CVSS environmental requirements.
 type Archetype struct {
-	Lens      string `json:"lens" yaml:"lens"`
-	CR        string `json:"cr" yaml:"cr"`
-	IR        string `json:"ir" yaml:"ir"`
-	AR        string `json:"ar" yaml:"ar"`
-	Amplifier bool   `json:"amplifier" yaml:"amplifier"`
+	Lens string `json:"lens" yaml:"lens"`
+	CR   string `json:"cr" yaml:"cr"`
+	IR   string `json:"ir" yaml:"ir"`
+	AR   string `json:"ar" yaml:"ar"`
 }
 
 // NamespaceRule assigns an archetype to all workloads in namespaces matching a
@@ -96,10 +93,6 @@ type Config struct {
 	// LEVEPSSThreshold is the EPSS score at or above which a finding is considered
 	// Likely Exploitable (LEV). FedRAMP leaves the framework to the provider.
 	LEVEPSSThreshold float64 `json:"levEpssThreshold" yaml:"levEpssThreshold"`
-	// CSOServesMultipleAgencies enables the scope-amplifier effect: when true,
-	// amplifier archetypes are treated as multi-agency regardless of their tag.
-	// Single-tenant offerings leave this false.
-	CSOServesMultipleAgencies bool `json:"csoServesMultipleAgencies" yaml:"csoServesMultipleAgencies"`
 }
 
 // Input describes one finding-on-asset to be scored.
@@ -154,31 +147,31 @@ type Result struct {
 func Default() *Config {
 	return &Config{
 		Archetypes: map[string]Archetype{
-			"cicd-pipeline":    {Lens: "control", CR: "H", IR: "H", AR: "H", Amplifier: true},
-			"orchestrator":     {Lens: "control", CR: "H", IR: "H", AR: "H", Amplifier: true},
-			"config-actuation": {Lens: "control", CR: "H", IR: "H", AR: "H", Amplifier: true},
-			"identity-secrets": {Lens: "control", CR: "H", IR: "H", AR: "H", Amplifier: true},
-			"security-tooling": {Lens: "control", CR: "H", IR: "H", AR: "M", Amplifier: false},
-			"change-record":    {Lens: "control", CR: "M", IR: "M", AR: "M", Amplifier: false},
+			"cicd-pipeline":    {Lens: "control", CR: "H", IR: "H", AR: "H"},
+			"orchestrator":     {Lens: "control", CR: "H", IR: "H", AR: "H"},
+			"config-actuation": {Lens: "control", CR: "H", IR: "H", AR: "H"},
+			"identity-secrets": {Lens: "control", CR: "H", IR: "H", AR: "H"},
+			"security-tooling": {Lens: "control", CR: "H", IR: "H", AR: "M"},
+			"change-record":    {Lens: "control", CR: "M", IR: "M", AR: "M"},
 			// platform-foundation: estate-wide connectivity/discovery/time services
 			// (DNS, NTP, service discovery, plain L4 internal load balancers) that hold
 			// only operational metadata. Low confidentiality (recon value only), but
 			// High integrity (poisoning/redirect) and Availability (outage). Metadata
 			// only — TLS-terminating / payload-handling proxies belong in app-tier.
-			"platform-foundation": {Lens: "control", CR: "L", IR: "H", AR: "H", Amplifier: true},
-			"data-sensitive":      {Lens: "data", CR: "H", IR: "H", AR: "H", Amplifier: false},
-			"data-backbone":       {Lens: "data", CR: "H", IR: "H", AR: "H", Amplifier: true},
-			"app-tier":            {Lens: "data", CR: "M", IR: "M", AR: "H", Amplifier: false},
-			"batch-analytics":     {Lens: "data", CR: "M", IR: "M", AR: "L", Amplifier: false},
-			"public-edge":         {Lens: "data", CR: "L", IR: "L", AR: "H", Amplifier: false},
-			"internal-tooling":    {Lens: "data", CR: "L", IR: "L", AR: "L", Amplifier: false},
-			"dev-test":            {Lens: "data", CR: "L", IR: "L", AR: "L", Amplifier: false},
+			"platform-foundation": {Lens: "control", CR: "L", IR: "H", AR: "H"},
+			"data-sensitive":      {Lens: "data", CR: "H", IR: "H", AR: "H"},
+			"data-backbone":       {Lens: "data", CR: "H", IR: "H", AR: "H"},
+			"app-tier":            {Lens: "data", CR: "M", IR: "M", AR: "H"},
+			"batch-analytics":     {Lens: "data", CR: "M", IR: "M", AR: "L"},
+			"public-edge":         {Lens: "data", CR: "L", IR: "L", AR: "H"},
+			"internal-tooling":    {Lens: "data", CR: "L", IR: "L", AR: "L"},
+			"dev-test":            {Lens: "data", CR: "L", IR: "L", AR: "L"},
 			// unclassified is the built-in cluster-default archetype for new or
 			// otherwise-unclassified resources: CR/IR/AR=High so they score loudly
 			// (single-agency H/H/H lands at PAIN-4 on a high-impact CVE) and surface
 			// for deliberate classification, without forcing the multi-agency N5
-			// fail-safe. Not an amplifier.
-			"unclassified": {Lens: "control", CR: "H", IR: "H", AR: "H", Amplifier: false},
+			// fail-safe.
+			"unclassified": {Lens: "control", CR: "H", IR: "H", AR: "H"},
 		},
 		LabelKeys: LabelKeys{
 			Archetype:   "vdr.fedramp.io/asset-archetype",
@@ -190,9 +183,8 @@ func Default() *Config {
 			Archetype:   "unclassified",
 			Class:       "B",
 		},
-		WordThresholds:            defaultWordThresholds,
-		LEVEPSSThreshold:          0.70,
-		CSOServesMultipleAgencies: false,
+		WordThresholds:   defaultWordThresholds,
+		LEVEPSSThreshold: 0.70,
 	}
 }
 
@@ -295,7 +287,7 @@ func (c *Config) Score(in Input) Result {
 		// Fail-safe: an unclassified asset is treated as CR/IR/AR=High and
 		// multi-agency=true, which floors the finding toward N5. Missing metadata
 		// never lowers PAIN; it surfaces the asset for classification.
-		a = Archetype{Lens: "control", CR: "H", IR: "H", AR: "H", Amplifier: true}
+		a = Archetype{Lens: "control", CR: "H", IR: "H", AR: "H"}
 		arch = c.Defaults.Archetype
 		forceMulti = true
 	}
@@ -307,7 +299,7 @@ func (c *Config) Score(in Input) Result {
 	word := c.wordFromScalar(s)
 
 	multi := c.resolveMultiAgency(in.Namespace, in.Labels, in.NamespaceLabels)
-	effectiveMulti := multi || forceMulti || (a.Amplifier && c.CSOServesMultipleAgencies)
+	effectiveMulti := multi || forceMulti
 	tier := tierFromWord(word, effectiveMulti)
 
 	// Remediation: FedRAMP VDR-TFR-PVR matrix[Class][PAIN][column].
