@@ -672,6 +672,77 @@ governed calibration mitigate accidental under-classification, but tag assignmen
 not detect vulnerabilities; it prioritizes the output of a scanner and inherits that
 scanner's coverage and accuracy.
 
+\section{Proposal: a finer exploitability gradation (VLEV) for FedRAMP}
+\label{sec:proposal}
+\begin{plain}
+This section is forward-looking --- a proposal we would bring to FedRAMP, not part of
+the method as implemented today. Right now ``exploitability'' is a single yes/no
+line. We suggest splitting it into three bands so the very tightest remediation
+clocks are reserved for the flaws most likely to actually be used in the wild.
+\end{plain}
+
+\paragraph{The added inflection point.} The current model uses one EPSS cut to split
+Likely-Exploitable (LEV) from Not (NLEV). We propose \emph{two} cuts and three bands:
+\begin{itemize}[leftmargin=1.5em,nosep,topsep=3pt]
+\item \textbf{NLEV} --- $\text{EPSS} \le 0.30$: not likely exploitable.
+\item \textbf{LEV} --- $0.30 < \text{EPSS} \le 0.75$: likely exploitable.
+\item \textbf{VLEV} --- $\text{EPSS} > 0.75$: \emph{very} likely exploitable.
+\end{itemize}
+\textbf{Observed active exploitation always maps to VLEV}, regardless of EPSS: if
+CISA Vulnrichment reports \code{exploitation = active} (KEV-equivalent), the flaw is
+being used \emph{now} and belongs in the most-urgent band by definition.
+
+The payoff is twofold. The $0.30$--$0.75$ band --- today swept into the slow NLEV
+column --- carries real exploitation probability and earns a tighter clock than
+genuinely quiet vulnerabilities ($\le 0.30$); and the $>0.75$ / actively-exploited
+flaws earn a clock tighter than today's single LEV tier provides.
+
+\paragraph{Do we add PAIN levels N6--N8? Our judgment: no.} It is tempting to extend
+the N1--N5 scale to absorb the new urgency, but that would conflate the two axes the
+method deliberately keeps separate. \textbf{PAIN is the \emph{impact} axis} --- how
+badly exploitation would hurt the agency --- and N1--N5 already exhausts FedRAMP's
+customer-effect definitions (there is no impact beyond ``Debilitating on more than
+one agency''). \textbf{Exploitability is a separate axis}, already expressed as the
+remediation \emph{column}. VLEV therefore adds a \emph{more-urgent column}, not new
+rows: PAIN stays N1--N5 and stays aligned with FedRAMP's existing definitions, while
+the deadline keys on (Class, PAIN, \emph{exploitability band}, reachability). An
+``N7'' would have no coherent meaning on the impact axis, so we keep impact and
+likelihood orthogonal.
+
+\paragraph{Effect on the timelines, by Class.} VLEV introduces a new tightest column
+--- roughly half the current LEV+IRV deadline, floored at 12 hours. The existing LEV
+deadlines carry over to the new $0.30$--$0.75$ band, and NLEV (now $\le 0.30$) keeps
+its relaxed deadline. The proposed VLEV+IRV floor:
+
+\begin{table}[H]
+\centering
+\footnotesize
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{l ccc}
+\toprule
+& \multicolumn{3}{c}{\textbf{Proposed VLEV+IRV deadline, days --- (current LEV+IRV)}} \\
+\cmidrule(lr){2-4}
+\textbf{PAIN} & \textbf{Class A/B} & \textbf{Class C} & \textbf{Class D} \\
+\midrule
+N5 & 2 \,(4)   & 1 \,(2)   & 0.5 \,(0.5) \\
+N4 & 4 \,(8)   & 2 \,(4)   & 1 \,(2) \\
+N3 & 16 \,(32) & 8 \,(16)  & 4 \,(8) \\
+N2 & 48 \,(96) & 24 \,(48) & 12 \,(24) \\
+\bottomrule
+\end{tabular}
+\caption{Proposed VLEV+IRV remediation floor by Class (current LEV+IRV in
+parentheses); days, $0.5 = 12$ hours. The new LEV band ($0.30$--$0.75$ EPSS) inherits
+today's LEV deadlines; NLEV ($\le 0.30$) is unchanged; the NIRV variants relax by the
+same factor as today. PAIN-1 still carries no FedRAMP deadline.}
+\end{table}
+
+\noindent Net effect: actively-exploited and $>0.75$-EPSS flaws on high-PAIN,
+internet-reachable assets compress toward \emph{hours} at the stricter Classes, while
+the broad $0.30$--$0.75$ middle band --- previously treated as ``not likely'' ---
+moves onto a real clock. Mechanically this is additive: the remediation matrix is
+already a config-driven \code{[Class][PAIN][column]} lookup, so VLEV is one more
+column, not a redesign.
+
 \section{Conclusion}
 FedRAMP Rev5 VDR/VER specifies the vocabulary and the axes of vulnerability
 prioritization but leaves the classifier unspecified. That classifier need not be
