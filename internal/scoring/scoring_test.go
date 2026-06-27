@@ -14,12 +14,10 @@ const (
 	vecConfHi  = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" // confidentiality
 )
 
-// TestWorkedExamples reproduces the six worked examples published in the VDR
-// Confluence strategy page (PAIN expected N5/N3/N2/N5/N4/N5).
+// TestWorkedExamples reproduces the worked examples published in the VDR
+// Confluence strategy page (PAIN expected N5/N3/N2/N5/N4/N4).
 func TestWorkedExamples(t *testing.T) {
 	cfg := Default()
-	// The amplifier example (#4) assumes the offering serves more than one agency.
-	cfg.CSOServesMultipleAgencies = true
 
 	cases := []struct {
 		name     string
@@ -44,8 +42,8 @@ func TestWorkedExamples(t *testing.T) {
 			wantS: 0.36, wantWord: "Narrow", wantTier: "N2",
 		},
 		{
-			name:  "4 RCE on cicd-pipeline amplifier single",
-			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "cicd-pipeline", "vdr.fedramp.io/multi-agency": "false"}},
+			name:  "4 RCE on cicd-pipeline tagged multi-agency",
+			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "cicd-pipeline", "vdr.fedramp.io/multi-agency": "true"}},
 			wantS: 1.00, wantWord: "Debilitating", wantTier: "N5",
 		},
 		{
@@ -107,15 +105,16 @@ func TestFailSafeForcesN5WhenNoDefault(t *testing.T) {
 	}
 }
 
-func TestSingleTenantAmplifierDoesNotFloorN5(t *testing.T) {
-	cfg := Default() // CSOServesMultipleAgencies=false (single-tenant)
-	// cicd-pipeline is an amplifier, but single-tenant => amplifier inert.
+func TestSingleAgencyControlPlaneCapsAtN4(t *testing.T) {
+	cfg := Default()
+	// A control-plane H/H/H archetype tagged single-agency caps at N4 (Debilitating,
+	// one agency); only an explicit multi-agency tag reaches N5.
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Labels: map[string]string{
 		"vdr.fedramp.io/asset-archetype": "cicd-pipeline",
 		"vdr.fedramp.io/multi-agency":    "false",
 	}})
 	if got.Tier != "N4" {
-		t.Errorf("Tier = %s, want N4 (single-tenant amplifier must not reach N5)", got.Tier)
+		t.Errorf("Tier = %s, want N4 (single-agency must not reach N5)", got.Tier)
 	}
 }
 
@@ -313,8 +312,8 @@ func TestPlatformFoundationArchetype(t *testing.T) {
 	if !ok {
 		t.Fatal("platform-foundation archetype missing from built-in catalog")
 	}
-	if a.CR != "L" || a.IR != "H" || a.AR != "H" || !a.Amplifier {
-		t.Errorf("platform-foundation = %+v, want CR:L IR:H AR:H amplifier:true", a)
+	if a.CR != "L" || a.IR != "H" || a.AR != "H" {
+		t.Errorf("platform-foundation = %+v, want CR:L IR:H AR:H", a)
 	}
 	lbl := map[string]string{"vdr.fedramp.io/asset-archetype": "platform-foundation"}
 	// Availability DoS (A:H) => N4 single-agency (DNS outage is debilitating).

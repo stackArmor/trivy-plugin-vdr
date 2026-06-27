@@ -162,7 +162,7 @@ type Pain struct {
 	CR              string  `json:"cr"`                       // confidentiality requirement (L|M|H)
 	IR              string  `json:"ir"`                       // integrity requirement (L|M|H)
 	AR              string  `json:"ar"`                       // availability requirement (L|M|H)
-	MultiAgency     bool    `json:"multiAgency"`              // effective scope used (incl. amplifier/fail-safe)
+	MultiAgency     bool    `json:"multiAgency"`              // effective scope used (incl. fail-safe)
 }
 
 type Report struct {
