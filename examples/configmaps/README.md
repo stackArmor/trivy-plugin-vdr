@@ -71,5 +71,14 @@ your cluster (the lists here cover the common managed components). Put specific
 rules before broad globs. Valid archetype names:
 
 `cicd-pipeline`, `orchestrator`, `config-actuation`, `identity-secrets`,
-`security-tooling`, `change-record`, `data-sensitive`, `data-backbone`, `app-tier`,
-`batch-analytics`, `public-edge`, `internal-tooling`, `dev-test`.
+`security-tooling`, `change-record`, `platform-foundation`, `data-sensitive`,
+`data-backbone`, `app-tier`, `batch-analytics`, `public-edge`, `internal-tooling`,
+`dev-test`.
+
+> **Note:** `platform-foundation` (CR:L, IR:H, AR:H) is for **metadata-only**
+> foundation services the whole estate depends on — DNS, NTP, service discovery,
+> plain L4 internal load balancers. Its low confidentiality requirement assumes the
+> service sees only operational metadata (names, times, the call graph), not
+> payload. Anything that **terminates TLS or handles request payload** (an internal
+> LB doing TLS termination, a service-mesh sidecar that sees plaintext) should be
+> `app-tier` or higher instead.

@@ -135,7 +135,7 @@ type Result struct {
 	RemediationLabel string  // human-readable deadline (e.g. "12 hours", "32 days")
 }
 
-// Default returns the built-in rubric: the archetype catalog (13 named archetypes
+// Default returns the built-in rubric: the archetype catalog (14 named archetypes
 // plus the H/H/H "unclassified" cluster-default for new/unclassified resources),
 // standard label keys, an EPSS LEV threshold of 0.70, and a default Certification
 // Class of B. It carries no namespace/name rules (those are tenant-specific) and
@@ -149,13 +149,19 @@ func Default() *Config {
 			"identity-secrets": {Lens: "control", CR: "H", IR: "H", AR: "H", Amplifier: true},
 			"security-tooling": {Lens: "control", CR: "H", IR: "H", AR: "M", Amplifier: false},
 			"change-record":    {Lens: "control", CR: "M", IR: "M", AR: "M", Amplifier: false},
-			"data-sensitive":   {Lens: "data", CR: "H", IR: "H", AR: "H", Amplifier: false},
-			"data-backbone":    {Lens: "data", CR: "H", IR: "H", AR: "H", Amplifier: true},
-			"app-tier":         {Lens: "data", CR: "M", IR: "M", AR: "H", Amplifier: false},
-			"batch-analytics":  {Lens: "data", CR: "M", IR: "M", AR: "L", Amplifier: false},
-			"public-edge":      {Lens: "data", CR: "L", IR: "L", AR: "H", Amplifier: false},
-			"internal-tooling": {Lens: "data", CR: "L", IR: "L", AR: "L", Amplifier: false},
-			"dev-test":         {Lens: "data", CR: "L", IR: "L", AR: "L", Amplifier: false},
+			// platform-foundation: estate-wide connectivity/discovery/time services
+			// (DNS, NTP, service discovery, plain L4 internal load balancers) that hold
+			// only operational metadata. Low confidentiality (recon value only), but
+			// High integrity (poisoning/redirect) and Availability (outage). Metadata
+			// only — TLS-terminating / payload-handling proxies belong in app-tier.
+			"platform-foundation": {Lens: "control", CR: "L", IR: "H", AR: "H", Amplifier: true},
+			"data-sensitive":      {Lens: "data", CR: "H", IR: "H", AR: "H", Amplifier: false},
+			"data-backbone":       {Lens: "data", CR: "H", IR: "H", AR: "H", Amplifier: true},
+			"app-tier":            {Lens: "data", CR: "M", IR: "M", AR: "H", Amplifier: false},
+			"batch-analytics":     {Lens: "data", CR: "M", IR: "M", AR: "L", Amplifier: false},
+			"public-edge":         {Lens: "data", CR: "L", IR: "L", AR: "H", Amplifier: false},
+			"internal-tooling":    {Lens: "data", CR: "L", IR: "L", AR: "L", Amplifier: false},
+			"dev-test":            {Lens: "data", CR: "L", IR: "L", AR: "L", Amplifier: false},
 			// unclassified is the built-in cluster-default archetype for new or
 			// otherwise-unclassified resources: CR/IR/AR=High so they score loudly
 			// (single-agency H/H/H lands at PAIN-4 on a high-impact CVE) and surface
