@@ -1,0 +1,62 @@
+---
+# Example trivy-plugin-vdr scoring ConfigMap for a GKE cluster.
+#
+# The plugin reads kube-system/vdr-fedramp from the cluster automatically (no
+# --scoring-config flag needed) and deep-merges the embedded scoring.yaml over its
+# built-in rubric. The built-in rubric already provides the full archetype catalog,
+# the algorithm, the EPSS LEV threshold (0.70), and the H/H/H "unclassified"
+# cluster-default archetype for new/unclassified resources — so this file only
+# carries cluster-wide Class/scope and the rules for GKE-managed,
+# shared-responsibility components that cannot carry vdr.fedramp.io/* labels.
+#
+# If this ConfigMap is missing, the plugin warns and falls back to its built-in
+# defaults (Class B, single-agency, no tenant rules).
+#
+# Apply with:  kubectl apply -f vdr-fedramp-configmap.gke.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vdr-fedramp
+  namespace: kube-system
+data:
+  # --- cluster-wide scalars (override anything the embedded doc sets) ---
+  class: "B"            # set to your FedRAMP Certification Class: A, B, C, or D
+  multiAgency: "false"  # "true" if this cluster serves more than one agency
+
+  scoring.yaml: |
+    # First match wins. nameRules win over namespaceRules. namespace is an optional
+    # glob on the workload namespace; match is a glob on the workload name.
+    nameRules:
+      # GCP workload-identity / metadata credential broker.
+      - {namespace: kube-system, match: gke-metadata-server, archetype: identity-secrets}
+      - {namespace: kube-system, match: "metadata-proxy*", archetype: identity-secrets}
+      # Cluster networking dataplane / API control tunnel.
+      - {namespace: kube-system, match: "calico*", archetype: orchestrator}
+      - {namespace: kube-system, match: kube-proxy, archetype: orchestrator}
+      - {namespace: kube-system, match: netd, archetype: orchestrator}
+      - {namespace: kube-system, match: ip-masq-agent, archetype: orchestrator}
+      - {namespace: kube-system, match: "konnectivity*", archetype: orchestrator}
+      - {namespace: kube-system, match: "*dra*", archetype: orchestrator}
+      # Storage CSI driver.
+      - {namespace: kube-system, match: "pdcsi*", archetype: orchestrator}
+      # Cluster DNS.
+      - {namespace: kube-system, match: "kube-dns*", archetype: app-tier}
+      # Runtime security / image inspection / CIS hardening.
+      - {namespace: kube-system, match: container-watcher, archetype: security-tooling}
+      - {namespace: kube-system, match: image-package-extractor, archetype: security-tooling}
+      - {namespace: kube-system, match: configure-cis-level-2, archetype: security-tooling}
+      - {namespace: kube-system, match: runsc-metric-server, archetype: security-tooling}
+      # Ingress default backend.
+      - {namespace: kube-system, match: l7-default-backend, archetype: public-edge}
+
+    namespaceRules:
+      # Specific gke-managed namespaces first, then the catch-all.
+      - {match: gke-managed-networking-dra-driver, archetype: orchestrator}
+      - {match: gke-managed-volumepopulator, archetype: orchestrator}
+      - {match: "gke-managed-*", archetype: internal-tooling}
+      # Managed Prometheus (observability).
+      - {match: gmp-system, archetype: internal-tooling}
+      - {match: gmp-public, archetype: internal-tooling}
+      # Everything else in kube-system (metrics agents, fluentbit, device plugins,
+      # autoscalers, event exporter, etc.) is low-privilege node/observability infra.
+      - {match: kube-system, archetype: internal-tooling}
