@@ -19,10 +19,21 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	}
 
 	output := buf.String()
-	for _, want := range []string{"Namespace", "Internet-exposed findings", "Internet exposure", "Automatable", "Exploitation", "EPSS score", "Technical impact", "Security", "privileged", "window.__VDR_REPORT__", "CVE-2026-0001"} {
+	for _, want := range []string{
+		"Namespace", "Internet-exposed findings", "Internet exposure", "Automatable",
+		"Exploitation", "EPSS score", "Technical impact", "window.__VDR_REPORT__",
+		"CVE-2026-0001",
+		"test-context",        // kubectx in the header
+		"Certification Class", // class chip/subtitle in the header
+		"privileged",          // security posture moved into the resource-name tooltip
+	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("HTML output missing %q", want)
 		}
+	}
+	// Security is no longer a column; it lives in the resource tooltip instead.
+	if strings.Contains(output, "<th>Security</th>") {
+		t.Fatalf("HTML output should not have a Security column header")
 	}
 	if strings.Contains(output, "https://") {
 		t.Fatalf("HTML output should be standalone without remote dependencies:\n%s", output)

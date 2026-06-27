@@ -166,11 +166,17 @@ type Pain struct {
 }
 
 type Report struct {
-	GeneratedAt time.Time        `json:"generatedAt"`
-	Summary     Summary          `json:"summary"`
-	Findings    []Finding        `json:"findings,omitempty"`
-	Resources   []ResourceReport `json:"resources,omitempty"`
-	Warnings    []string         `json:"warnings,omitempty"`
+	GeneratedAt time.Time `json:"generatedAt"`
+	// ContextName is the Kubernetes context (kubectx) the inventory was collected
+	// from. Shown in the report header.
+	ContextName string `json:"contextName,omitempty"`
+	// Class is the cluster-wide FedRAMP Certification Class (A/B/C/D) in effect for
+	// scoring. Shown in the report header.
+	Class     string           `json:"class,omitempty"`
+	Summary   Summary          `json:"summary"`
+	Findings  []Finding        `json:"findings,omitempty"`
+	Resources []ResourceReport `json:"resources,omitempty"`
+	Warnings  []string         `json:"warnings,omitempty"`
 }
 
 type ResourceReport struct {

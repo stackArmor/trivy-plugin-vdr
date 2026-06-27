@@ -47,10 +47,21 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		nsLabels = inventory.Namespaces
 	}
 
+	class := sc.Defaults.Class
+	if class == "" {
+		class = "B"
+	}
+	contextName := ""
+	if inventory != nil {
+		contextName = inventory.ContextName
+	}
+
 	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS)
 	resourceReports := buildResourceReports(inventory, filtered, exposures, sc, labelIndex, nsLabels)
 	report := model.Report{
 		GeneratedAt: options.GeneratedAt,
+		ContextName: contextName,
+		Class:       class,
 		Summary:     buildSummary(inventory, filtered, resourceReports),
 		Warnings:    append([]string(nil), options.Warnings...),
 	}

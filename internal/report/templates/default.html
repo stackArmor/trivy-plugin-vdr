@@ -72,14 +72,15 @@
   <header>
     <div class="header-row">
       <div>
-        <h1>VDR Kubernetes Report</h1>
-        <div class="muted">Generated {{ .Report.GeneratedAt }}</div>
+        <h1>VDR Kubernetes Report{{ with .Report.ContextName }} — {{ . }}{{ end }}</h1>
+        <div class="muted">{{ with .Report.Class }}Certification Class {{ . }} · {{ end }}Generated {{ .Report.GeneratedAt }}</div>
       </div>
       <button id="theme-toggle" type="button" aria-label="Toggle dark mode"></button>
     </div>
   </header>
   <main>
     <section class="summary" aria-label="Summary">
+      {{ with .Report.Class }}<div class="metric"><span>Certification Class</span><strong>{{ . }}</strong></div>{{ end }}
       <div class="metric"><span>Resources</span><strong>{{ .Report.Summary.Resources }}</strong></div>
       <div class="metric"><span>Images</span><strong>{{ .Report.Summary.Images }}</strong></div>
       <div class="metric"><span>Findings</span><strong>{{ .Report.Summary.Findings }}</strong></div>
@@ -109,7 +110,6 @@
           <th>Resource</th>
           <th>Image</th>
           <th>Internet exposure</th>
-          <th>Security</th>
           <th>Automatable</th>
           <th>Exploitation</th>
           <th>Technical impact</th>
@@ -283,6 +283,18 @@
       });
       return [...new Set(values)].join("; ");
     }
+    // Tooltip for the Resource cell: the asset's archetype, agency scope, and
+    // container security posture, consolidated into the one column.
+    function resourceTooltip(row) {
+      const lines = [];
+      if (row.painObj) {
+        const src = row.painObj.archetypeSource ? " (from " + row.painObj.archetypeSource + ")" : "";
+        lines.push("Archetype: " + row.painObj.archetype + src);
+        lines.push("Agency scope: " + (row.painObj.multiAgency ? "more than one (multi-agency)" : "single agency"));
+      }
+      if (row.security) lines.push("Security: " + row.security);
+      return lines.join("\n");
+    }
     if (resources.length) {
       resources.forEach(resource => {
         const resourceFindings = resource.findings || [];
@@ -333,7 +345,6 @@
       { key: "resource", type: "string" },
       { key: "image", type: "string" },
       { key: "exposed", type: "bool" },
-      { key: "security", type: "string" },
       { key: "automatable", type: "string" },
       { key: "exploitation", type: "string" },
       { key: "impact", type: "string" },
@@ -416,8 +427,8 @@
         "  N4 Debilitating (1 agency) or Disruptive (>1) | N5 Debilitating (>1)",
         "",
         "Archetype is resolved from the vdr.fedramp.io/asset-archetype label, else a",
-        "namespace/name rule, else a fail-safe (treated as High/High/High and",
-        "multi-agency, flooring to N5 until classified). Hover a value for details."
+        "namespace/name rule, else the built-in 'unclassified' default (High/High/High,",
+        "noisy N4) so new resources surface for classification. Hover a value for details."
       ].join("\n");
     }
     // Explain the Internet exposure column on hover of its header.
@@ -440,8 +451,8 @@
       ].join("\n");
     }
     // Automatable / Exploitation / Technical impact come from CISA Vulnrichment.
-    if (headerCells[9]) {
-      headerCells[9].title = [
+    if (headerCells[8]) {
+      headerCells[8].title = [
         "Automatable (CISA Vulnrichment ADP, SSVC).",
         "Can an attacker reliably automate exploitation across many targets",
         "(reconnaissance, weaponization, delivery, and exploitation)?",
@@ -456,8 +467,8 @@
         "PR:N, and UI:N (~85% correlation with the authoritative SSVC value)."
       ].join("\n");
     }
-    if (headerCells[10]) {
-      headerCells[10].title = [
+    if (headerCells[9]) {
+      headerCells[9].title = [
         "Exploitation (CISA Vulnrichment ADP, SSVC).",
         "Current state of real-world exploitation:",
         "",
@@ -467,8 +478,8 @@
         "  blank  - no CISA Vulnrichment record for this CVE."
       ].join("\n");
     }
-    if (headerCells[11]) {
-      headerCells[11].title = [
+    if (headerCells[10]) {
+      headerCells[10].title = [
         "Technical impact (CISA Vulnrichment ADP, SSVC).",
         "Degree of control gained by successful exploitation:",
         "",
@@ -483,8 +494,8 @@
       ].join("\n");
     }
     // Explain the Remediation column on hover of its header.
-    if (headerCells[12]) {
-      headerCells[12].title = [
+    if (headerCells[11]) {
+      headerCells[11].title = [
         "Remediation deadline — FedRAMP Rev5 VDR-TFR-PVR. Hover a value for details.",
         "",
         "  deadline = matrix[ Certification Class ][ PAIN ][ column ]",
@@ -539,7 +550,7 @@
       tbody.textContent = "";
       filtered.forEach(row => {
         const tr = document.createElement("tr");
-        [row.id, row.severity, row.pain, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.security, row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
+        [row.id, row.severity, row.pain, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
           const td = document.createElement("td");
           td.textContent = value;
           if (index === 1) {
@@ -549,15 +560,18 @@
               td.className = "pain-" + row.pain;
               td.title = painTooltip(row.painObj);
             }
-          } else if (index === 9 && row.automatableSource === "cvss") {
+          } else if (index === 5) {
+            const tip = resourceTooltip(row);
+            if (tip) td.title = tip;
+          } else if (index === 8 && row.automatableSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
             td.title = "Automatable derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
-          } else if (index === 11 && row.impactSource === "cvss") {
+          } else if (index === 10 && row.impactSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
             td.title = "Technical impact derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
-          } else if (index === 12) {
+          } else if (index === 11) {
             td.textContent = value || "—";
             td.className = remediationClass(row.remediationDays);
             td.title = remediationTooltip(row.remediationObj);
