@@ -334,7 +334,7 @@ func TestWordThresholds(t *testing.T) {
 		want string
 	}{
 		{0.24, "Minimal"}, {0.25, "Narrow"}, {0.54, "Narrow"}, {0.55, "Disruptive"},
-		{0.80, "Disruptive"}, {0.84, "Disruptive"}, {0.85, "Debilitating"}, {1.0, "Debilitating"},
+		{0.79, "Disruptive"}, {0.80, "Debilitating"}, {1.0, "Debilitating"},
 	}
 	for _, c := range cases {
 		if got := cfg.wordFromScalar(c.s); got != c.want {
