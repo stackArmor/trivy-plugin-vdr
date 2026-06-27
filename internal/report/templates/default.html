@@ -59,6 +59,9 @@
     tbody tr:hover td { background: var(--hover); }
     .sev-CRITICAL { color: var(--danger); font-weight: 700; }
     .sev-HIGH { color: var(--warn); font-weight: 650; }
+    .pain-N5 { color: var(--danger); font-weight: 700; }
+    .pain-N4 { color: var(--warn); font-weight: 650; }
+    .pain-N3 { color: var(--warn); }
     .muted { color: var(--muted); }
     td.derived { font-style: italic; }
     .legend { margin-top: 10px; font-size: 12px; color: var(--muted); }
@@ -85,6 +88,7 @@
 
     <section class="filters" aria-label="Filters">
       <div class="filter"><span>Severity</span><div id="severity" class="checkboxes" role="group" aria-label="Severity"></div></div>
+      <label>PAIN (agency impact)<select id="pain"><option value="">All</option></select></label>
       <label>Namespace<select id="namespace"><option value="">All</option></select></label>
       <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
       <label>Automatable<select id="automatable"><option value="">All</option></select></label>
@@ -99,6 +103,7 @@
         <tr>
           <th>CVE</th>
           <th>Severity</th>
+          <th>PAIN</th>
           <th>EPSS</th>
           <th>Namespace</th>
           <th>Resource</th>
@@ -114,7 +119,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">Remediation tiers follow the CISA SSVC decision table. Automatable and Technical impact come from CISA Vulnrichment; italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Unresolved inputs default to the low end (not in KEV, not automatable, partial impact). Hover any value or column header for details.</p>
+    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset archetype's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.70 or active exploitation and IRV = internet-reachable. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
   </main>
   <script>
     // Theme toggle.
@@ -134,6 +139,7 @@
     window.__VDR_REPORT__ = {{ .ReportJSON }};
     const report = window.__VDR_REPORT__;
     const rows = [];
+    const PAIN_RANK = { "N5": 5, "N4": 4, "N3": 3, "N2": 2, "N1": 1 };
     const resources = report.resources || [];
     const findings = report.findings || [];
     function addFinding(finding, resource, exposure, resourceReport) {
@@ -155,7 +161,10 @@
         security: securitySummary(images),
         automatable: vuln.automatable || "",
         exploitation: vuln.exploitation || "",
-        impact: vuln.technicalImpact || ""
+        impact: vuln.technicalImpact || "",
+        pain: (finding.pain && finding.pain.tier) || "",
+        painObj: finding.pain || null,
+        painRank: finding.pain ? (PAIN_RANK[finding.pain.tier] || 0) : -1
       };
       // CISA Vulnrichment is authoritative for automatability and technical
       // impact; when it has no record for an input, fall back to the CVSS vector.
@@ -176,49 +185,15 @@
           row.impactSource = "cvss";
         }
       }
-      const rem = remediation(row);
-      row.remediation = rem.label;        // precise timeline string (tooltip)
-      row.remediationDays = rem.days;      // for sorting / color
-      row.remediationTier = remediationTier(rem.label); // displayed priority tier
+      // Remediation is the FedRAMP VDR-TFR-PVR deadline computed server-side
+      // (matrix[Class][PAIN][LEV/IRV]); read it straight from the finding.
+      const rem = finding.remediation || null;
+      row.remediationObj = rem;
+      row.remediation = rem && rem.deadlineDays >= 0 ? rem.deadline : "";
+      row.remediationDays = rem && rem.deadlineDays >= 0 ? rem.deadlineDays : null;
       rows.push(row);
     }
 
-    // Remediation timeline per the CISA SSVC decision table (Table 1).
-    // Inputs: Publicly Exposed (internet exposure), In KEV (active exploitation,
-    // or EPSS > 0.3 when exploitation is poc/none/unknown), Automatable, and
-    // Technical Impact. Every finding is scored by this table; unresolved inputs
-    // default to the low end (not exposed already resolves, not in KEV, not
-    // automatable, partial impact).
-    const REMEDIATION_TABLE = {
-      // exposed | kev | automatable | impact(total/partial)
-      "Y|Y|Y|T": { label: "3 days & forensic triage", days: 3 },
-      "Y|Y|Y|P": { label: "3 days", days: 3 },
-      "Y|Y|N|T": { label: "3 days & forensic triage", days: 3 },
-      "Y|Y|N|P": { label: "14 days", days: 14 },
-      "Y|N|Y|T": { label: "3 days", days: 3 },
-      "Y|N|Y|P": { label: "14 days", days: 14 },
-      "Y|N|N|T": { label: "14 days", days: 14 },
-      "Y|N|N|P": { label: "60 days", days: 60 },
-      "N|Y|Y|T": { label: "3 days & forensic triage", days: 3 },
-      "N|Y|Y|P": { label: "14 days", days: 14 },
-      "N|Y|N|T": { label: "14 days", days: 14 },
-      "N|Y|N|P": { label: "14 days", days: 14 },
-      "N|N|Y|T": { label: "60 days", days: 60 },
-      "N|N|Y|P": { label: "60 days", days: 60 },
-      "N|N|N|T": { label: "Fix on system upgrade", days: 99999 },
-      "N|N|N|P": { label: "Fix on system upgrade", days: 99999 }
-    };
-    function inKEV(row) {
-      if ((row.exploitation || "").toLowerCase() === "active") return true;
-      // poc / none / unknown: treat as KEV-equivalent when EPSS is elevated.
-      return row.epss !== null && row.epss > 0.3;
-    }
-    function normalizeAutomatable(value) {
-      const v = (value || "").toLowerCase();
-      if (v === "yes") return "Y";
-      if (v === "no") return "N";
-      return null;
-    }
     // Parse a CVSS vector string ("CVSS:3.1/AV:N/AC:L/...") into a metric map.
     function cvssMetrics(vector) {
       const metrics = {};
@@ -238,12 +213,6 @@
       const reachable = m.AV === "N" || m.AV === "A";
       return (reachable && m.AC === "L" && m.PR === "N" && m.UI === "N") ? "yes" : "no";
     }
-    function normalizeImpact(value) {
-      const v = (value || "").toLowerCase();
-      if (v === "total") return "T";
-      if (v === "partial") return "P";
-      return null;
-    }
     // Fallback technical impact from a CVSS base vector, used only when CISA
     // Vulnrichment has no record: Total requires full read+write authority
     // (Confidentiality:High AND Integrity:High); everything else is Partial.
@@ -256,36 +225,50 @@
       if (!c || !i) return "";
       return (c === "H" && i === "H") ? "total" : "partial";
     }
-    // Remediation per the CISA SSVC decision table. Every finding is scored;
-    // inputs that cannot be resolved from Vulnrichment or the CVSS vector default
-    // to the low end: not in KEV, not automatable, partial technical impact.
-    function remediation(row) {
-      const automatable = normalizeAutomatable(row.automatable) || "N";
-      const impact = normalizeImpact(row.impact) || "P";
-      const key = [row.exposed ? "Y" : "N", inKEV(row) ? "Y" : "N", automatable, impact].join("|");
-      const hit = REMEDIATION_TABLE[key];
-      return { label: hit.label, days: hit.days };
+    function painTooltip(pain) {
+      if (!pain) return "";
+      const sourceLabel = {
+        label: "asset-archetype label",
+        namespaceLabel: "namespace asset-archetype label",
+        nameRule: "name rule (config)",
+        namespaceRule: "namespace rule (config)",
+        default: "cluster default archetype (config)",
+        failsafe: "fail-safe (unclassified — treated as High/High/High, multi-agency)",
+        "label-unknown": "fail-safe (label names an unknown archetype)"
+      }[pain.archetypeSource] || pain.archetypeSource;
+      let sevSource = "";
+      if (pain.severitySource) {
+        const base = pain.severitySource.indexOf("severity") === 0
+          ? "qualitative severity (no vector)" : "CVSS impact vector";
+        sevSource = pain.severitySource.indexOf("technicalImpact") >= 0
+          ? base + ", in-scope dims raised to High by technical impact = total" : base;
+      }
+      const lines = [
+        "PAIN " + pain.tier + " — " + pain.word,
+        "Archetype: " + pain.archetype + " (from " + sourceLabel + ")",
+        "CR/IR/AR: " + pain.cr + "/" + pain.ir + "/" + pain.ar,
+        "Agency scope: " + (pain.multiAgency ? "more than one (multi-agency)" : "single agency")
+      ];
+      if (sevSource) lines.push("Impact from: " + sevSource);
+      lines.push("Severity scalar: " + (typeof pain.severity === "number" ? pain.severity.toFixed(2) : pain.severity));
+      return lines.join("\n");
     }
     function remediationClass(days) {
-      if (days <= 3) return "sev-CRITICAL";
-      if (days <= 14) return "sev-HIGH";
+      if (days === null || days === undefined) return "";
+      if (days <= 4) return "sev-CRITICAL";
+      if (days <= 16) return "sev-HIGH";
       return "";
     }
-    // Priority tier per precise timeline label, so "3 days & forensic triage" is
-    // distinct from "3 days".
-    function remediationTier(label) {
-      switch (label) {
-        case "3 days & forensic triage": return "Emergency";
-        case "3 days": return "Immediate";
-        case "14 days": return "Urgent";
-        case "30 days": return "High";
-        case "60 days": return "Moderate";
-        case "180 days": return "Low";
-        case "Fix on system upgrade": return "Deferred";
-        default: return label;
-      }
+    function remediationTooltip(rem) {
+      if (!rem || rem.deadlineDays < 0) return "No FedRAMP VDR-TFR-PVR deadline (PAIN-1).";
+      return [
+        "FedRAMP VDR-TFR-PVR — deadline " + rem.deadline,
+        "Certification Class: " + rem.class,
+        "Column: " + rem.column,
+        "Likely exploitable (LEV): " + (rem.lev ? "yes" : "no") + " (EPSS ≥ 0.70 or active exploitation)",
+        "Internet reachable (IRV): " + (rem.irv ? "yes" : "no")
+      ].join("\n");
     }
-    const TIER_RANK = { "Emergency": 0, "Immediate": 1, "Urgent": 2, "High": 3, "Moderate": 4, "Low": 5, "Deferred": 6 };
     function securitySummary(images) {
       const values = [];
       images.forEach(image => {
@@ -331,11 +314,12 @@
         select.appendChild(option);
       });
     }
+    fillSelect("pain", rows.map(row => row.pain));
     fillSelect("namespace", rows.map(row => row.namespace));
     fillSelect("automatable", rows.map(row => row.automatable));
     fillSelect("exploitation", rows.map(row => row.exploitation));
     fillSelect("impact", rows.map(row => row.impact));
-    const controls = ["namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
+    const controls = ["pain", "namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
 
@@ -343,6 +327,7 @@
     const columns = [
       { key: "id", type: "string" },
       { key: "severity", type: "severity" },
+      { key: "painRank", type: "number" },
       { key: "epss", type: "number" },
       { key: "namespace", type: "string" },
       { key: "resource", type: "string" },
@@ -381,16 +366,22 @@
     function selectedRemediations() {
       return new Set(Array.from(remediationBox.querySelectorAll("input:checked")).map(input => input.value));
     }
-    [...new Set(rows.map(row => row.remediationTier))]
-      .sort((a, b) => (TIER_RANK[a] ?? 99) - (TIER_RANK[b] ?? 99))
-      .forEach(tier => {
+    // Remediation multi-select: a checkbox per FedRAMP deadline present, ordered
+    // by urgency (shortest first). Findings with no deadline (PAIN-1) are omitted.
+    const remediationDaysByLabel = {};
+    rows.forEach(row => {
+      if (row.remediation) remediationDaysByLabel[row.remediation] = row.remediationDays;
+    });
+    [...new Set(rows.map(row => row.remediation).filter(Boolean))]
+      .sort((a, b) => (remediationDaysByLabel[a] ?? 1e9) - (remediationDaysByLabel[b] ?? 1e9))
+      .forEach(deadline => {
         const label = document.createElement("label");
         const input = document.createElement("input");
         input.type = "checkbox";
-        input.value = tier;
+        input.value = deadline;
         input.addEventListener("change", render);
         label.appendChild(input);
-        label.appendChild(document.createTextNode(" " + tier));
+        label.appendChild(document.createTextNode(" " + deadline));
         remediationBox.appendChild(label);
       });
 
@@ -412,9 +403,26 @@
         render();
       });
     });
+    // Explain the PAIN column on hover of its header.
+    if (headerCells[2]) {
+      headerCells[2].title = [
+        "PAIN — FedRAMP Rev5 VDR Potential Agency Impact (N1–N5).",
+        "Per finding: the CVSS impact vector (C/I/A) — each in-scope dimension",
+        "raised to High when CISA Vulnrichment technical impact is 'total' —",
+        "re-weighted by the asset archetype's CR/IR/AR requirements, mapped to a",
+        "customer-effect word, then combined with agency scope.",
+        "",
+        "  N1 Minimal | N2 Narrow | N3 Disruptive (1 agency)",
+        "  N4 Debilitating (1 agency) or Disruptive (>1) | N5 Debilitating (>1)",
+        "",
+        "Archetype is resolved from the vdr.fedramp.io/asset-archetype label, else a",
+        "namespace/name rule, else a fail-safe (treated as High/High/High and",
+        "multi-agency, flooring to N5 until classified). Hover a value for details."
+      ].join("\n");
+    }
     // Explain the Internet exposure column on hover of its header.
-    if (headerCells[6]) {
-      headerCells[6].title = [
+    if (headerCells[7]) {
+      headerCells[7].title = [
         "Whether the affected resource is reachable from the public internet.",
         "Derived from Kubernetes routing, conservatively:",
         "",
@@ -432,8 +440,8 @@
       ].join("\n");
     }
     // Automatable / Exploitation / Technical impact come from CISA Vulnrichment.
-    if (headerCells[8]) {
-      headerCells[8].title = [
+    if (headerCells[9]) {
+      headerCells[9].title = [
         "Automatable (CISA Vulnrichment ADP, SSVC).",
         "Can an attacker reliably automate exploitation across many targets",
         "(reconnaissance, weaponization, delivery, and exploitation)?",
@@ -448,8 +456,8 @@
         "PR:N, and UI:N (~85% correlation with the authoritative SSVC value)."
       ].join("\n");
     }
-    if (headerCells[9]) {
-      headerCells[9].title = [
+    if (headerCells[10]) {
+      headerCells[10].title = [
         "Exploitation (CISA Vulnrichment ADP, SSVC).",
         "Current state of real-world exploitation:",
         "",
@@ -459,8 +467,8 @@
         "  blank  - no CISA Vulnrichment record for this CVE."
       ].join("\n");
     }
-    if (headerCells[10]) {
-      headerCells[10].title = [
+    if (headerCells[11]) {
+      headerCells[11].title = [
         "Technical impact (CISA Vulnrichment ADP, SSVC).",
         "Degree of control gained by successful exploitation:",
         "",
@@ -475,28 +483,19 @@
       ].join("\n");
     }
     // Explain the Remediation column on hover of its header.
-    if (headerCells[11]) {
-      headerCells[11].title = [
-        "Remediation priority (CISA SSVC decision table). Hover a value for its exact timeline.",
+    if (headerCells[12]) {
+      headerCells[12].title = [
+        "Remediation deadline — FedRAMP Rev5 VDR-TFR-PVR. Hover a value for details.",
         "",
-        "Tiers, most to least urgent:",
-        "  Emergency  - 3 days + forensic triage",
-        "  Immediate  - 3 days",
-        "  Urgent     - 14 days",
-        "  High       - 30 days",
-        "  Moderate   - 60 days",
-        "  Low        - 180 days",
-        "  Deferred   - fix on system upgrade",
+        "  deadline = matrix[ Certification Class ][ PAIN ][ column ]",
         "",
-        "Computed from four SSVC inputs:",
-        "  - Publicly exposed: internet exposure of the affected resource.",
-        "  - In KEV: active exploitation, or EPSS > 0.3 when poc/none/unknown.",
-        "  - Automatable: CISA Vulnrichment, else derived from the CVSS vector.",
-        "  - Technical impact: CISA Vulnrichment, else derived from the CVSS vector.",
+        "  column = LEV+IRV | LEV+NIRV | NLEV",
+        "  LEV  (likely exploitable) = EPSS ≥ 0.70 OR exploitation = active",
+        "  IRV  (internet reachable) = the affected resource is internet-reachable",
         "",
-        "Inputs that cannot be resolved default to the low end (not in KEV, not",
-        "automatable, partial impact). Values marked † on the Automatable and",
-        "Technical impact columns are CVSS-derived."
+        "PAIN comes from the asset archetype (CR/IR/AR) × CVE impact × agency scope.",
+        "Class is cluster metadata (workload/namespace label or cluster ConfigMap).",
+        "PAIN-1 findings have no FedRAMP deadline."
       ].join("\n");
     }
     function compareRows(a, b, column) {
@@ -523,7 +522,8 @@
       const remediations = selectedRemediations();
       const filtered = rows.filter(row =>
         (severities.size === 0 || severities.has(row.severity)) &&
-        (remediations.size === 0 || remediations.has(row.remediationTier)) &&
+        (remediations.size === 0 || remediations.has(row.remediation)) &&
+        (!filters.pain || row.pain === filters.pain) &&
         (!filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&
         (!filters.automatable || row.automatable === filters.automatable) &&
@@ -539,22 +539,28 @@
       tbody.textContent = "";
       filtered.forEach(row => {
         const tr = document.createElement("tr");
-        [row.id, row.severity, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.security, row.automatable, row.exploitation, row.impact, row.remediationTier].forEach((value, index) => {
+        [row.id, row.severity, row.pain, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, row.exposed ? "yes" : "no", row.security, row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
           const td = document.createElement("td");
           td.textContent = value;
           if (index === 1) {
             td.className = "sev-" + row.severity;
-          } else if (index === 8 && row.automatableSource === "cvss") {
+          } else if (index === 2) {
+            if (row.pain) {
+              td.className = "pain-" + row.pain;
+              td.title = painTooltip(row.painObj);
+            }
+          } else if (index === 9 && row.automatableSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
             td.title = "Automatable derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
-          } else if (index === 10 && row.impactSource === "cvss") {
+          } else if (index === 11 && row.impactSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
             td.title = "Technical impact derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
-          } else if (index === 11) {
+          } else if (index === 12) {
+            td.textContent = value || "—";
             td.className = remediationClass(row.remediationDays);
-            td.title = "SSVC — " + row.remediation;
+            td.title = remediationTooltip(row.remediationObj);
           }
           tr.appendChild(td);
         });

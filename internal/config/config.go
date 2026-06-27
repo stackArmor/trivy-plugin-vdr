@@ -48,6 +48,7 @@ type Config struct {
 	CacheMinFreePercent   int
 	HTMLOutput            string
 	HTMLTemplate          string
+	ScoringConfig         string
 	MinSeverity           string
 	MinEPSS               float64
 	SkipEnrichment        bool
@@ -111,6 +112,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.IntVar(&cfg.CacheMinFreePercent, "cache-min-free-percent", cfg.CacheMinFreePercent, "minimum free disk percentage before auto cache cleanup")
 	fs.StringVar(&cfg.HTMLOutput, "html-output", cfg.HTMLOutput, "write optional standalone HTML report to file")
 	fs.StringVar(&cfg.HTMLTemplate, "html-template", cfg.HTMLTemplate, "custom HTML report template path")
+	fs.StringVar(&cfg.ScoringConfig, "scoring-config", cfg.ScoringConfig, "optional FedRAMP PAIN scoring config (YAML or JSON); built-in defaults are used when omitted")
 	fs.StringVar(&cfg.MinSeverity, "min-severity", cfg.MinSeverity, "minimum severity")
 	fs.StringVar(&minEPSS, "min-epss", minEPSS, "minimum EPSS score from 0 to 1")
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")

@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
 
 const (
@@ -23,6 +25,9 @@ type Options struct {
 	MinSeverity string
 	MinEPSS     float64
 	Warnings    []string
+	// Scoring is the FedRAMP PAIN rubric. When nil, the built-in default rubric
+	// (scoring.Default) is used.
+	Scoring *scoring.Config
 }
 
 func Build(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, options Options) model.Report {
@@ -32,9 +37,18 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	if options.View == "" {
 		options.View = ViewFindings
 	}
+	sc := options.Scoring
+	if sc == nil {
+		sc = scoring.Default()
+	}
+	labelIndex := workloadLabelIndex(inventory)
+	nsLabels := map[string]map[string]string{}
+	if inventory != nil && inventory.Namespaces != nil {
+		nsLabels = inventory.Namespaces
+	}
 
 	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS)
-	resourceReports := buildResourceReports(inventory, filtered, exposures)
+	resourceReports := buildResourceReports(inventory, filtered, exposures, sc, labelIndex, nsLabels)
 	report := model.Report{
 		GeneratedAt: options.GeneratedAt,
 		Summary:     buildSummary(inventory, filtered, resourceReports),
@@ -45,8 +59,89 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		return report
 	}
 
-	report.Findings = findingsWithBestExposure(filtered, exposures)
+	report.Findings = findingsWithBestExposure(filtered, exposures, sc, labelIndex, nsLabels)
 	return report
+}
+
+// workloadLabelIndex maps a workload identity (namespace/kind/name) to its merged
+// labels, so PAIN scoring can resolve an asset's archetype from the labels of the
+// workload that owns an affected (container-level) resource reference.
+func workloadLabelIndex(inventory *model.Inventory) map[string]map[string]string {
+	index := map[string]map[string]string{}
+	if inventory == nil {
+		return index
+	}
+	for _, r := range inventory.Resources {
+		index[workloadLabelKey(r.Resource)] = r.Labels
+	}
+	return index
+}
+
+func workloadLabelKey(ref model.ResourceRef) string {
+	return ref.Namespace + "\x00" + ref.Kind + "\x00" + ref.Name
+}
+
+// scoreAsset computes the PAIN and FedRAMP remediation deadline for a finding on
+// a specific resource, given that resource's internet reachability.
+func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, ref model.ResourceRef, finding model.Finding, internetReachable bool) (*model.Pain, *model.Remediation) {
+	res := sc.Score(scoring.Input{
+		CVSSVector:        finding.CVSSVector,
+		Severity:          finding.Severity,
+		Namespace:         ref.Namespace,
+		WorkloadName:      ref.Name,
+		Labels:            idx[workloadLabelKey(ref)],
+		NamespaceLabels:   nsLabels[ref.Namespace],
+		TechnicalImpact:   technicalImpactOf(finding.Vulnrichment),
+		EPSS:              epssScore(finding.EPSS),
+		Exploitation:      exploitationOf(finding.Vulnrichment),
+		InternetReachable: internetReachable,
+	})
+	pain := &model.Pain{
+		Tier:            res.Tier,
+		Word:            res.Word,
+		Severity:        res.Severity,
+		Archetype:       res.Archetype,
+		ArchetypeSource: res.ArchetypeSource,
+		SeveritySource:  res.SeveritySource,
+		CR:              res.CR,
+		IR:              res.IR,
+		AR:              res.AR,
+		MultiAgency:     res.MultiAgency,
+	}
+	rem := &model.Remediation{
+		Class:        res.Class,
+		Column:       res.Column,
+		LEV:          res.LEV,
+		IRV:          res.IRV,
+		DeadlineDays: res.DeadlineDays,
+		Deadline:     res.RemediationLabel,
+	}
+	return pain, rem
+}
+
+func epssScore(e *model.EPSS) float64 {
+	if e == nil {
+		return -1
+	}
+	return e.Score
+}
+
+func exploitationOf(v *model.Vulnrichment) string {
+	if v == nil {
+		return ""
+	}
+	return v.Exploitation
+}
+
+func technicalImpactOf(v *model.Vulnrichment) string {
+	if v == nil {
+		return ""
+	}
+	return v.TechnicalImpact
+}
+
+func internetReachable(exposure *model.Exposure) bool {
+	return exposure != nil && exposure.InternetAccessible
 }
 
 func RenderJSON(w io.Writer, report model.Report) error {
@@ -76,13 +171,15 @@ func RenderTable(w io.Writer, report model.Report) error {
 		}
 		return tw.Flush()
 	}
-	if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tIMAGE\tAFFECTED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tPAIN\tREMEDIATION\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tIMAGE\tAFFECTED"); err != nil {
 		return err
 	}
 	for _, finding := range report.Findings {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			finding.ID,
 			finding.Severity,
+			formatPain(finding.Pain),
+			formatRemediation(finding.Remediation),
 			formatEPSS(finding.EPSS),
 			vulnrichmentValue(finding.Vulnrichment, "automatable"),
 			vulnrichmentValue(finding.Vulnrichment, "exploitation"),
@@ -121,7 +218,7 @@ func filterFindings(findings []model.Finding, minSeverity string, minEPSS float6
 	return filtered
 }
 
-func buildResourceReports(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure) []model.ResourceReport {
+func buildResourceReports(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.ResourceReport {
 	if inventory == nil {
 		return nil
 	}
@@ -157,6 +254,11 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 				scoped.Exposure = &value
 				scoped.Affected[0].Exposure = &value
 			}
+			pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(scoped.Exposure))
+			scoped.Pain = pain
+			scoped.Remediation = rem
+			scoped.Affected[0].Pain = pain
+			scoped.Affected[0].Remediation = rem
 			report.Findings = append(report.Findings, scoped)
 		}
 	}
@@ -225,29 +327,87 @@ func buildSummary(inventory *model.Inventory, findings []model.Finding, resource
 	return summary
 }
 
-func findingsWithBestExposure(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure) []model.Finding {
+func findingsWithBestExposure(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.Finding {
 	enriched := make([]model.Finding, len(findings))
 	for i, finding := range findings {
 		enriched[i] = cloneFinding(finding)
-		enriched[i].Affected = affectedDetails(finding.AffectedResources, exposures)
+		enriched[i].Affected = affectedDetails(finding, exposures, sc, idx, nsLabels)
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
+		pain, rem := worstAsset(enriched[i].Affected)
+		enriched[i].Pain = pain
+		enriched[i].Remediation = rem
 	}
 	return enriched
 }
 
-func affectedDetails(resources []model.ResourceRef, exposures map[model.ResourceRef]model.Exposure) []model.Affected {
-	details := make([]model.Affected, 0, len(resources))
-	for _, ref := range resources {
+func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.Affected {
+	details := make([]model.Affected, 0, len(finding.AffectedResources))
+	for _, ref := range finding.AffectedResources {
 		detail := model.Affected{Resource: ref}
 		if exposure, ok := exposures[ref]; ok {
 			value := exposure
 			detail.Exposure = &value
 		}
+		detail.Pain, detail.Remediation = scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(detail.Exposure))
 		details = append(details, detail)
 	}
 	return details
+}
+
+// worstAsset returns the PAIN and remediation of the most urgent affected
+// resource: the one with the shortest FedRAMP deadline (a missing deadline ranks
+// last), breaking ties by highest PAIN rank. Pain and remediation are taken from
+// the same affected entry so they stay consistent.
+func worstAsset(affected []model.Affected) (*model.Pain, *model.Remediation) {
+	worst := -1
+	for i := range affected {
+		if affected[i].Pain == nil {
+			continue
+		}
+		if worst < 0 || moreUrgent(affected[i], affected[worst]) {
+			worst = i
+		}
+	}
+	if worst < 0 {
+		return nil, nil
+	}
+	var pain *model.Pain
+	if affected[worst].Pain != nil {
+		p := *affected[worst].Pain
+		pain = &p
+	}
+	var rem *model.Remediation
+	if affected[worst].Remediation != nil {
+		r := *affected[worst].Remediation
+		rem = &r
+	}
+	return pain, rem
+}
+
+func moreUrgent(a, b model.Affected) bool {
+	da, db := deadlineKey(a.Remediation), deadlineKey(b.Remediation)
+	if da != db {
+		return da < db
+	}
+	return painRank(a.Pain) > painRank(b.Pain)
+}
+
+// deadlineKey returns the remediation deadline in days, mapping "no deadline" to
+// +Inf so it sorts as least urgent.
+func deadlineKey(r *model.Remediation) float64 {
+	if r == nil || r.DeadlineDays < 0 {
+		return math.Inf(1)
+	}
+	return r.DeadlineDays
+}
+
+func painRank(p *model.Pain) int {
+	if p == nil {
+		return 0
+	}
+	return scoring.Rank(p.Tier)
 }
 
 func bestExposure(resources []model.ResourceRef, exposures map[model.ResourceRef]model.Exposure) (model.Exposure, bool) {
@@ -288,6 +448,14 @@ func cloneFinding(finding model.Finding) model.Finding {
 		value := *finding.Exposure
 		clone.Exposure = &value
 	}
+	if finding.Pain != nil {
+		value := *finding.Pain
+		clone.Pain = &value
+	}
+	if finding.Remediation != nil {
+		value := *finding.Remediation
+		clone.Remediation = &value
+	}
 	return clone
 }
 
@@ -301,6 +469,14 @@ func cloneAffected(affected []model.Affected) []model.Affected {
 		if item.Exposure != nil {
 			value := *item.Exposure
 			clone[i].Exposure = &value
+		}
+		if item.Pain != nil {
+			value := *item.Pain
+			clone[i].Pain = &value
+		}
+		if item.Remediation != nil {
+			value := *item.Remediation
+			clone[i].Remediation = &value
 		}
 	}
 	return clone
@@ -335,6 +511,20 @@ func formatEPSS(epss *model.EPSS) string {
 		return ""
 	}
 	return fmt.Sprintf("%.3f", epss.Score)
+}
+
+func formatPain(pain *model.Pain) string {
+	if pain == nil {
+		return ""
+	}
+	return pain.Tier
+}
+
+func formatRemediation(rem *model.Remediation) string {
+	if rem == nil || rem.DeadlineDays < 0 {
+		return ""
+	}
+	return rem.Deadline
 }
 
 func vulnrichmentValue(v *model.Vulnrichment, field string) string {
