@@ -58,6 +58,49 @@ func TestTrivyRunnerBuildsImageScanCommandWithCustomImageSource(t *testing.T) {
 	}
 }
 
+func TestTrivyRunnerAddsOCIVEXForAllowedRegistry(t *testing.T) {
+	fake := &fakeCommandRunner{
+		stdout: []byte(`{"Results":[]}`),
+	}
+	runner := TrivyRunner{
+		Binary:           "trivy-test",
+		VEXOCIRegistries: []string{"registry.example.com", "ghcr.io/acme"},
+		CommandRunner:    fake,
+	}
+
+	_, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second)
+	if err != nil {
+		t.Fatalf("ScanImage returned error: %v", err)
+	}
+
+	wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--vex", "oci", "--show-suppressed", "--timeout", "45s", "registry.example.com/app:v1"}
+	if !reflect.DeepEqual(fake.args, wantArgs) {
+		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
+	}
+}
+
+func TestTrivyRunnerDoesNotAddOCIVEXForUnmatchedRegistry(t *testing.T) {
+	fake := &fakeCommandRunner{
+		stdout: []byte(`{"Results":[]}`),
+	}
+	runner := TrivyRunner{
+		Binary:           "trivy-test",
+		VEXOCIRegistries: []string{"registry.example.com"},
+		CommandRunner:    fake,
+	}
+
+	_, err := runner.ScanImage(context.Background(), "docker.io/library/alpine:3.20", 45*time.Second)
+	if err != nil {
+		t.Fatalf("ScanImage returned error: %v", err)
+	}
+
+	for _, arg := range fake.args {
+		if arg == "--vex" || arg == "--show-suppressed" {
+			t.Fatalf("command args = %#v, want no VEX flags for unmatched registry", fake.args)
+		}
+	}
+}
+
 func TestTrivyRunnerBuildsImageScanCommandWithCacheDir(t *testing.T) {
 	fake := &fakeCommandRunner{
 		stdout: []byte(`{"Results":[]}`),
@@ -76,6 +119,66 @@ func TestTrivyRunnerBuildsImageScanCommandWithCacheDir(t *testing.T) {
 	wantArgs := []string{"image", "--cache-dir", "/tmp/trivy-cache", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
+	}
+}
+
+func TestTrivyRunnerParsesVEXSuppressedFindings(t *testing.T) {
+	runner := TrivyRunner{
+		Binary: "trivy",
+		CommandRunner: &fakeCommandRunner{
+			stdout: []byte(`{
+				"Results": [
+					{
+						"Target": "libssl",
+						"ExperimentalModifiedFindings": [
+							{
+								"Type": "vulnerability",
+								"Status": "not_affected",
+								"Statement": "vulnerable_code_not_in_execute_path",
+								"Source": "VEX attestation in OCI registry (pkg:oci/app@sha256:abc?repository_url=registry.example.com/app)",
+								"Finding": {
+									"VulnerabilityID": "CVE-2026-9999",
+									"PkgName": "openssl",
+									"InstalledVersion": "1.1.1",
+									"FixedVersion": "1.1.2",
+									"Severity": "HIGH",
+									"Status": "fixed",
+									"Title": "openssl issue",
+									"CVSS": {
+										"nvd": { "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" }
+									}
+								}
+							}
+						]
+					}
+				]
+			}`),
+		},
+	}
+
+	findings, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", time.Minute)
+	if err != nil {
+		t.Fatalf("ScanImage returned error: %v", err)
+	}
+
+	if len(findings) != 1 {
+		t.Fatalf("len(findings) = %d, want one suppressed finding: %#v", len(findings), findings)
+	}
+	got := findings[0]
+	if !got.Suppressed {
+		t.Fatalf("Suppressed = false, want true: %#v", got)
+	}
+	if got.Suppression == nil {
+		t.Fatalf("Suppression = nil, want VEX metadata: %#v", got)
+	}
+	if got.Suppression.Source != "vex" ||
+		got.Suppression.Status != "not_affected" ||
+		got.Suppression.Justification != "vulnerable_code_not_in_execute_path" ||
+		!strings.Contains(got.Suppression.StatementSource, "VEX attestation in OCI registry") {
+		t.Fatalf("Suppression = %#v, want parsed VEX metadata", got.Suppression)
+	}
+	if got.ID != "CVE-2026-9999" || got.ImageRef != "registry.example.com/app:v1" || got.PackageName != "openssl" {
+		t.Fatalf("suppressed finding fields = %#v, want underlying vulnerability fields", got)
 	}
 }
 

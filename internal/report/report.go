@@ -57,21 +57,36 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	}
 
 	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS)
-	resourceReports := buildResourceReports(inventory, filtered, exposures, sc, labelIndex, nsLabels)
+	active, suppressed := partitionFindings(filtered)
+	resourceReports := buildResourceReports(inventory, active, exposures, sc, labelIndex, nsLabels)
 	report := model.Report{
-		GeneratedAt: options.GeneratedAt,
-		ContextName: contextName,
-		Class:       class,
-		Summary:     buildSummary(inventory, filtered, resourceReports),
-		Warnings:    append([]string(nil), options.Warnings...),
+		GeneratedAt:        options.GeneratedAt,
+		ContextName:        contextName,
+		Class:              class,
+		Summary:            buildSummary(inventory, active, resourceReports),
+		SuppressedFindings: suppressedWithWouldHaveBeen(suppressed, exposures, sc, labelIndex, nsLabels),
+		Warnings:           append([]string(nil), options.Warnings...),
 	}
 	if options.View == ViewResources {
 		report.Resources = resourceReports
 		return report
 	}
 
-	report.Findings = findingsWithBestExposure(filtered, exposures, sc, labelIndex, nsLabels)
+	report.Findings = findingsWithBestExposure(active, exposures, sc, labelIndex, nsLabels)
 	return report
+}
+
+func partitionFindings(findings []model.Finding) ([]model.Finding, []model.Finding) {
+	var active []model.Finding
+	var suppressed []model.Finding
+	for _, finding := range findings {
+		if finding.Suppressed {
+			suppressed = append(suppressed, finding)
+			continue
+		}
+		active = append(active, finding)
+	}
+	return active, suppressed
 }
 
 // workloadLabelIndex maps a workload identity (namespace/kind/name) to its merged
@@ -182,15 +197,19 @@ func RenderTable(w io.Writer, report model.Report) error {
 				return err
 			}
 		}
+		if err := renderSuppressedTable(tw, report.SuppressedFindings); err != nil {
+			return err
+		}
 		return tw.Flush()
 	}
-	if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tPAIN\tREMEDIATION\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tIMAGE\tAFFECTED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tSTATUS\tPAIN\tREMEDIATION\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tIMAGE\tAFFECTED"); err != nil {
 		return err
 	}
 	for _, finding := range report.Findings {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			finding.ID,
 			finding.Severity,
+			finding.Status,
 			formatPain(finding.Pain),
 			formatRemediation(finding.Remediation),
 			formatEPSS(finding.EPSS),
@@ -203,7 +222,37 @@ func RenderTable(w io.Writer, report model.Report) error {
 			return err
 		}
 	}
+	if err := renderSuppressedTable(tw, report.SuppressedFindings); err != nil {
+		return err
+	}
 	return tw.Flush()
+}
+
+func renderSuppressedTable(w io.Writer, findings []model.Finding) error {
+	if len(findings) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "\nSUPPRESSED FINDINGS"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "ID\tSEVERITY\tVEX STATUS\tJUSTIFICATION\tWOULD-HAVE-BEEN PAIN\tWOULD-HAVE-BEEN REMEDIATION\tIMAGE\tAFFECTED"); err != nil {
+		return err
+	}
+	for _, finding := range findings {
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			finding.ID,
+			finding.Severity,
+			suppressionStatus(finding.Suppression),
+			suppressionJustification(finding.Suppression),
+			formatPain(finding.WouldHaveBeenPain),
+			formatRemediation(finding.WouldHaveBeenRemediation),
+			finding.ImageRef,
+			formatAffectedResources(finding.AffectedResources),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func filterFindings(findings []model.Finding, minSeverity string, minEPSS float64) []model.Finding {
@@ -355,6 +404,27 @@ func findingsWithBestExposure(findings []model.Finding, exposures map[model.Reso
 	return enriched
 }
 
+func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.Finding {
+	enriched := make([]model.Finding, len(findings))
+	for i, finding := range findings {
+		enriched[i] = cloneFinding(finding)
+		enriched[i].Affected = affectedDetails(finding, exposures, sc, idx, nsLabels)
+		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
+			enriched[i].Exposure = &exposure
+		}
+		pain, rem := worstAsset(enriched[i].Affected)
+		enriched[i].WouldHaveBeenPain = pain
+		enriched[i].WouldHaveBeenRemediation = rem
+		enriched[i].Pain = nil
+		enriched[i].Remediation = nil
+		for j := range enriched[i].Affected {
+			enriched[i].Affected[j].Pain = nil
+			enriched[i].Affected[j].Remediation = nil
+		}
+	}
+	return enriched
+}
+
 func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.Affected {
 	details := make([]model.Affected, 0, len(finding.AffectedResources))
 	for _, ref := range finding.AffectedResources {
@@ -469,6 +539,18 @@ func cloneFinding(finding model.Finding) model.Finding {
 		value := *finding.Remediation
 		clone.Remediation = &value
 	}
+	if finding.Suppression != nil {
+		value := *finding.Suppression
+		clone.Suppression = &value
+	}
+	if finding.WouldHaveBeenPain != nil {
+		value := *finding.WouldHaveBeenPain
+		clone.WouldHaveBeenPain = &value
+	}
+	if finding.WouldHaveBeenRemediation != nil {
+		value := *finding.WouldHaveBeenRemediation
+		clone.WouldHaveBeenRemediation = &value
+	}
 	return clone
 }
 
@@ -569,6 +651,23 @@ func formatRemediation(rem *model.Remediation) string {
 		return ""
 	}
 	return rem.Deadline
+}
+
+func suppressionStatus(s *model.Suppression) string {
+	if s == nil {
+		return ""
+	}
+	return s.Status
+}
+
+func suppressionJustification(s *model.Suppression) string {
+	if s == nil {
+		return ""
+	}
+	if s.Justification != "" {
+		return s.Justification
+	}
+	return s.ImpactStatement
 }
 
 func vulnrichmentValue(v *model.Vulnrichment, field string) string {

@@ -89,6 +89,20 @@ func TestParseRegistryAuthAndLogFlags(t *testing.T) {
 	}
 }
 
+func TestParseVEXOCIRegistries(t *testing.T) {
+	cfg, err := Parse([]string{
+		"k8s",
+		"--vex-oci-registries", "registry.example.com, ghcr.io/acme",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	want := []string{"registry.example.com", "ghcr.io/acme"}
+	if !reflect.DeepEqual(cfg.VEXOCIRegistries, want) {
+		t.Fatalf("VEXOCIRegistries = %#v, want %#v", cfg.VEXOCIRegistries, want)
+	}
+}
+
 func TestParseScanAndCacheFlags(t *testing.T) {
 	cfg, err := Parse([]string{
 		"k8s",
