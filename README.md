@@ -33,6 +33,7 @@ trivy vdr k8s --skip-enrichment --skip-exposure --debug
 trivy vdr k8s --refresh-enrichment
 trivy vdr k8s --skip-registry-auth
 trivy vdr k8s --no-gcloud-auth --no-ecr-auth
+trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
 trivy vdr k8s --quiet
 trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.html
 trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
@@ -64,6 +65,16 @@ Flags:
 - `--no-ecr-auth` skips the `aws` token for ECR.
 
 This adds one RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
+
+## VEX attestations
+
+`vdr` can opt into Trivy's experimental OCI VEX attestation discovery for trusted registries:
+
+```sh
+trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
+```
+
+The allowlist accepts registry hosts (`registry.example.com`) or repository prefixes (`ghcr.io/acme`). Matching images are scanned with `trivy image --vex oci --show-suppressed`; other images are scanned without OCI VEX. Suppressed VEX findings are not silently dropped: reports keep them in `suppressedFindings` with the VEX status, justification, source, and informational `wouldHaveBeenPain` / `wouldHaveBeenRemediation` values. They are excluded from the active finding count and remediation queue.
 
 ## Logging
 
@@ -101,7 +112,7 @@ JSON output defaults to a finding-centric report. Each finding includes `affecte
 
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
-Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a PAIN filter, a multi-select remediation-deadline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
+Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a Trivy fix-status filter (including `will_not_fix`), a PAIN filter, a multi-select remediation-deadline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
 
 Each finding shows its **PAIN** tier and a FedRAMP **Remediation** deadline (see [PAIN scoring and remediation](#pain-scoring-and-remediation)). Automatable, Exploitation, and Technical impact from CISA Vulnrichment are also shown for context; CVSS-derived Automatable and Technical impact values are rendered in italics with a `†` marker so they are distinguishable from authoritative Vulnrichment values. Hover any value or column header for an in-report explanation. Use `--html-template <path>` to override the template with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 

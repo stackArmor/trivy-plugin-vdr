@@ -143,6 +143,45 @@ func TestBuildFiltersBySeverityAndEPSS(t *testing.T) {
 	}
 }
 
+func TestBuildSeparatesSuppressedFindingsWithWouldHaveBeenPain(t *testing.T) {
+	inv := sampleInventory()
+	active := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	suppressed := sampleFinding("CVE-2026-0002", "HIGH", 0.7)
+	suppressed.Suppressed = true
+	suppressed.Suppression = &model.Suppression{
+		Source:          "vex",
+		Status:          "not_affected",
+		Justification:   "vulnerable_code_not_in_execute_path",
+		StatementSource: "VEX attestation in OCI registry",
+	}
+	exposures := map[model.ResourceRef]model.Exposure{sampleContainerRef(): {InternetAccessible: true, Provider: "gke", RouteKind: "Ingress", RouteName: "web"}}
+
+	got := Build(inv, []model.Finding{active, suppressed}, exposures, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+
+	if got.Summary.Findings != 1 {
+		t.Fatalf("Summary.Findings = %d, want only active findings counted", got.Summary.Findings)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].ID != "CVE-2026-0001" {
+		t.Fatalf("Findings = %#v, want only active finding", got.Findings)
+	}
+	if len(got.SuppressedFindings) != 1 {
+		t.Fatalf("SuppressedFindings = %#v, want one suppressed finding", got.SuppressedFindings)
+	}
+	gotSuppressed := got.SuppressedFindings[0]
+	if gotSuppressed.ID != "CVE-2026-0002" || !gotSuppressed.Suppressed || gotSuppressed.Suppression == nil {
+		t.Fatalf("suppressed finding = %#v, want VEX-dispositioned finding", gotSuppressed)
+	}
+	if gotSuppressed.Pain != nil || gotSuppressed.Remediation != nil {
+		t.Fatalf("active Pain/Remediation = %#v/%#v, want nil for suppressed finding", gotSuppressed.Pain, gotSuppressed.Remediation)
+	}
+	if gotSuppressed.WouldHaveBeenPain == nil || gotSuppressed.WouldHaveBeenRemediation == nil {
+		t.Fatalf("would-have-been Pain/Remediation missing: %#v", gotSuppressed)
+	}
+	if gotSuppressed.WouldHaveBeenPain.Tier == "" || gotSuppressed.WouldHaveBeenRemediation.Deadline == "" {
+		t.Fatalf("would-have-been values incomplete: %#v/%#v", gotSuppressed.WouldHaveBeenPain, gotSuppressed.WouldHaveBeenRemediation)
+	}
+}
+
 func TestRenderJSONWritesSelectedView(t *testing.T) {
 	report := model.Report{GeneratedAt: fixedTime(), Summary: model.Summary{Findings: 1}, Findings: []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}}
 	var buf bytes.Buffer
@@ -161,7 +200,9 @@ func TestRenderJSONWritesSelectedView(t *testing.T) {
 }
 
 func TestRenderTableIncludesResourceAndEnrichmentColumns(t *testing.T) {
-	report := model.Report{Findings: []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}}
+	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	finding.Status = "will_not_fix"
+	report := model.Report{Findings: []model.Finding{finding}}
 	var buf bytes.Buffer
 
 	if err := RenderTable(&buf, report); err != nil {
@@ -169,7 +210,7 @@ func TestRenderTableIncludesResourceAndEnrichmentColumns(t *testing.T) {
 	}
 
 	output := buf.String()
-	for _, want := range []string{"ID", "SEVERITY", "EPSS", "AUTOMATABLE", "CVE-2026-0001", "HIGH", "0.700"} {
+	for _, want := range []string{"ID", "SEVERITY", "STATUS", "EPSS", "AUTOMATABLE", "CVE-2026-0001", "HIGH", "will_not_fix", "0.700"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("table output missing %q:\n%s", want, output)
 		}

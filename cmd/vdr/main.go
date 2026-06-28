@@ -107,7 +107,13 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 	}
 
-	trivyRunner := scanner.TrivyRunner{ImageSrc: cfg.ImageSrc, CacheDir: cfg.CacheDir, DockerConfigDir: dockerConfigDir, Logger: logger}
+	trivyRunner := scanner.TrivyRunner{
+		ImageSrc:         cfg.ImageSrc,
+		CacheDir:         cfg.CacheDir,
+		DockerConfigDir:  dockerConfigDir,
+		VEXOCIRegistries: cfg.VEXOCIRegistries,
+		Logger:           logger,
+	}
 	logger.Info("downloading Trivy vulnerability and Java databases")
 	if dbErr := trivyRunner.EnsureDatabases(ctx); dbErr != nil {
 		logger.Error("database download failed: %v", dbErr)

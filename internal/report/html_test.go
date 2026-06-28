@@ -11,7 +11,9 @@ import (
 )
 
 func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
-	scanReport := Build(sampleInventory(), []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	finding.Status = "will_not_fix"
+	scanReport := Build(sampleInventory(), []model.Finding{finding}, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
 	var buf bytes.Buffer
 
 	if err := RenderHTML(&buf, scanReport, ""); err != nil {
@@ -23,6 +25,9 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Namespace", "Internet-exposed findings", "Internet exposure", "Automatable",
 		"Exploitation", "EPSS score", "Technical impact", "window.__VDR_REPORT__",
 		"CVE-2026-0001",
+		"Fix status",
+		`id="status"`,
+		"will_not_fix",
 		"test-context",        // kubectx in the header
 		"Certification Class", // class chip/subtitle in the header
 		"privileged",          // security posture moved into the resource-name tooltip
