@@ -59,10 +59,12 @@
     tbody tr:hover td { background: var(--hover); }
     .sev-CRITICAL { color: var(--danger); font-weight: 700; }
     .sev-HIGH { color: var(--warn); font-weight: 650; }
+    .status-will-not-fix { color: var(--warn); font-weight: 650; }
     .pain-N5 { color: var(--danger); font-weight: 700; }
     .pain-N4 { color: var(--warn); font-weight: 650; }
     .pain-N3 { color: var(--warn); }
     .muted { color: var(--muted); }
+    .suppressed-table { margin-top: 18px; }
     td.derived { font-style: italic; }
     .legend { margin-top: 10px; font-size: 12px; color: var(--muted); }
     .empty { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
@@ -84,11 +86,13 @@
       <div class="metric"><span>Resources</span><strong>{{ .Report.Summary.Resources }}</strong></div>
       <div class="metric"><span>Images</span><strong>{{ .Report.Summary.Images }}</strong></div>
       <div class="metric"><span>Findings</span><strong>{{ .Report.Summary.Findings }}</strong></div>
+      <div class="metric"><span>Suppressed</span><strong>{{ len .Report.SuppressedFindings }}</strong></div>
       <div class="metric"><span>Internet-exposed findings</span><strong id="metric-exposed">{{ .Report.Summary.InternetAccessible }}</strong></div>
     </section>
 
     <section class="filters" aria-label="Filters">
       <div class="filter"><span>Classical severity</span><div id="severity" class="checkboxes" role="group" aria-label="Classical severity"></div></div>
+      <label>Fix status<select id="status"><option value="">All</option></select></label>
       <label>PAIN (agency impact)<select id="pain"><option value="">All</option></select></label>
       <label>Namespace<select id="namespace"><option value="">All</option></select></label>
       <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
@@ -104,6 +108,7 @@
         <tr>
           <th>CVE</th>
           <th>Classical Severity</th>
+          <th>Fix status</th>
           <th>PAIN</th>
           <th>EPSS</th>
           <th>Namespace</th>
@@ -120,6 +125,23 @@
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
     <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset archetype's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.70 or active exploitation and IRV = internet-reachable. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
+    {{ if .Report.SuppressedFindings }}
+    <table class="suppressed-table" id="suppressed-findings">
+      <thead>
+        <tr>
+          <th>CVE</th>
+          <th>Classical Severity</th>
+          <th>VEX status</th>
+          <th>Justification</th>
+          <th>Would-have-been PAIN</th>
+          <th>Would-have-been remediation</th>
+          <th>Image</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="legend">Suppressed findings are dispositioned by VEX and excluded from the active remediation queue. Their would-have-been PAIN and remediation values are informational: the deadline that would have applied if the finding had not been dispositioned.</p>
+    {{ end }}
   </main>
   <script>
     // Theme toggle.
@@ -142,6 +164,7 @@
     const PAIN_RANK = { "N5": 5, "N4": 4, "N3": 3, "N2": 2, "N1": 1 };
     const resources = report.resources || [];
     const findings = report.findings || [];
+    const suppressedFindings = report.suppressedFindings || [];
     function addFinding(finding, resource, exposure, resourceReport) {
       const vuln = finding.vulnrichment || {};
       const epss = finding.epss || {};
@@ -153,6 +176,7 @@
         // finding affecting several resources is counted once in summary metrics.
         key: [finding.id || "", finding.imageRef || "", finding.packageName || ""].join("|"),
         severity: finding.severity || "",
+        status: finding.status || "",
         epss: typeof epss.score === "number" ? epss.score : null,
         namespace: ref.namespace || "",
         resource: [ref.kind, ref.name, ref.containerName].filter(Boolean).join("/"),
@@ -329,11 +353,12 @@
       });
     }
     fillSelect("pain", rows.map(row => row.pain));
+    fillSelect("status", rows.map(row => row.status));
     fillSelect("namespace", rows.map(row => row.namespace));
     fillSelect("automatable", rows.map(row => row.automatable));
     fillSelect("exploitation", rows.map(row => row.exploitation));
     fillSelect("impact", rows.map(row => row.impact));
-    const controls = ["pain", "namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
+    const controls = ["pain", "status", "namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
 
@@ -341,6 +366,7 @@
     const columns = [
       { key: "id", type: "string" },
       { key: "severity", type: "severity" },
+      { key: "status", type: "string" },
       { key: "painRank", type: "number" },
       { key: "epss", type: "number" },
       { key: "namespace", type: "string" },
@@ -429,9 +455,18 @@
         "Hover a value to see its CVSS vector."
       ].join("\n");
     }
-    // Explain the PAIN column on hover of its header.
+    // Explain the Fix status column on hover of its header.
     if (headerCells[2]) {
       headerCells[2].title = [
+        "Fix status — Trivy vulnerability status from the advisory source.",
+        "The value will_not_fix is useful evidence for false-positive or",
+        "non-exploitable review, but it does not automatically suppress the finding.",
+        "Use the Fix status filter to isolate those findings."
+      ].join("\n");
+    }
+    // Explain the PAIN column on hover of its header.
+    if (headerCells[3]) {
+      headerCells[3].title = [
         "PAIN — FedRAMP Rev5 VDR Potential Agency Impact (N1–N5).",
         "Per finding: the CVSS impact vector (C/I/A) — each in-scope dimension",
         "raised to High when CISA Vulnrichment technical impact is 'total' —",
@@ -447,8 +482,8 @@
       ].join("\n");
     }
     // Explain the Internet exposure column on hover of its header.
-    if (headerCells[7]) {
-      headerCells[7].title = [
+    if (headerCells[8]) {
+      headerCells[8].title = [
         "Whether the affected resource is reachable from the public internet.",
         "Derived from Kubernetes routing, conservatively:",
         "",
@@ -466,8 +501,8 @@
       ].join("\n");
     }
     // Automatable / Exploitation / Technical impact come from CISA Vulnrichment.
-    if (headerCells[8]) {
-      headerCells[8].title = [
+    if (headerCells[9]) {
+      headerCells[9].title = [
         "Automatable (CISA Vulnrichment ADP, SSVC).",
         "Can an attacker reliably automate exploitation across many targets",
         "(reconnaissance, weaponization, delivery, and exploitation)?",
@@ -482,8 +517,8 @@
         "PR:N, and UI:N (~85% correlation with the authoritative SSVC value)."
       ].join("\n");
     }
-    if (headerCells[9]) {
-      headerCells[9].title = [
+    if (headerCells[10]) {
+      headerCells[10].title = [
         "Exploitation (CISA Vulnrichment ADP, SSVC).",
         "Current state of real-world exploitation:",
         "",
@@ -493,8 +528,8 @@
         "  blank  - no CISA Vulnrichment record for this CVE."
       ].join("\n");
     }
-    if (headerCells[10]) {
-      headerCells[10].title = [
+    if (headerCells[11]) {
+      headerCells[11].title = [
         "Technical impact (CISA Vulnrichment ADP, SSVC).",
         "Degree of control gained by successful exploitation:",
         "",
@@ -509,8 +544,8 @@
       ].join("\n");
     }
     // Explain the Remediation column on hover of its header.
-    if (headerCells[11]) {
-      headerCells[11].title = [
+    if (headerCells[12]) {
+      headerCells[12].title = [
         "Remediation deadline — FedRAMP Rev5 VDR-TFR-PVR. Hover a value for details.",
         "",
         "  deadline = matrix[ Certification Class ][ PAIN ][ column ]",
@@ -550,6 +585,7 @@
         (severities.size === 0 || severities.has(row.severity)) &&
         (remediations.size === 0 || remediations.has(row.remediation)) &&
         (!filters.pain || row.pain === filters.pain) &&
+        (!filters.status || row.status === filters.status) &&
         (!filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&
         (!filters.automatable || row.automatable === filters.automatable) &&
@@ -566,32 +602,37 @@
       filtered.forEach(row => {
         const tr = document.createElement("tr");
         const exposureLabel = row.exposed ? "yes" : (row.exposureKind === "Service/NodePort" ? "nodeport" : "no");
-        [row.id, row.severity, row.pain, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, exposureLabel, row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
+        [row.id, row.severity, row.status, row.pain, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, exposureLabel, row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
           const td = document.createElement("td");
           td.textContent = value;
           if (index === 1) {
             td.className = "sev-" + row.severity;
             td.title = row.cvssVector ? ("CVSS vector: " + row.cvssVector) : "no CVSS vector";
           } else if (index === 2) {
+            if (row.status === "will_not_fix") {
+              td.className = "status-will-not-fix";
+              td.title = "Trivy vulnerability status is will_not_fix. Treat this as evidence to review for false-positive or non-exploitable disposition, not as an automatic suppression.";
+            }
+          } else if (index === 3) {
             if (row.pain) {
               td.className = "pain-" + row.pain;
               td.title = painTooltip(row.painObj);
             }
-          } else if (index === 5) {
+          } else if (index === 6) {
             const tip = resourceTooltip(row);
             if (tip) td.title = tip;
-          } else if (index === 7 && row.exposureKind === "Service/NodePort") {
+          } else if (index === 8 && row.exposureKind === "Service/NodePort") {
             td.title = row.exposureEvidence.join("\n") ||
               "NodePort service; node-IP reachability unverified. Set vdr.fedramp.io/internet-reachable-nodePort: true|false on the Service.";
-          } else if (index === 8 && row.automatableSource === "cvss") {
+          } else if (index === 9 && row.automatableSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
             td.title = "Automatable derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
-          } else if (index === 10 && row.impactSource === "cvss") {
+          } else if (index === 11 && row.impactSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
             td.title = "Technical impact derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
-          } else if (index === 11) {
+          } else if (index === 12) {
             td.textContent = value || "—";
             td.className = remediationClass(row.remediationDays);
             td.title = remediationTooltip(row.remediationObj);
@@ -604,6 +645,42 @@
       document.getElementById("findings").hidden = filtered.length === 0;
     }
     render();
+    function renderSuppressedFindings() {
+      const table = document.getElementById("suppressed-findings");
+      if (!table) return;
+      const tbody = table.querySelector("tbody");
+      tbody.textContent = "";
+      suppressedFindings.forEach(finding => {
+        const suppression = finding.suppression || {};
+        const pain = finding.wouldHaveBeenPain || {};
+        const rem = finding.wouldHaveBeenRemediation || {};
+        const tr = document.createElement("tr");
+        [
+          finding.id || "",
+          finding.severity || "",
+          suppression.status || "",
+          suppression.justification || suppression.impactStatement || "",
+          pain.tier || "",
+          rem && rem.deadlineDays >= 0 ? rem.deadline : "",
+          finding.imageRef || ""
+        ].forEach((value, index) => {
+          const td = document.createElement("td");
+          td.textContent = value;
+          if (index === 1) td.className = "sev-" + (finding.severity || "");
+          if (index === 4 && pain.tier) {
+            td.className = "pain-" + pain.tier;
+            td.title = painTooltip(pain);
+          }
+          if (index === 5) {
+            td.className = remediationClass(rem.deadlineDays);
+            td.title = remediationTooltip(rem);
+          }
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+    renderSuppressedFindings();
   </script>
 </body>
 </html>

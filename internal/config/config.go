@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -57,6 +58,7 @@ type Config struct {
 	SkipRegistryAuth      bool
 	NoGcloudAuth          bool
 	NoECRAuth             bool
+	VEXOCIRegistries      []string
 	Quiet                 bool
 	Debug                 bool
 }
@@ -78,6 +80,25 @@ func (n *namespaceList) Set(value string) error {
 		return fmt.Errorf("invalid namespace %q", value)
 	}
 	*n = append(*n, value)
+	return nil
+}
+
+type commaList []string
+
+func (c *commaList) String() string {
+	return strings.Join([]string(*c), ",")
+}
+
+func (c *commaList) Set(value string) error {
+	var values []string
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		values = append(values, part)
+	}
+	*c = values
 	return nil
 }
 
@@ -121,6 +142,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.SkipRegistryAuth, "skip-registry-auth", cfg.SkipRegistryAuth, "skip automatic private registry authentication")
 	fs.BoolVar(&cfg.NoGcloudAuth, "no-gcloud-auth", cfg.NoGcloudAuth, "skip gcloud authentication for Google Artifact Registry/GCR images")
 	fs.BoolVar(&cfg.NoECRAuth, "no-ecr-auth", cfg.NoECRAuth, "skip aws CLI authentication for ECR images")
+	fs.Var((*commaList)(&cfg.VEXOCIRegistries), "vex-oci-registries", "comma-separated registry hosts or repository prefixes that may use OCI VEX attestations")
 	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "suppress progress logging (warnings and errors only)")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
 

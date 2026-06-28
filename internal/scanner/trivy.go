@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/distribution/reference"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
@@ -35,6 +36,10 @@ type TrivyRunner struct {
 	ImageSrc        string
 	CacheDir        string
 	DockerConfigDir string
+	// VEXOCIRegistries enables --vex oci for images whose registry/repository
+	// matches one of these allowlist entries. Host-only entries match the registry
+	// host; host/path entries match that repository prefix.
+	VEXOCIRegistries []string
 	// SkipDBUpdate passes --skip-db-update to each scan. Set this only after the
 	// vulnerability DB has been downloaded once via EnsureVulnDB so scans reuse
 	// it instead of each re-checking for an update.
@@ -140,7 +145,11 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 	if r.SkipDBUpdate {
 		args = append(args, "--skip-db-update", "--skip-java-db-update")
 	}
-	args = append(args, "--image-src", imageSrc, "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", timeout.String(), image)
+	args = append(args, "--image-src", imageSrc, "--skip-version-check", "--format", "json", "--scanners", "vuln")
+	if r.useOCIVEX(image) {
+		args = append(args, "--vex", "oci", "--show-suppressed")
+	}
+	args = append(args, "--timeout", timeout.String(), image)
 	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("trivy image scan failed for %q: %w: %s", image, err, string(bytes.TrimSpace(stderr)))
@@ -151,6 +160,38 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 		return nil, err
 	}
 	return findings, nil
+}
+
+func (r TrivyRunner) useOCIVEX(image string) bool {
+	if len(r.VEXOCIRegistries) == 0 {
+		return false
+	}
+	ref, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		return false
+	}
+	domain := reference.Domain(ref)
+	path := reference.Path(ref)
+	repository := domain
+	if path != "" {
+		repository += "/" + path
+	}
+	for _, allowed := range r.VEXOCIRegistries {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "" {
+			continue
+		}
+		if !strings.Contains(allowed, "/") {
+			if domain == allowed {
+				return true
+			}
+			continue
+		}
+		if repository == allowed || strings.HasPrefix(repository, allowed+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // workerCachePool hands out isolated Trivy cache directories so concurrent scans
@@ -505,22 +546,40 @@ func parseTrivyFindings(data []byte, image string) ([]model.Finding, error) {
 	var findings []model.Finding
 	for _, result := range report.Results {
 		for _, vulnerability := range result.Vulnerabilities {
-			findings = append(findings, model.Finding{
-				ID:               vulnerability.VulnerabilityID,
-				ImageRef:         image,
-				PackageName:      vulnerability.PkgName,
-				InstalledVersion: vulnerability.InstalledVersion,
-				FixedVersion:     vulnerability.FixedVersion,
-				Severity:         vulnerability.Severity,
-				Status:           vulnerability.Status,
-				Title:            vulnerability.Title,
-				Description:      vulnerability.Description,
-				References:       append([]string(nil), vulnerability.References...),
-				CVSSVector:       bestCVSSVector(vulnerability.CVSS),
-			})
+			findings = append(findings, findingFromTrivyVulnerability(vulnerability, image))
+		}
+		for _, modified := range result.ModifiedFindings {
+			if modified.Type != "" && modified.Type != "vulnerability" {
+				continue
+			}
+			finding := findingFromTrivyVulnerability(modified.Finding, image)
+			finding.Suppressed = true
+			finding.Suppression = &model.Suppression{
+				Source:          "vex",
+				Status:          modified.Status,
+				Justification:   modified.Statement,
+				StatementSource: modified.Source,
+			}
+			findings = append(findings, finding)
 		}
 	}
 	return findings, nil
+}
+
+func findingFromTrivyVulnerability(vulnerability trivyVulnerability, image string) model.Finding {
+	return model.Finding{
+		ID:               vulnerability.VulnerabilityID,
+		ImageRef:         image,
+		PackageName:      vulnerability.PkgName,
+		InstalledVersion: vulnerability.InstalledVersion,
+		FixedVersion:     vulnerability.FixedVersion,
+		Severity:         vulnerability.Severity,
+		Status:           vulnerability.Status,
+		Title:            vulnerability.Title,
+		Description:      vulnerability.Description,
+		References:       append([]string(nil), vulnerability.References...),
+		CVSSVector:       bestCVSSVector(vulnerability.CVSS),
+	}
 }
 
 type trivyReport struct {
@@ -528,7 +587,8 @@ type trivyReport struct {
 }
 
 type trivyResult struct {
-	Vulnerabilities []trivyVulnerability `json:"Vulnerabilities"`
+	Vulnerabilities  []trivyVulnerability   `json:"Vulnerabilities"`
+	ModifiedFindings []trivyModifiedFinding `json:"ExperimentalModifiedFindings"`
 }
 
 type trivyVulnerability struct {
@@ -542,6 +602,14 @@ type trivyVulnerability struct {
 	Description      string               `json:"Description"`
 	References       []string             `json:"References"`
 	CVSS             map[string]trivyCVSS `json:"CVSS"`
+}
+
+type trivyModifiedFinding struct {
+	Type      string             `json:"Type"`
+	Status    string             `json:"Status"`
+	Statement string             `json:"Statement"`
+	Source    string             `json:"Source"`
+	Finding   trivyVulnerability `json:"Finding"`
 }
 
 type trivyCVSS struct {
