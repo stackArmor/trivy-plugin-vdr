@@ -98,6 +98,23 @@ type Finding struct {
 	// Remediation is the FedRAMP VDR-TFR-PVR deadline for this finding, paired with
 	// Pain (worst across affected in the findings view; per-resource otherwise).
 	Remediation *Remediation `json:"remediation,omitempty"`
+	// Suppressed marks a scanner finding that has been dispositioned by VEX or a
+	// similar source and is not part of the active remediation queue.
+	Suppressed  bool         `json:"suppressed,omitempty"`
+	Suppression *Suppression `json:"suppression,omitempty"`
+	// WouldHaveBeenPain/Remediation are informational values for suppressed
+	// findings: the active PAIN/deadline that would have applied if the finding had
+	// not been dispositioned as suppressed.
+	WouldHaveBeenPain        *Pain        `json:"wouldHaveBeenPain,omitempty"`
+	WouldHaveBeenRemediation *Remediation `json:"wouldHaveBeenRemediation,omitempty"`
+}
+
+type Suppression struct {
+	Source          string `json:"source,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Justification   string `json:"justification,omitempty"`
+	ImpactStatement string `json:"impactStatement,omitempty"`
+	StatementSource string `json:"statementSource,omitempty"`
 }
 
 type EPSS struct {
@@ -172,11 +189,15 @@ type Report struct {
 	ContextName string `json:"contextName,omitempty"`
 	// Class is the cluster-wide FedRAMP Certification Class (A/B/C/D) in effect for
 	// scoring. Shown in the report header.
-	Class     string           `json:"class,omitempty"`
-	Summary   Summary          `json:"summary"`
-	Findings  []Finding        `json:"findings,omitempty"`
-	Resources []ResourceReport `json:"resources,omitempty"`
-	Warnings  []string         `json:"warnings,omitempty"`
+	Class    string    `json:"class,omitempty"`
+	Summary  Summary   `json:"summary"`
+	Findings []Finding `json:"findings,omitempty"`
+	// SuppressedFindings contains VEX/dispositioned findings kept for audit
+	// visibility. These do not contribute to Summary.Findings or active
+	// remediation calculations.
+	SuppressedFindings []Finding        `json:"suppressedFindings,omitempty"`
+	Resources          []ResourceReport `json:"resources,omitempty"`
+	Warnings           []string         `json:"warnings,omitempty"`
 }
 
 type ResourceReport struct {
