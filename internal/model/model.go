@@ -23,6 +23,7 @@ type ImageInventory struct {
 	// ImageRef remains the canonical scan/deduplication key.
 	NormalizedImage string        `json:"normalizedImage,omitempty"`
 	Resources       []ResourceRef `json:"resources"`
+	SkipDirs        []string      `json:"skipDirs,omitempty"`
 }
 
 type ResourceInventory struct {

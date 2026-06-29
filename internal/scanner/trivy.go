@@ -27,6 +27,14 @@ type Runner interface {
 	ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error)
 }
 
+type OptionRunner interface {
+	ScanImageWithOptions(ctx context.Context, image string, timeout time.Duration, options ScanImageOptions) ([]model.Finding, error)
+}
+
+type ScanImageOptions struct {
+	SkipDirs []string
+}
+
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error)
 }
@@ -106,6 +114,10 @@ func (r TrivyRunner) downloadDB(ctx context.Context, downloadFlag string) error 
 }
 
 func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
+	return r.ScanImageWithOptions(ctx, image, timeout, ScanImageOptions{})
+}
+
+func (r TrivyRunner) ScanImageWithOptions(ctx context.Context, image string, timeout time.Duration, options ScanImageOptions) ([]model.Finding, error) {
 	// With isolated worker caches, acquire one for the duration of this scan so
 	// each concurrent scan writes to its own fs (fanal) cache.
 	cacheDir := r.CacheDir
@@ -115,7 +127,7 @@ func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.D
 		cacheDir = d
 	}
 
-	findings, err := r.scanOnce(ctx, cacheDir, image, timeout)
+	findings, err := r.scanOnce(ctx, cacheDir, image, timeout, options)
 	if err == nil || r.healOnce == nil || !looksLikeCacheCorruption(err) {
 		return findings, err
 	}
@@ -129,10 +141,10 @@ func (r TrivyRunner) ScanImage(ctx context.Context, image string, timeout time.D
 			r.Logger.Info("Trivy database repaired")
 		}
 	})
-	return r.scanOnce(ctx, cacheDir, image, timeout)
+	return r.scanOnce(ctx, cacheDir, image, timeout, options)
 }
 
-func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeout time.Duration) ([]model.Finding, error) {
+func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeout time.Duration, options ScanImageOptions) ([]model.Finding, error) {
 	imageSrc := r.ImageSrc
 	if imageSrc == "" {
 		imageSrc = "remote"
@@ -148,6 +160,12 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 	args = append(args, "--image-src", imageSrc, "--skip-version-check", "--format", "json", "--scanners", "vuln")
 	if r.useOCIVEX(image) {
 		args = append(args, "--vex", "oci", "--show-suppressed")
+	}
+	for _, dir := range options.SkipDirs {
+		if dir == "" {
+			continue
+		}
+		args = append(args, "--skip-dir", dir)
 	}
 	args = append(args, "--timeout", timeout.String(), image)
 	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
@@ -393,7 +411,7 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	scanIndex := func(index int) {
 		image := images[index]
 		options.Logger.Info("scanning %s", image.ImageRef)
-		findings, err := runner.ScanImage(ctx, image.ImageRef, options.Timeout)
+		findings, err := scanInventoryImage(ctx, runner, image, options.Timeout)
 		result := scanResult{findings: findings, err: err, completed: err == nil}
 		if err == nil {
 			for i := range result.findings {
@@ -509,6 +527,7 @@ type inventoryImage struct {
 	ImageRef        string
 	NormalizedImage string
 	Resources       []model.ResourceRef
+	SkipDirs        []string
 }
 
 func orderedInventoryImages(inventory *model.Inventory) []inventoryImage {
@@ -525,6 +544,7 @@ func orderedInventoryImages(inventory *model.Inventory) []inventoryImage {
 				ImageRef:        image.ImageRef,
 				NormalizedImage: image.NormalizedImage,
 				Resources:       append([]model.ResourceRef(nil), image.Resources...),
+				SkipDirs:        append([]string(nil), image.SkipDirs...),
 			})
 			continue
 		}
@@ -533,8 +553,40 @@ func orderedInventoryImages(inventory *model.Inventory) []inventoryImage {
 			images[index].NormalizedImage = image.NormalizedImage
 		}
 		images[index].Resources = append(images[index].Resources, image.Resources...)
+		images[index].SkipDirs = mergeStrings(images[index].SkipDirs, image.SkipDirs)
 	}
 	return images
+}
+
+func scanInventoryImage(ctx context.Context, runner Runner, image inventoryImage, timeout time.Duration) ([]model.Finding, error) {
+	if optionRunner, ok := runner.(OptionRunner); ok {
+		return optionRunner.ScanImageWithOptions(ctx, image.ImageRef, timeout, ScanImageOptions{
+			SkipDirs: append([]string(nil), image.SkipDirs...),
+		})
+	}
+	return runner.ScanImage(ctx, image.ImageRef, timeout)
+}
+
+func mergeStrings(existing, added []string) []string {
+	if len(added) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(added))
+	result := append([]string(nil), existing...)
+	for _, value := range result {
+		seen[value] = struct{}{}
+	}
+	for _, value := range added {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func parseTrivyFindings(data []byte, image string) ([]model.Finding, error) {
