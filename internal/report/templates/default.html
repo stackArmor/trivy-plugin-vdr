@@ -94,7 +94,10 @@
       <div class="filter"><span>Classical severity</span><div id="severity" class="checkboxes" role="group" aria-label="Classical severity"></div></div>
       <label>Fix status<select id="status"><option value="">All</option></select></label>
       <label>PAIN (agency impact)<select id="pain"><option value="">All</option></select></label>
+      <label>Resource type<select id="resource-type"><option value="">All</option></select></label>
+      {{ if not .IsCloudRun }}
       <label>Namespace<select id="namespace"><option value="">All</option></select></label>
+      {{ end }}
       <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
       <label>Automatable<select id="automatable"><option value="">All</option></select></label>
       <label>Exploitation<select id="exploitation"><option value="">All</option></select></label>
@@ -111,7 +114,9 @@
           <th>Fix status</th>
           <th>PAIN</th>
           <th>EPSS</th>
+          {{ if not .IsCloudRun }}
           <th>Namespace</th>
+          {{ end }}
           <th>Resource</th>
           <th>Image</th>
           <th>Internet exposure</th>
@@ -160,6 +165,7 @@
 
     window.__VDR_REPORT__ = {{ .ReportJSON }};
     const report = window.__VDR_REPORT__;
+    const isCloudRun = {{ .IsCloudRun }};
     const rows = [];
     const PAIN_RANK = { "N5": 5, "N4": 4, "N3": 3, "N2": 2, "N1": 1 };
     const resources = report.resources || [];
@@ -179,6 +185,7 @@
         status: finding.status || "",
         epss: typeof epss.score === "number" ? epss.score : null,
         namespace: ref.namespace || "",
+        resourceType: ref.kind || "",
         resource: [ref.kind, ref.name, ref.containerName].filter(Boolean).join("/"),
         image: finding.imageRef || images.map(image => image.imageRef).filter(Boolean).join(","),
         exposed: !!(exposure && exposure.internetAccessible),
@@ -358,11 +365,17 @@
     }
     fillSelect("pain", rows.map(row => row.pain));
     fillSelect("status", rows.map(row => row.status));
+    fillSelect("resource-type", rows.map(row => row.resourceType));
+    if (!isCloudRun) {
     fillSelect("namespace", rows.map(row => row.namespace));
+    }
     fillSelect("automatable", rows.map(row => row.automatable));
     fillSelect("exploitation", rows.map(row => row.exploitation));
     fillSelect("impact", rows.map(row => row.impact));
-    const controls = ["pain", "status", "namespace", "exposed", "automatable", "exploitation", "epss", "impact"].map(id => document.getElementById(id));
+    const controlIDs = ["pain", "status", "resource-type"];
+    if (!isCloudRun) controlIDs.push("namespace");
+    controlIDs.push("exposed", "automatable", "exploitation", "epss", "impact");
+    const controls = controlIDs.map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
 
@@ -372,8 +385,10 @@
       { key: "severity", type: "severity" },
       { key: "status", type: "string" },
       { key: "painRank", type: "number" },
-      { key: "epss", type: "number" },
-      { key: "namespace", type: "string" },
+      { key: "epss", type: "number" }
+    ];
+    if (!isCloudRun) columns.push({ key: "namespace", type: "string" });
+    columns.push(
       { key: "resource", type: "string" },
       { key: "image", type: "string" },
       { key: "exposed", type: "bool" },
@@ -381,7 +396,7 @@
       { key: "exploitation", type: "string" },
       { key: "impact", type: "string" },
       { key: "remediationDays", type: "number" }
-    ];
+    );
     const severityRank = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, UNKNOWN: 1 };
 
     // Severity multi-select: a checkbox per severity present in the data, ordered
@@ -431,6 +446,8 @@
     let sortIndex = null;
     let sortDir = 1;
     const headerCells = Array.from(document.querySelectorAll("#findings thead th"));
+    const headerByKey = {};
+    columns.forEach((column, index) => { headerByKey[column.key] = headerCells[index]; });
     headerCells.forEach((th, index) => {
       th.classList.add("sortable");
       th.addEventListener("click", () => {
@@ -447,8 +464,8 @@
       });
     });
     // Explain the Classical Severity column on hover of its header.
-    if (headerCells[1]) {
-      headerCells[1].title = [
+    if (headerByKey.severity) {
+      headerByKey.severity.title = [
         "Classical Severity — the scanner's rolled-up CVSS base severity (qualitative).",
         "It factors exploitability and scope and is independent of PAIN.",
         "",
@@ -460,8 +477,8 @@
       ].join("\n");
     }
     // Explain the Fix status column on hover of its header.
-    if (headerCells[2]) {
-      headerCells[2].title = [
+    if (headerByKey.status) {
+      headerByKey.status.title = [
         "Fix status — Trivy vulnerability status from the advisory source.",
         "The value will_not_fix is useful evidence for false-positive or",
         "non-exploitable review, but it does not automatically suppress the finding.",
@@ -469,8 +486,8 @@
       ].join("\n");
     }
     // Explain the PAIN column on hover of its header.
-    if (headerCells[3]) {
-      headerCells[3].title = [
+    if (headerByKey.painRank) {
+      headerByKey.painRank.title = [
         "PAIN — FedRAMP Rev5 VDR Potential Agency Impact (N1–N5).",
         "Per finding: the CVSS impact vector (C/I/A) — each in-scope dimension",
         "raised to High when CISA Vulnrichment technical impact is 'total' —",
@@ -486,8 +503,8 @@
       ].join("\n");
     }
     // Explain the Internet exposure column on hover of its header.
-    if (headerCells[8]) {
-      headerCells[8].title = [
+    if (headerByKey.exposed) {
+      headerByKey.exposed.title = [
         "Whether the affected resource is reachable from the public internet.",
         "Derived from Kubernetes or Cloud Run routing, conservatively:",
         "",
@@ -505,8 +522,8 @@
       ].join("\n");
     }
     // Automatable / Exploitation / Technical impact come from CISA Vulnrichment.
-    if (headerCells[9]) {
-      headerCells[9].title = [
+    if (headerByKey.automatable) {
+      headerByKey.automatable.title = [
         "Automatable (CISA Vulnrichment ADP, SSVC).",
         "Can an attacker reliably automate exploitation across many targets",
         "(reconnaissance, weaponization, delivery, and exploitation)?",
@@ -521,8 +538,8 @@
         "PR:N, and UI:N (~85% correlation with the authoritative SSVC value)."
       ].join("\n");
     }
-    if (headerCells[10]) {
-      headerCells[10].title = [
+    if (headerByKey.exploitation) {
+      headerByKey.exploitation.title = [
         "Exploitation (CISA Vulnrichment ADP, SSVC).",
         "Current state of real-world exploitation:",
         "",
@@ -532,8 +549,8 @@
         "  blank  - no CISA Vulnrichment record for this CVE."
       ].join("\n");
     }
-    if (headerCells[11]) {
-      headerCells[11].title = [
+    if (headerByKey.impact) {
+      headerByKey.impact.title = [
         "Technical impact (CISA Vulnrichment ADP, SSVC).",
         "Degree of control gained by successful exploitation:",
         "",
@@ -548,8 +565,8 @@
       ].join("\n");
     }
     // Explain the Remediation column on hover of its header.
-    if (headerCells[12]) {
-      headerCells[12].title = [
+    if (headerByKey.remediationDays) {
+      headerByKey.remediationDays.title = [
         "Remediation deadline — FedRAMP Rev5 VDR-TFR-PVR. Hover a value for details.",
         "",
         "  deadline = matrix[ Certification Class ][ PAIN ][ column ]",
@@ -590,7 +607,8 @@
         (remediations.size === 0 || remediations.has(row.remediation)) &&
         (!filters.pain || row.pain === filters.pain) &&
         (!filters.status || row.status === filters.status) &&
-        (!filters.namespace || row.namespace === filters.namespace) &&
+        (!filters["resource-type"] || row.resourceType === filters["resource-type"]) &&
+        (isCloudRun || !filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&
         (!filters.automatable || row.automatable === filters.automatable) &&
         (!filters.exploitation || row.exploitation === filters.exploitation) &&
@@ -606,37 +624,55 @@
       filtered.forEach(row => {
         const tr = document.createElement("tr");
         const exposureLabel = row.exposed ? "yes" : (row.exposureKind === "Service/NodePort" ? "nodeport" : "no");
-        [row.id, row.severity, row.status, row.pain, row.epss === null ? "" : row.epss.toFixed(3), row.namespace, row.resource, row.image, exposureLabel, row.automatable, row.exploitation, row.impact, row.remediation].forEach((value, index) => {
+        const cells = [
+          { key: "id", value: row.id },
+          { key: "severity", value: row.severity },
+          { key: "status", value: row.status },
+          { key: "painRank", value: row.pain },
+          { key: "epss", value: row.epss === null ? "" : row.epss.toFixed(3) }
+        ];
+        if (!isCloudRun) cells.push({ key: "namespace", value: row.namespace });
+        cells.push(
+          { key: "resource", value: row.resource },
+          { key: "image", value: row.image },
+          { key: "exposed", value: exposureLabel },
+          { key: "automatable", value: row.automatable },
+          { key: "exploitation", value: row.exploitation },
+          { key: "impact", value: row.impact },
+          { key: "remediationDays", value: row.remediation }
+        );
+        cells.forEach(cell => {
+          const value = cell.value;
           const td = document.createElement("td");
           td.textContent = value;
-          if (index === 1) {
+          if (cell.key === "severity") {
             td.className = "sev-" + row.severity;
             td.title = row.cvssVector ? ("CVSS vector: " + row.cvssVector) : "no CVSS vector";
-          } else if (index === 2) {
+          } else if (cell.key === "status") {
             if (row.status === "will_not_fix") {
               td.className = "status-will-not-fix";
               td.title = "Trivy vulnerability status is will_not_fix. Treat this as evidence to review for false-positive or non-exploitable disposition, not as an automatic suppression.";
             }
-          } else if (index === 3) {
+          } else if (cell.key === "painRank") {
             if (row.pain) {
               td.className = "pain-" + row.pain;
               td.title = painTooltip(row.painObj);
             }
-          } else if (index === 6) {
+          } else if (cell.key === "resource") {
             const tip = resourceTooltip(row);
             if (tip) td.title = tip;
-          } else if (index === 8 && row.exposureKind === "Service/NodePort") {
+          } else if (cell.key === "exposed" && row.exposureKind === "Service/NodePort") {
             td.title = row.exposureEvidence.join("\n") ||
               "NodePort service; node-IP reachability unverified. Set vdr.fedramp.io/internet-reachable-nodePort: true|false on the Service.";
-          } else if (index === 9 && row.automatableSource === "cvss") {
+          } else if (cell.key === "automatable" && row.automatableSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
             td.title = "Automatable derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
-          } else if (index === 11 && row.impactSource === "cvss") {
+          } else if (cell.key === "impact" && row.impactSource === "cvss") {
             td.classList.add("derived");
             td.textContent = value + " †";
             td.title = "Technical impact derived from CVSS vector (no CISA Vulnrichment record): " + row.cvssVector;
-          } else if (index === 12) {
+          } else if (cell.key === "remediationDays") {
             td.textContent = value || "—";
             td.className = remediationClass(row.remediationDays);
             td.title = remediationTooltip(row.remediationObj);
