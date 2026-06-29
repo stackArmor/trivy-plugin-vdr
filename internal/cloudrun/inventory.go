@@ -12,41 +12,50 @@ import (
 )
 
 func (c Collector) Collect(ctx context.Context, opts Options) (*model.Inventory, error) {
+	inventory, _, _, err := c.CollectResources(ctx, opts)
+	return inventory, err
+}
+
+func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.Inventory, []Service, []Job, error) {
 	if c.Client == nil {
-		return nil, errors.New("cloudrun collector requires a client")
+		return nil, nil, nil, errors.New("cloudrun collector requires a client")
 	}
 	if strings.TrimSpace(opts.Project) == "" {
-		return nil, errors.New("cloudrun project is required")
+		return nil, nil, nil, errors.New("cloudrun project is required")
 	}
 	if len(opts.Regions) == 0 {
-		return nil, errors.New("cloudrun region is required")
+		return nil, nil, nil, errors.New("cloudrun region is required")
 	}
 
 	builder := inventoryBuilder{
 		inventory: &model.Inventory{ContextName: "cloudrun/" + opts.Project},
 		images:    map[string]*model.ImageInventory{},
 	}
+	var allServices []Service
+	var allJobs []Job
 	for _, region := range opts.Regions {
 		region = strings.TrimSpace(region)
 		if region == "" {
-			return nil, errors.New("cloudrun region entries cannot be empty")
+			return nil, nil, nil, errors.New("cloudrun region entries cannot be empty")
 		}
 		services, err := c.Client.ListServices(ctx, opts.Project, region)
 		if err != nil {
-			return nil, fmt.Errorf("list cloudrun services in %s: %w", region, err)
+			return nil, nil, nil, fmt.Errorf("list cloudrun services in %s: %w", region, err)
 		}
 		for _, service := range services {
 			builder.addService(service)
 		}
+		allServices = append(allServices, services...)
 		jobs, err := c.Client.ListJobs(ctx, opts.Project, region)
 		if err != nil {
-			return nil, fmt.Errorf("list cloudrun jobs in %s: %w", region, err)
+			return nil, nil, nil, fmt.Errorf("list cloudrun jobs in %s: %w", region, err)
 		}
 		for _, job := range jobs {
 			builder.addJob(job)
 		}
+		allJobs = append(allJobs, jobs...)
 	}
-	return builder.finish(), nil
+	return builder.finish(), allServices, allJobs, nil
 }
 
 type inventoryBuilder struct {
