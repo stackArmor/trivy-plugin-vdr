@@ -116,7 +116,7 @@ func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, 
 		Namespace:         ref.Namespace,
 		WorkloadName:      ref.Name,
 		Labels:            idx[workloadLabelKey(ref)],
-		NamespaceLabels:   nsLabels[ref.Namespace],
+		NamespaceLabels:   namespaceLabelsForRef(nsLabels, ref),
 		TechnicalImpact:   technicalImpactOf(finding.Vulnrichment),
 		EPSS:              epssScore(finding.EPSS),
 		Exploitation:      exploitationOf(finding.Vulnrichment),
@@ -143,6 +143,15 @@ func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, 
 		Deadline:     res.RemediationLabel,
 	}
 	return pain, rem
+}
+
+func namespaceLabelsForRef(nsLabels map[string]map[string]string, ref model.ResourceRef) map[string]string {
+	if ref.Provider == "gcp-cloud-run" && ref.Project != "" {
+		if labels := nsLabels["cloudrun/"+ref.Project]; len(labels) > 0 {
+			return labels
+		}
+	}
+	return nsLabels[ref.Namespace]
 }
 
 func epssScore(e *model.EPSS) float64 {

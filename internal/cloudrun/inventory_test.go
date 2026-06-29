@@ -84,9 +84,37 @@ func TestCollectDeduplicatesSharedImages(t *testing.T) {
 	}
 }
 
+func TestCollectStoresProjectLabelsForScoringFallback(t *testing.T) {
+	client := &fakeInventoryClient{
+		projectLabels: map[string]string{
+			"vdr.fedramp.io/asset-archetype": "data-sensitive",
+			"vdr.fedramp.io/multi-agency":    "true",
+			"vdr.fedramp.io/class":           "D",
+		},
+		services: map[string][]Service{
+			"us-east4": {{
+				Project:    "p",
+				Region:     "us-east4",
+				Name:       "api",
+				Containers: []Container{{Name: "app", Image: "example.com/app:1"}},
+			}},
+		},
+	}
+
+	got, err := (Collector{Client: client}).Collect(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}})
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	labels := got.Namespaces["cloudrun/p"]
+	if !reflect.DeepEqual(labels, client.projectLabels) {
+		t.Fatalf("project fallback labels = %#v, want %#v", labels, client.projectLabels)
+	}
+}
+
 type fakeInventoryClient struct {
-	services map[string][]Service
-	jobs     map[string][]Job
+	services      map[string][]Service
+	jobs          map[string][]Job
+	projectLabels map[string]string
 }
 
 func (f *fakeInventoryClient) ListServices(ctx context.Context, project, region string) ([]Service, error) {
@@ -95,4 +123,8 @@ func (f *fakeInventoryClient) ListServices(ctx context.Context, project, region 
 
 func (f *fakeInventoryClient) ListJobs(ctx context.Context, project, region string) ([]Job, error) {
 	return append([]Job(nil), f.jobs[region]...), nil
+}
+
+func (f *fakeInventoryClient) GetProjectLabels(ctx context.Context, project string) (map[string]string, error) {
+	return copyStringMap(f.projectLabels), nil
 }

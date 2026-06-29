@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	cloud.google.com/go/compute v1.64.0
 	cloud.google.com/go/iam v1.7.0
+	cloud.google.com/go/resourcemanager v1.15.0
 	cloud.google.com/go/run v1.21.0
 	github.com/distribution/reference v0.6.0
 	google.golang.org/api v0.279.0

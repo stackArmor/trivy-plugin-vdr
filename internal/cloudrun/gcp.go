@@ -9,6 +9,8 @@ import (
 	compute "cloud.google.com/go/compute/apiv1"
 	"cloud.google.com/go/compute/apiv1/computepb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
+	resourcemanager "cloud.google.com/go/resourcemanager/apiv3"
+	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	run "cloud.google.com/go/run/apiv2"
 	"cloud.google.com/go/run/apiv2/runpb"
 	"google.golang.org/api/iterator"
@@ -17,6 +19,7 @@ import (
 type GCPClient struct {
 	services                *run.ServicesClient
 	jobs                    *run.JobsClient
+	projects                *resourcemanager.ProjectsClient
 	regions                 *compute.RegionsClient
 	globalForwardingRules   *compute.GlobalForwardingRulesClient
 	regionalForwardingRules *compute.ForwardingRulesClient
@@ -41,16 +44,24 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		services.Close()
 		return nil, fmt.Errorf("create cloud run jobs client: %w", err)
 	}
+	projects, err := resourcemanager.NewProjectsClient(ctx)
+	if err != nil {
+		services.Close()
+		jobs.Close()
+		return nil, fmt.Errorf("create resource manager projects client: %w", err)
+	}
 	regions, err := compute.NewRegionsRESTClient(ctx)
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		return nil, fmt.Errorf("create compute regions client: %w", err)
 	}
 	globalForwardingRules, err := compute.NewGlobalForwardingRulesRESTClient(ctx)
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		return nil, fmt.Errorf("create global forwarding rules client: %w", err)
 	}
@@ -58,6 +69,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		return nil, fmt.Errorf("create forwarding rules client: %w", err)
@@ -66,6 +78,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -75,6 +88,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -85,6 +99,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -96,6 +111,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -108,6 +124,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -121,6 +138,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -135,6 +153,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -150,6 +169,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -166,6 +186,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	if err != nil {
 		services.Close()
 		jobs.Close()
+		projects.Close()
 		regions.Close()
 		globalForwardingRules.Close()
 		regionalForwardingRules.Close()
@@ -182,6 +203,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 	return &GCPClient{
 		services:                services,
 		jobs:                    jobs,
+		projects:                projects,
 		regions:                 regions,
 		globalForwardingRules:   globalForwardingRules,
 		regionalForwardingRules: regionalForwardingRules,
@@ -209,6 +231,7 @@ func (c *GCPClient) Close() error {
 	}
 	closeClient("cloud run services", c.services.Close())
 	closeClient("cloud run jobs", c.jobs.Close())
+	closeClient("resource manager projects", c.projects.Close())
 	closeClient("compute regions", c.regions.Close())
 	closeClient("global forwarding rules", c.globalForwardingRules.Close())
 	closeClient("forwarding rules", c.regionalForwardingRules.Close())
@@ -259,6 +282,14 @@ func (c *GCPClient) ListJobs(ctx context.Context, project, region string) ([]Job
 		jobs = append(jobs, jobFromPB(project, region, job))
 	}
 	return jobs, nil
+}
+
+func (c *GCPClient) GetProjectLabels(ctx context.Context, project string) (map[string]string, error) {
+	resourceProject, err := c.projects.GetProject(ctx, &resourcemanagerpb.GetProjectRequest{Name: "projects/" + project})
+	if err != nil {
+		return nil, err
+	}
+	return copyStringMap(resourceProject.GetLabels()), nil
 }
 
 func (c *GCPClient) GetServicePolicy(ctx context.Context, project, region, service string) ([]PolicyBinding, error) {

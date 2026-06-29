@@ -39,6 +39,10 @@ type InventoryClient interface {
 	ListJobs(ctx context.Context, project, region string) ([]Job, error)
 }
 
+type ProjectLabelClient interface {
+	GetProjectLabels(ctx context.Context, project string) (map[string]string, error)
+}
+
 type PolicyBinding struct {
 	Role    string
 	Members []string
