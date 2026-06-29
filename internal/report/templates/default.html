@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VDR Kubernetes Report</title>
+  <title>VDR Report</title>
   <script>
     // Set the theme before first paint to avoid a flash of the wrong colors.
     (function () {
@@ -74,7 +74,7 @@
   <header>
     <div class="header-row">
       <div>
-        <h1>VDR Kubernetes Report{{ with .Report.ContextName }} — {{ . }}{{ end }}</h1>
+        <h1>VDR Report{{ with .Report.ContextName }} — {{ . }}{{ end }}</h1>
         <div class="muted">{{ with .Report.Class }}Certification Class {{ . }} · {{ end }}Generated {{ .Report.GeneratedAt }}</div>
       </div>
       <button id="theme-toggle" type="button" aria-label="Toggle dark mode"></button>
@@ -489,7 +489,7 @@
     if (headerCells[8]) {
       headerCells[8].title = [
         "Whether the affected resource is reachable from the public internet.",
-        "Derived from Kubernetes routing, conservatively:",
+        "Derived from Kubernetes or Cloud Run routing, conservatively:",
         "",
         "  yes - a Service in front of the container is fronted by a public load",
         "        balancer: an external GKE Gateway class, a 'gce' GKE Ingress, or",

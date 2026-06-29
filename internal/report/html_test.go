@@ -25,6 +25,7 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Namespace", "Internet-exposed findings", "Internet exposure", "Automatable",
 		"Exploitation", "EPSS score", "Technical impact", "window.__VDR_REPORT__",
 		"CVE-2026-0001",
+		"VDR Report",
 		"Fix status",
 		`id="status"`,
 		"will_not_fix",
@@ -39,6 +40,9 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	// Security is no longer a column; it lives in the resource tooltip instead.
 	if strings.Contains(output, "<th>Security</th>") {
 		t.Fatalf("HTML output should not have a Security column header")
+	}
+	if strings.Contains(output, "VDR Kubernetes Report") {
+		t.Fatalf("HTML output should use source-neutral report title")
 	}
 	if strings.Contains(output, "https://") {
 		t.Fatalf("HTML output should be standalone without remote dependencies:\n%s", output)

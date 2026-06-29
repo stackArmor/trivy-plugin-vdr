@@ -260,6 +260,34 @@ func TestRenderTableIncludesResourceAndEnrichmentColumns(t *testing.T) {
 	}
 }
 
+func TestRenderTableLabelsCloudFunctionsAsFunctions(t *testing.T) {
+	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	finding.AffectedResources = []model.ResourceRef{{
+		APIVersion:    "run.googleapis.com/v1",
+		Kind:          "Function",
+		Provider:      "gcp-cloud-run",
+		Project:       "armory-gss-prod",
+		Region:        "us-east4",
+		Name:          "processor",
+		ContainerName: "worker",
+		ContainerType: "container",
+	}}
+	report := model.Report{Findings: []model.Finding{finding}}
+	var buf bytes.Buffer
+
+	if err := RenderTable(&buf, report); err != nil {
+		t.Fatalf("RenderTable returned error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Function/armory-gss-prod/us-east4/processor/worker") {
+		t.Fatalf("table output should label Cloud Functions as Function, got:\n%s", output)
+	}
+	if strings.Contains(output, "Service/armory-gss-prod/us-east4/processor/worker") {
+		t.Fatalf("table output should not label Cloud Functions as Service:\n%s", output)
+	}
+}
+
 func sampleInventory() *model.Inventory {
 	privileged := true
 	return &model.Inventory{

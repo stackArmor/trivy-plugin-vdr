@@ -11,6 +11,10 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
+const googleBaseImageUpdateRuntime = "run.googleapis.com/linux-base-image-update"
+
+var googleBaseImageUpdateSkipDirs = []string{"/cnb", "layers/sbom"}
+
 func (c Collector) Collect(ctx context.Context, opts Options) (*model.Inventory, error) {
 	inventory, _, _, err := c.CollectResources(ctx, opts)
 	return inventory, err
@@ -78,13 +82,13 @@ type inventoryBuilder struct {
 func (b *inventoryBuilder) addService(service Service) {
 	ref := model.ResourceRef{
 		APIVersion: "run.googleapis.com/v1",
-		Kind:       "Service",
+		Kind:       serviceKind(service),
 		Provider:   Provider,
 		Project:    service.Project,
 		Region:     service.Region,
 		Name:       service.Name,
 	}
-	b.addResource(ref, service.Labels, service.Containers)
+	b.addResource(ref, service.Labels, service.Containers, skipDirsForRuntime(service.RuntimeClassName))
 }
 
 func (b *inventoryBuilder) addJob(job Job) {
@@ -96,20 +100,20 @@ func (b *inventoryBuilder) addJob(job Job) {
 		Region:     job.Region,
 		Name:       job.Name,
 	}
-	b.addResource(ref, job.Labels, job.Containers)
+	b.addResource(ref, job.Labels, job.Containers, nil)
 }
 
-func (b *inventoryBuilder) addResource(resource model.ResourceRef, labels map[string]string, containers []Container) {
+func (b *inventoryBuilder) addResource(resource model.ResourceRef, labels map[string]string, containers []Container, skipDirs []string) {
 	resourceInventory := model.ResourceInventory{Resource: resource, Labels: copyStringMap(labels)}
 	for _, container := range containers {
-		b.addContainer(&resourceInventory, resource, container)
+		b.addContainer(&resourceInventory, resource, container, skipDirs)
 	}
 	if len(resourceInventory.Images) > 0 {
 		b.inventory.Resources = append(b.inventory.Resources, resourceInventory)
 	}
 }
 
-func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, container Container) {
+func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, container Container, skipDirs []string) {
 	if container.Image == "" {
 		return
 	}
@@ -137,6 +141,7 @@ func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInvento
 		b.images[container.Image] = image
 	}
 	image.Resources = append(image.Resources, ref)
+	image.SkipDirs = mergeStrings(image.SkipDirs, skipDirs)
 }
 
 func (b *inventoryBuilder) finish() *model.Inventory {
@@ -183,6 +188,52 @@ func normalizeImage(image string) string {
 		return image[:lastColon]
 	}
 	return image
+}
+
+func serviceKind(service Service) string {
+	if isCloudFunctionService(service) {
+		return "Function"
+	}
+	return "Service"
+}
+
+func isCloudFunctionService(service Service) bool {
+	if service.Annotations["cloudfunctions.googleapis.com/function-id"] != "" {
+		return true
+	}
+	if service.Labels["goog-managed-by"] == "cloudfunctions" {
+		return true
+	}
+	return service.Labels["goog-cloudfunctions-runtime"] != ""
+}
+
+func skipDirsForRuntime(runtimeClassName string) []string {
+	if runtimeClassName != googleBaseImageUpdateRuntime {
+		return nil
+	}
+	return append([]string(nil), googleBaseImageUpdateSkipDirs...)
+}
+
+func mergeStrings(existing, added []string) []string {
+	if len(added) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(added))
+	result := append([]string(nil), existing...)
+	for _, value := range result {
+		seen[value] = struct{}{}
+	}
+	for _, value := range added {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func copyStringMap(values map[string]string) map[string]string {

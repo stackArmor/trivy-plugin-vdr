@@ -122,6 +122,51 @@ func TestTrivyRunnerBuildsImageScanCommandWithCacheDir(t *testing.T) {
 	}
 }
 
+func TestTrivyRunnerBuildsImageScanCommandWithSkipDirs(t *testing.T) {
+	fake := &fakeCommandRunner{
+		stdout: []byte(`{"Results":[]}`),
+	}
+	runner := TrivyRunner{
+		Binary:        "trivy-test",
+		CommandRunner: fake,
+	}
+
+	_, err := runner.ScanImageWithOptions(context.Background(), "registry.example.com/app:v1", 45*time.Second, ScanImageOptions{
+		SkipDirs: []string{"/cnb", "layers/sbom"},
+	})
+	if err != nil {
+		t.Fatalf("ScanImageWithOptions returned error: %v", err)
+	}
+
+	wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--skip-dir", "/cnb", "--skip-dir", "layers/sbom", "--timeout", "45s", "registry.example.com/app:v1"}
+	if !reflect.DeepEqual(fake.args, wantArgs) {
+		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
+	}
+}
+
+func TestScanInventoryWithOptionsPassesImageSkipDirs(t *testing.T) {
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{{
+			ImageRef: "registry.example.com/app:v1",
+			SkipDirs: []string{"/cnb", "layers/sbom"},
+		}},
+	}
+	runner := &fakeOptionImageRunner{}
+
+	_, _, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+		ParallelScans: 1,
+		Timeout:       30 * time.Second,
+		CacheCleanup:  CleanupNever,
+	})
+	if err != nil {
+		t.Fatalf("ScanInventoryWithOptions returned error: %v", err)
+	}
+	want := []string{"/cnb", "layers/sbom"}
+	if !reflect.DeepEqual(runner.skipDirs, want) {
+		t.Fatalf("skip dirs = %#v, want %#v", runner.skipDirs, want)
+	}
+}
+
 func TestTrivyRunnerParsesVEXSuppressedFindings(t *testing.T) {
 	runner := TrivyRunner{
 		Binary: "trivy",
@@ -833,6 +878,25 @@ type fakeImageRunner struct {
 func (f *fakeImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
 	f.images = append(f.images, image)
 	return f.findings[image], nil
+}
+
+type fakeOptionImageRunner struct {
+	image    string
+	timeout  time.Duration
+	skipDirs []string
+}
+
+func (f *fakeOptionImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
+	f.image = image
+	f.timeout = timeout
+	return nil, nil
+}
+
+func (f *fakeOptionImageRunner) ScanImageWithOptions(ctx context.Context, image string, timeout time.Duration, options ScanImageOptions) ([]model.Finding, error) {
+	f.image = image
+	f.timeout = timeout
+	f.skipDirs = append([]string(nil), options.SkipDirs...)
+	return nil, nil
 }
 
 type fakeCacheCleaner struct {

@@ -111,6 +111,36 @@ func TestCollectStoresProjectLabelsForScoringFallback(t *testing.T) {
 	}
 }
 
+func TestCollectAddsGoogleBaseImageUpdateSkipDirs(t *testing.T) {
+	client := &fakeInventoryClient{
+		services: map[string][]Service{
+			"us-east4": {{
+				Project:          "p",
+				Region:           "us-east4",
+				Name:             "fn",
+				RuntimeClassName: "run.googleapis.com/linux-base-image-update",
+				Labels:           map[string]string{"goog-managed-by": "cloudfunctions"},
+				Containers:       []Container{{Name: "app", Image: "example.com/fn:1"}},
+			}},
+		},
+	}
+
+	got, err := (Collector{Client: client}).Collect(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}})
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if len(got.Images) != 1 {
+		t.Fatalf("images = %#v, want one image", got.Images)
+	}
+	if got.Resources[0].Resource.Kind != "Function" {
+		t.Fatalf("resource kind = %q, want Function", got.Resources[0].Resource.Kind)
+	}
+	want := []string{"/cnb", "layers/sbom"}
+	if !reflect.DeepEqual(got.Images[0].SkipDirs, want) {
+		t.Fatalf("SkipDirs = %#v, want %#v", got.Images[0].SkipDirs, want)
+	}
+}
+
 type fakeInventoryClient struct {
 	services      map[string][]Service
 	jobs          map[string][]Job

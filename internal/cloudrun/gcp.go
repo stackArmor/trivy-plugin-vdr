@@ -14,9 +14,11 @@ import (
 	run "cloud.google.com/go/run/apiv2"
 	"cloud.google.com/go/run/apiv2/runpb"
 	"google.golang.org/api/iterator"
+	runv1 "google.golang.org/api/run/v1"
 )
 
 type GCPClient struct {
+	servicesV1              *runv1.APIService
 	services                *run.ServicesClient
 	jobs                    *run.JobsClient
 	projects                *resourcemanager.ProjectsClient
@@ -35,6 +37,10 @@ type GCPClient struct {
 }
 
 func NewGCPClient(ctx context.Context) (*GCPClient, error) {
+	servicesV1, err := runv1.NewService(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create cloud run v1 service client: %w", err)
+	}
 	services, err := run.NewServicesClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create cloud run services client: %w", err)
@@ -201,6 +207,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		return nil, fmt.Errorf("create regional network endpoint groups client: %w", err)
 	}
 	return &GCPClient{
+		servicesV1:              servicesV1,
 		services:                services,
 		jobs:                    jobs,
 		projects:                projects,
@@ -252,6 +259,15 @@ func (c *GCPClient) Close() error {
 
 func (c *GCPClient) ListServices(ctx context.Context, project, region string) ([]Service, error) {
 	parent := fmt.Sprintf("projects/%s/locations/%s", project, region)
+	resp, err := c.servicesV1.Namespaces.Services.List(parent).Context(ctx).Do()
+	if err == nil {
+		services := make([]Service, 0, len(resp.Items))
+		for _, service := range resp.Items {
+			services = append(services, serviceFromV1(project, region, service))
+		}
+		return services, nil
+	}
+
 	it := c.services.ListServices(ctx, &runpb.ListServicesRequest{Parent: parent})
 	var services []Service
 	for {
@@ -540,6 +556,65 @@ func serviceFromPB(project, region string, service *runpb.Service) Service {
 	}
 }
 
+func serviceFromV1(project, region string, service *runv1.Service) Service {
+	if service == nil {
+		return Service{Project: project, Region: region}
+	}
+	var name string
+	var labels map[string]string
+	var annotations map[string]string
+	if service.Metadata != nil {
+		name = service.Metadata.Name
+		labels = service.Metadata.Labels
+		annotations = service.Metadata.Annotations
+	}
+	var templateSpec *runv1.RevisionSpec
+	if service.Spec != nil && service.Spec.Template != nil {
+		templateSpec = service.Spec.Template.Spec
+	}
+	return Service{
+		Project:          project,
+		Region:           region,
+		Name:             path.Base(name),
+		Ingress:          ingressFromAnnotation(annotations["run.googleapis.com/ingress"]),
+		URI:              serviceURLV1(service),
+		RuntimeClassName: runtimeClassNameV1(templateSpec),
+		Labels:           copyStringMap(labels),
+		Annotations:      copyStringMap(annotations),
+		Containers:       containersFromV1(templateSpec),
+	}
+}
+
+func serviceURLV1(service *runv1.Service) string {
+	if service.Status != nil {
+		if service.Status.Url != "" {
+			return service.Status.Url
+		}
+		if service.Status.Address != nil {
+			return service.Status.Address.Url
+		}
+	}
+	return ""
+}
+
+func runtimeClassNameV1(spec *runv1.RevisionSpec) string {
+	if spec == nil {
+		return ""
+	}
+	return spec.RuntimeClassName
+}
+
+func containersFromV1(spec *runv1.RevisionSpec) []Container {
+	if spec == nil {
+		return nil
+	}
+	result := make([]Container, 0, len(spec.Containers))
+	for _, container := range spec.Containers {
+		result = append(result, Container{Name: container.Name, Image: container.Image})
+	}
+	return result
+}
+
 func jobFromPB(project, region string, job *runpb.Job) Job {
 	return Job{
 		Project:     project,
@@ -571,6 +646,16 @@ func ingressFromPB(ingress runpb.IngressTraffic) string {
 	default:
 		return strings.ToLower(strings.ReplaceAll(name, "_", "-"))
 	}
+}
+
+func ingressFromAnnotation(ingress string) string {
+	if ingress == "" {
+		return ""
+	}
+	if ingress == "internal-and-cloud-load-balancing" {
+		return ingress
+	}
+	return strings.ToLower(strings.ReplaceAll(strings.TrimPrefix(ingress, "INGRESS_TRAFFIC_"), "_", "-"))
 }
 
 func backendServiceURLsFromURLMap(urlMap *computepb.UrlMap) []string {
