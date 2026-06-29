@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudrun"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/epss"
@@ -50,7 +51,7 @@ func run(args []string) error {
 	case config.SourceK8s:
 		return runK8s(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceCloudRun:
-		return errors.New("cloudrun source is parsed but not wired yet")
+		return runCloudRun(context.Background(), cfg, logger, os.Stdout)
 	default:
 		return fmt.Errorf("source %q is not implemented yet", cfg.Source)
 	}
@@ -109,6 +110,82 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 	}
 
+	exposures := map[model.ResourceRef]model.Exposure{}
+	if !cfg.SkipExposure {
+		logger.Info("analyzing service exposure")
+		objects, exposureWarnings, err := collector.CollectExposureObjectsWithWarnings(ctx, k8sOptions)
+		if err != nil {
+			return err
+		}
+		warnings = append(warnings, exposureWarnings...)
+		exposures = exposure.Analyze(inventory, objects)
+	}
+
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+}
+
+func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+	client, err := cloudrun.NewGCPClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := client.Close(); closeErr != nil {
+			logger.Warn("closing Google Cloud clients: %v", closeErr)
+		}
+	}()
+
+	options := cloudrun.Options{Project: cfg.Project, Regions: cfg.Regions}
+	collector := cloudrun.Collector{Client: client}
+	logger.Info("collecting Cloud Run inventory from project %q regions %v", cfg.Project, cfg.Regions)
+	inventory, services, jobs, err := collector.CollectResources(ctx, options)
+	if err != nil {
+		return err
+	}
+	logger.Info("inventory: %d Cloud Run resources, %d unique images", len(inventory.Resources), len(inventory.Images))
+
+	var warnings []string
+	for _, w := range inventory.Warnings {
+		logger.Warn("%s", w)
+	}
+	warnings = append(warnings, inventory.Warnings...)
+
+	var dockerConfigDir string
+	if !cfg.SkipRegistryAuth {
+		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
+			EnableGcloud: !cfg.NoGcloudAuth,
+			EnableECR:    !cfg.NoECRAuth,
+		}, logger)
+		if err != nil {
+			return err
+		}
+		defer res.Cleanup()
+		dockerConfigDir = res.Dir
+		for _, w := range res.Warnings {
+			warnings = append(warnings, "registry auth: "+w)
+			logger.Warn("registry auth: %s", w)
+		}
+		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
+	}
+
+	exposures := map[model.ResourceRef]model.Exposure{}
+	if !cfg.SkipExposure {
+		logger.Info("analyzing Cloud Run exposure")
+		cloudRunExposures, exposureWarnings, err := cloudrun.AnalyzeExposure(ctx, inventory, services, jobs, client)
+		if err != nil {
+			return err
+		}
+		exposures = cloudRunExposures
+		for _, w := range exposureWarnings {
+			warnings = append(warnings, w)
+			logger.Warn("%s", w)
+		}
+	}
+
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+}
+
+func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, warnings []string, dockerConfigDir string, exposures map[model.ResourceRef]model.Exposure) error {
 	trivyRunner := scanner.TrivyRunner{
 		ImageSrc:         cfg.ImageSrc,
 		CacheDir:         cfg.CacheDir,
@@ -179,16 +256,6 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 
 	warnings = append(warnings, scannerWarnings(scanWarnings)...)
-	exposures := map[model.ResourceRef]model.Exposure{}
-	if !cfg.SkipExposure {
-		logger.Info("analyzing service exposure")
-		objects, exposureWarnings, err := collector.CollectExposureObjectsWithWarnings(ctx, k8sOptions)
-		if err != nil {
-			return err
-		}
-		warnings = append(warnings, exposureWarnings...)
-		exposures = exposure.Analyze(inventory, objects)
-	}
 
 	scoringConfig := scoring.Default()
 	if cfg.ScoringConfig != "" {
