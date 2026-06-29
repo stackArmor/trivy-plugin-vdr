@@ -1,13 +1,14 @@
 # vdr
 
-`vdr` is a Trivy plugin for vulnerability detection and response workflows. The first source is Kubernetes: `trivy vdr k8s` will inventory workload images from the current Kubernetes context, scan each unique full image reference once, and report findings back against the resources and containers that use each image.
+`vdr` is a Trivy plugin for vulnerability detection and response workflows. It can inventory Kubernetes workloads from the current Kubernetes context or Google Cloud Run services and jobs from a Google Cloud project, scan each unique full image reference once, and report findings back against the resources and containers that use each image.
 
-The Kubernetes source collects workload image inventory, scans each unique image with Trivy, enriches CVEs with EPSS and CISA Vulnrichment data, analyzes public ingress/gateway exposure, and emits JSON, table, and optional standalone HTML reports.
+The Kubernetes source collects workload image inventory, scans each unique image with Trivy, enriches CVEs with EPSS and CISA Vulnrichment data, analyzes public ingress/gateway exposure, and emits JSON, table, and optional standalone HTML reports. The Cloud Run source collects every container image used by Cloud Run services and jobs in the selected regions, analyzes service reachability through Cloud Run IAM/ingress and external load balancers/IAP, and emits the same report shapes.
 
 ## Features
 
 - Trivy plugin entrypoint named `vdr`.
 - Kubernetes source subcommand named `k8s`.
+- Google Cloud Run source subcommand named `cloudrun`.
 - Workload inventory from Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs, plus standalone Pods. Pods managed by a collected controller are skipped to avoid double-counting; pods owned by other controllers (e.g. operators/CRDs) are still inventoried.
 - Reserved future source subcommands named `ecs` and `image`.
 - JSON and table output mode flags.
@@ -38,9 +39,103 @@ trivy vdr k8s --quiet
 trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.html
 trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
 trivy vdr k8s --all-namespaces --scoring-config vdr-scoring.yaml
+trivy vdr cloudrun --project my-gcp-project --region us-east4 --region us-central1 --output vdr-cloudrun.json
+trivy vdr cloudrun --project my-gcp-project --region us-east4 --view resources --html-output vdr-cloudrun.html
 ```
 
 Future source commands are reserved but not implemented yet: `trivy vdr ecs` and `trivy vdr image`.
+
+## Required permissions
+
+`vdr` uses read-only access. Registry authentication and exposure analysis add optional reads; when those optional reads are denied, the run records warnings and continues where possible.
+
+### Kubernetes native RBAC
+
+For Kubernetes inventory in selected namespaces:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vdr-read
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes", "grpcroutes", "referencegrants"]
+    verbs: ["list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["tcproutes", "tlsroutes"]
+    verbs: ["list"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["gcpbackendpolicies"]
+    verbs: ["list"]
+  - apiGroups: ["cloud.google.com"]
+    resources: ["backendconfigs"]
+    verbs: ["list"]
+  - apiGroups: ["elbv2.k8s.aws"]
+    resources: ["ingressclassparams"]
+    verbs: ["list"]
+  - apiGroups: ["gateway.k8s.aws"]
+    resources: ["loadbalancerconfigurations"]
+    verbs: ["list"]
+```
+
+Notes:
+
+- `secrets/get` is only needed when registry auth from Kubernetes `imagePullSecrets` is enabled. Use `--skip-registry-auth` to avoid reading Secrets.
+- `configmaps/get` is used for the optional `kube-system/vdr-fedramp` scoring ConfigMap.
+- Exposure resources are optional. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis.
+- If you never use AWS ALB/Gateway resources, the `elbv2.k8s.aws` and `gateway.k8s.aws` rules can be omitted. If you never use GKE ingress/gateway IAP metadata, the `cloud.google.com/backendconfigs` and `networking.gke.io/gcpbackendpolicies` rules can be omitted.
+
+### GKE IAM alternative
+
+When accessing GKE through Google IAM instead of a Kubernetes service account, the caller still needs Kubernetes API authorization after authentication. The broad managed role `roles/container.developer` is usually enough to read Kubernetes API objects through GKE credentials, but a narrower setup is preferred:
+
+- Google IAM: `roles/container.clusterViewer` on the project or cluster, so the caller can discover and authenticate to the cluster.
+- Kubernetes RBAC: bind the native `ClusterRole` above to the Google principal or Google group.
+
+### Cloud Run IAM
+
+For Cloud Run inventory and exposure analysis, grant a custom Google Cloud IAM role with these permissions on the scanned project:
+
+```text
+run.services.list
+run.services.getIamPolicy
+run.jobs.list
+compute.regions.list
+compute.globalForwardingRules.list
+compute.forwardingRules.list
+compute.targetHttpProxies.get
+compute.targetHttpsProxies.get
+compute.regionTargetHttpProxies.get
+compute.regionTargetHttpsProxies.get
+compute.urlMaps.get
+compute.regionUrlMaps.get
+compute.backendServices.get
+compute.regionBackendServices.get
+compute.regionNetworkEndpointGroups.get
+```
+
+Notes:
+
+- `run.services.getIamPolicy` is required to detect `allUsers` with `roles/run.invoker` on services whose ingress is `all`.
+- The Compute permissions are required only for services whose ingress is `internal-and-cloud-load-balancing`; they let `vdr` resolve public forwarding rules to URL maps, backend services, serverless NEGs, and backend IAP state.
+- Cloud Run jobs are always treated as not internet reachable, but `run.jobs.list` is required to inventory and scan their images.
+- For private Google Artifact Registry/GCR images, the local `gcloud` identity used for `gcloud auth print-access-token` must also be able to read those images, for example with `roles/artifactregistry.reader` on the relevant repositories or project.
 
 ## Enrichment cache
 
@@ -64,7 +159,7 @@ Flags:
 - `--no-gcloud-auth` skips the `gcloud` token for GAR/GCR.
 - `--no-ecr-auth` skips the `aws` token for ECR.
 
-This adds one RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
+This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
 
 ## VEX attestations
 
@@ -160,6 +255,9 @@ See [`examples/configmaps/`](examples/configmaps/) for starter GKE, EKS, and AKS
 
 Exposure analysis is intentionally conservative:
 
+- Cloud Run jobs are never marked internet reachable.
+- Cloud Run services are public when ingress is `all` and the service IAM policy grants `allUsers` `roles/run.invoker`.
+- Cloud Run services with `internal-and-cloud-load-balancing` ingress are public only when an external global or regional load balancer routes to the service's serverless NEG and the backend service does not have IAP enabled.
 - GKE Gateway is public only for known external GKE Gateway classes.
 - GKE Gateway backends protected by `GCPBackendPolicy.spec.default.iap.enabled=true` are not marked internet accessible.
 - GKE Ingress is public for `gce` and not public for `gce-internal`.
@@ -175,13 +273,14 @@ Normal init containers do not inherit internet exposure. Sidecar-style init cont
 
 ## Known limits
 
-The Kubernetes source currently supports Kubernetes workload image inventory, Trivy image vulnerability scans, EPSS/Vulnrichment enrichment, GKE exposure metadata, and AWS ALB exposure metadata. The `ecs` and `image` sources are reserved for future implementation.
+The Kubernetes source currently supports Kubernetes workload image inventory, Trivy image vulnerability scans, EPSS/Vulnrichment enrichment, GKE exposure metadata, and AWS ALB exposure metadata. The Cloud Run source supports Cloud Run services and jobs, Cloud Run IAM ingress checks, and external Google Cloud load balancer/IAP checks for serverless NEG backends. The `ecs` and `image` sources are reserved for future implementation.
 
 Run the standalone binary during development:
 
 ```sh
 go run ./cmd/vdr --help
 go run ./cmd/vdr k8s --help
+go run ./cmd/vdr cloudrun --help
 go build -o vdr ./cmd/vdr
 ```
 
