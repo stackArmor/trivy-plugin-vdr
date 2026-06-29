@@ -170,6 +170,50 @@ func TestParseNamespaceFlags(t *testing.T) {
 	}
 }
 
+func TestParseCloudRunSourceRequiresProjectAndRegion(t *testing.T) {
+	_, err := Parse([]string{"cloudrun"})
+	if err == nil || !strings.Contains(err.Error(), "--project") {
+		t.Fatalf("error = %v, want missing project", err)
+	}
+
+	_, err = Parse([]string{"cloudrun", "--project", "armory-gss-prod"})
+	if err == nil || !strings.Contains(err.Error(), "--region") {
+		t.Fatalf("error = %v, want missing region", err)
+	}
+}
+
+func TestParseCloudRunSource(t *testing.T) {
+	cfg, err := Parse([]string{
+		"cloudrun",
+		"--project", "armory-gss-prod",
+		"--region", "us-east4",
+		"--region", "us-central1",
+		"--view", "resources",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Source != SourceCloudRun {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceCloudRun)
+	}
+	if cfg.Project != "armory-gss-prod" {
+		t.Fatalf("Project = %q", cfg.Project)
+	}
+	if !reflect.DeepEqual(cfg.Regions, []string{"us-east4", "us-central1"}) {
+		t.Fatalf("Regions = %#v", cfg.Regions)
+	}
+	if cfg.View != "resources" {
+		t.Fatalf("View = %q", cfg.View)
+	}
+}
+
+func TestParseCloudRunRejectsKubernetesNamespaceFlags(t *testing.T) {
+	_, err := Parse([]string{"cloudrun", "--project", "p", "--region", "us-east4", "--namespace", "default"})
+	if err == nil || !strings.Contains(err.Error(), "--namespace") {
+		t.Fatalf("error = %v, want namespace rejection", err)
+	}
+}
+
 func TestParseAllowsGlobalFlagsBeforeAndAfterK8sSource(t *testing.T) {
 	cfg, err := Parse([]string{"--format", "table", "k8s", "--view", "resources", "--timeout", "45s"})
 	if err != nil {

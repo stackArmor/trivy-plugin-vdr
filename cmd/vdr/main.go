@@ -49,6 +49,8 @@ func run(args []string) error {
 	switch cfg.Source {
 	case config.SourceK8s:
 		return runK8s(context.Background(), cfg, logger, os.Stdout)
+	case config.SourceCloudRun:
+		return errors.New("cloudrun source is parsed but not wired yet")
 	default:
 		return fmt.Errorf("source %q is not implemented yet", cfg.Source)
 	}
