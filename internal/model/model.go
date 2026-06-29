@@ -35,6 +35,9 @@ type ResourceInventory struct {
 type ResourceRef struct {
 	APIVersion    string `json:"apiVersion,omitempty"`
 	Kind          string `json:"kind"`
+	Provider      string `json:"provider,omitempty"`
+	Project       string `json:"project,omitempty"`
+	Region        string `json:"region,omitempty"`
 	Namespace     string `json:"namespace,omitempty"`
 	Name          string `json:"name"`
 	ContainerName string `json:"containerName,omitempty"`

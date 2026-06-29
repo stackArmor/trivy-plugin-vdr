@@ -81,6 +81,49 @@ func TestBuildResourceViewIncludesSecurityAndExposure(t *testing.T) {
 	}
 }
 
+func TestBuildResourcesViewPreservesCloudRunIdentity(t *testing.T) {
+	ref := model.ResourceRef{
+		APIVersion:    "run.googleapis.com/v1",
+		Kind:          "Service",
+		Provider:      "gcp-cloud-run",
+		Project:       "armory-gss-prod",
+		Region:        "us-east4",
+		Name:          "peregrine",
+		ContainerName: "gateway",
+		ContainerType: "container",
+	}
+	inventory := &model.Inventory{
+		ContextName: "cloudrun/armory-gss-prod",
+		Resources: []model.ResourceInventory{{
+			Resource: model.ResourceRef{
+				APIVersion: "run.googleapis.com/v1",
+				Kind:       "Service",
+				Provider:   "gcp-cloud-run",
+				Project:    "armory-gss-prod",
+				Region:     "us-east4",
+				Name:       "peregrine",
+			},
+			Images: []model.ContainerImage{{
+				Name:          "gateway",
+				ContainerType: "container",
+				ImageRef:      "us-east4-docker.pkg.dev/armory-gss-prod/peregrine/peregrine:1",
+			}},
+		}},
+		Images: []model.ImageInventory{{
+			ImageRef:  "us-east4-docker.pkg.dev/armory-gss-prod/peregrine/peregrine:1",
+			Resources: []model.ResourceRef{ref},
+		}},
+	}
+
+	got := Build(inventory, nil, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	if len(got.Resources) != 1 {
+		t.Fatalf("resources = %d, want 1", len(got.Resources))
+	}
+	if got.Resources[0].Resource.Project != "armory-gss-prod" || got.Resources[0].Resource.Region != "us-east4" {
+		t.Fatalf("resource identity = %#v, want project and region preserved", got.Resources[0].Resource)
+	}
+}
+
 func TestBuildResourceViewIncludesCleanInventoryResources(t *testing.T) {
 	inv := sampleInventory()
 	inv.Resources = append(inv.Resources, model.ResourceInventory{

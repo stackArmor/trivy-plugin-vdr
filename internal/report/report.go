@@ -104,7 +104,7 @@ func workloadLabelIndex(inventory *model.Inventory) map[string]map[string]string
 }
 
 func workloadLabelKey(ref model.ResourceRef) string {
-	return ref.Namespace + "\x00" + ref.Kind + "\x00" + ref.Name
+	return strings.Join([]string{ref.Provider, ref.Project, ref.Region, ref.Namespace, ref.Kind, ref.Name}, "\x00")
 }
 
 // scoreAsset computes the PAIN and FedRAMP remediation deadline for a finding on
@@ -184,7 +184,7 @@ func RenderTable(w io.Writer, report model.Report) error {
 		}
 		for _, resource := range report.Resources {
 			if _, err := fmt.Fprintf(tw, "%s\t%s/%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
-				resource.Resource.Namespace,
+				resourceScope(resource.Resource),
 				resource.Resource.Kind,
 				resource.Resource.Name,
 				resource.Resource.ContainerName,
@@ -721,15 +721,28 @@ func formatExposure(exposure *model.Exposure) string {
 }
 
 func resourceLabel(ref model.ResourceRef) string {
-	parts := []string{ref.Kind, ref.Namespace, ref.Name}
+	parts := []string{ref.Kind, resourceScope(ref), ref.Name}
 	if ref.ContainerName != "" {
 		parts = append(parts, ref.ContainerName)
 	}
 	return strings.Join(parts, "/")
 }
 
+func resourceScope(ref model.ResourceRef) string {
+	if ref.Namespace != "" {
+		return ref.Namespace
+	}
+	if ref.Project != "" && ref.Region != "" {
+		return ref.Project + "/" + ref.Region
+	}
+	if ref.Project != "" {
+		return ref.Project
+	}
+	return ""
+}
+
 func resourceSortKey(ref model.ResourceRef) string {
-	return strings.Join([]string{ref.Namespace, ref.Kind, ref.Name, ref.ContainerType, ref.ContainerName}, "\x00")
+	return strings.Join([]string{ref.Provider, ref.Project, ref.Region, ref.Namespace, ref.Kind, ref.Name, ref.ContainerType, ref.ContainerName}, "\x00")
 }
 
 func copyStringMap(values map[string]string) map[string]string {
