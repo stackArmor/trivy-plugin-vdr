@@ -319,6 +319,10 @@
         lines.push("Agency scope: " + (row.painObj.multiAgency ? "more than one (multi-agency)" : "single agency"));
       }
       if (row.security) lines.push("Security: " + row.security);
+      const securityPolicy = row.exposure && row.exposure.protection && row.exposure.protection.securityPolicy;
+      if (securityPolicy && securityPolicy.type === "cloud-armor" && securityPolicy.name) {
+        lines.push("Cloud Armor: " + securityPolicy.name);
+      }
       return lines.join("\n");
     }
     if (resources.length) {

@@ -347,10 +347,6 @@ func indexGCPBackendPolicies(objects []unstructured.Unstructured) map[serviceKey
 		if !hasGroupKind(object, "networking.gke.io", "GCPBackendPolicy") {
 			continue
 		}
-		enabled, _, _ := unstructured.NestedBool(object.Object, "spec", "default", "iap", "enabled")
-		if !enabled {
-			continue
-		}
 		targetKind, _, _ := unstructured.NestedString(object.Object, "spec", "targetRef", "kind")
 		if targetKind != "" && targetKind != "Service" {
 			continue
@@ -359,13 +355,49 @@ func indexGCPBackendPolicies(objects []unstructured.Unstructured) map[serviceKey
 		if serviceName == "" {
 			continue
 		}
-		evidence := fmt.Sprintf("GKE GCPBackendPolicy %s/%s enables IAP for Service %s/%s", object.GetNamespace(), object.GetName(), object.GetNamespace(), serviceName)
+		enabled, _, _ := unstructured.NestedBool(object.Object, "spec", "default", "iap", "enabled")
+		cloudArmorPolicy := gcpBackendPolicyCloudArmorPolicy(object)
+		if !enabled && cloudArmorPolicy == "" {
+			continue
+		}
+		protection := model.AccessProtection{Provider: "gke"}
+		var evidence string
+		if enabled {
+			evidence = fmt.Sprintf("GKE GCPBackendPolicy %s/%s enables IAP for Service %s/%s", object.GetNamespace(), object.GetName(), object.GetNamespace(), serviceName)
+			protection.Type = "iap"
+			protection.Enabled = true
+			protection.Evidence = evidence
+		}
+		if cloudArmorPolicy != "" {
+			armorEvidence := fmt.Sprintf("GKE GCPBackendPolicy %s/%s attaches Cloud Armor policy %s to Service %s/%s", object.GetNamespace(), object.GetName(), cloudArmorPolicy, object.GetNamespace(), serviceName)
+			protection.SecurityPolicy = &model.SecurityPolicy{
+				Type:     "cloud-armor",
+				Name:     cloudArmorPolicy,
+				Provider: "gke",
+				Evidence: armorEvidence,
+			}
+			if evidence == "" {
+				evidence = armorEvidence
+			} else {
+				evidence += "; " + armorEvidence
+			}
+		}
 		index[serviceKey{namespace: object.GetNamespace(), name: serviceName}] = protectionInfo{
-			protection: model.AccessProtection{Type: "iap", Enabled: true, Provider: "gke", Evidence: evidence},
+			protection: protection,
 			evidence:   evidence,
 		}
 	}
 	return index
+}
+
+func gcpBackendPolicyCloudArmorPolicy(object unstructured.Unstructured) string {
+	if policy, ok, _ := unstructured.NestedString(object.Object, "spec", "default", "securityPolicy"); ok {
+		return policy
+	}
+	if policy, ok, _ := unstructured.NestedString(object.Object, "spec", "default", "securityPolicy", "name"); ok {
+		return policy
+	}
+	return ""
 }
 
 func analyzeGatewayRoutes(
@@ -419,7 +451,9 @@ func analyzeGatewayRoutes(
 				}
 				if gateway.provider == "gke" {
 					if protection, ok := gcpBackendPolicies[key]; ok {
-						exposure.InternetAccessible = false
+						if protection.protection.Enabled {
+							exposure.InternetAccessible = false
+						}
 						exposure.Protection = copyProtection(protection.protection)
 						exposure.Evidence = append(exposure.Evidence, protection.evidence)
 					}

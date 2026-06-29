@@ -76,6 +76,32 @@ func TestAnalyzeGKEGatewayIAPBackendPolicyProtectsTargetService(t *testing.T) {
 	requireEvidence(t, exposure, "GKE GCPBackendPolicy default/web-iap enables IAP for Service default/web-svc")
 }
 
+func TestAnalyzeGKEGatewayBackendPolicyCloudArmorIsVisibleWithoutChangingReachability(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "public-gw", "gke-l7-global-external-managed"),
+			httpRoute("default", "public-route", "public-gw", "web-svc"),
+			gcpBackendPolicyCloudArmor("default", "web-armor", "web-svc", "prod-armor"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want public with Cloud Armor visibility only: %#v", exposure)
+	}
+	if exposure.Protection == nil || exposure.Protection.SecurityPolicy == nil {
+		t.Fatalf("Protection = %#v, want Cloud Armor security policy visibility", exposure.Protection)
+	}
+	if exposure.Protection.SecurityPolicy.Type != "cloud-armor" || exposure.Protection.SecurityPolicy.Name != "prod-armor" {
+		t.Fatalf("SecurityPolicy = %#v, want Cloud Armor prod-armor", exposure.Protection.SecurityPolicy)
+	}
+	requireEvidence(t, exposure, "GKE GCPBackendPolicy default/web-armor attaches Cloud Armor policy prod-armor to Service default/web-svc")
+}
+
 func TestAnalyzeGKEIngressGCEAndInternalClasses(t *testing.T) {
 	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
 	objects := Objects{
@@ -855,6 +881,25 @@ func gcpBackendPolicyIAP(namespace, name, serviceName string, enabled bool) unst
 		},
 		"spec": map[string]any{
 			"default": map[string]any{"iap": map[string]any{"enabled": enabled}},
+			"targetRef": map[string]any{
+				"group": "",
+				"kind":  "Service",
+				"name":  serviceName,
+			},
+		},
+	}}
+}
+
+func gcpBackendPolicyCloudArmor(namespace, name, serviceName, policyName string) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.gke.io/v1",
+		"kind":       "GCPBackendPolicy",
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+		"spec": map[string]any{
+			"default": map[string]any{"securityPolicy": policyName},
 			"targetRef": map[string]any{
 				"group": "",
 				"kind":  "Service",

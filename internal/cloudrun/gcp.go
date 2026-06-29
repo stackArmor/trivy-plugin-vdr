@@ -489,6 +489,7 @@ func (c *GCPClient) routesForBackend(ctx context.Context, project string, rule *
 			CloudRunRegion:       serviceRegion,
 			IAPEnabled:           backendIAPEnabled(backend),
 			IAPOAuth2ClientID:    backend.GetIap().GetOauth2ClientId(),
+			CloudArmorPolicy:     backendSecurityPolicy(backend),
 			BackendServiceRegion: backendRegion,
 		})
 	}
@@ -585,6 +586,13 @@ func cloudRunServiceFromNEG(neg *computepb.NetworkEndpointGroup) (string, string
 
 func backendIAPEnabled(backend *computepb.BackendService) bool {
 	return backend != nil && backend.GetIap() != nil && backend.GetIap().GetEnabled()
+}
+
+func backendSecurityPolicy(backend *computepb.BackendService) string {
+	if backend == nil || backend.GetSecurityPolicy() == "" {
+		return ""
+	}
+	return path.Base(backend.GetSecurityPolicy())
 }
 
 func regionFromURL(value string) string {
