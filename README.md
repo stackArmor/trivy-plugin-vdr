@@ -116,6 +116,7 @@ For Cloud Run inventory and exposure analysis, grant a custom Google Cloud IAM r
 run.services.list
 run.services.getIamPolicy
 run.jobs.list
+resourcemanager.projects.get
 compute.regions.list
 compute.globalForwardingRules.list
 compute.forwardingRules.list
@@ -133,6 +134,7 @@ compute.regionNetworkEndpointGroups.get
 Notes:
 
 - `run.services.getIamPolicy` is required to detect `allUsers` with `roles/run.invoker` on services whose ingress is `all`.
+- `resourcemanager.projects.get` is required to read project labels used as Cloud Run PAIN scoring defaults. Resource-level Cloud Run labels override project labels.
 - The Compute permissions are required only for services whose ingress is `internal-and-cloud-load-balancing`; they let `vdr` resolve public forwarding rules to URL maps, backend services, serverless NEGs, and backend IAP state.
 - Cloud Run jobs are always treated as not internet reachable, but `run.jobs.list` is required to inventory and scan their images.
 - For private Google Artifact Registry/GCR images, the local `gcloud` identity used for `gcloud auth print-access-token` must also be able to read those images, for example with `roles/artifactregistry.reader` on the relevant repositories or project.

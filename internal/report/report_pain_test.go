@@ -127,6 +127,105 @@ func TestBuildComputesRemediation(t *testing.T) {
 	}
 }
 
+func TestBuildCloudRunResourceLabelsOverrideProjectLabels(t *testing.T) {
+	workload := model.ResourceRef{
+		APIVersion: "run.googleapis.com/v1",
+		Kind:       "Service",
+		Provider:   "gcp-cloud-run",
+		Project:    "p",
+		Region:     "us-east4",
+		Name:       "api",
+	}
+	container := workload
+	container.ContainerName = "app"
+	container.ContainerType = "container"
+	inv := &model.Inventory{
+		ContextName: "cloudrun/p",
+		Namespaces: map[string]map[string]string{
+			"cloudrun/p": {
+				"vdr.fedramp.io/asset-archetype": "data-sensitive",
+				"vdr.fedramp.io/multi-agency":    "true",
+				"vdr.fedramp.io/class":           "D",
+			},
+		},
+		Resources: []model.ResourceInventory{{
+			Resource: workload,
+			Labels: map[string]string{
+				"vdr.fedramp.io/asset-archetype": "dev-test",
+				"vdr.fedramp.io/multi-agency":    "false",
+				"vdr.fedramp.io/class":           "B",
+			},
+			Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}},
+		}},
+		Images: []model.ImageInventory{{ImageRef: "example/app:v1", Resources: []model.ResourceRef{container}}},
+	}
+	finding := painFinding("CVE-2026-7000", container)
+	finding.EPSS = &model.EPSS{Score: 0.9}
+
+	got := Build(inv, []model.Finding{finding}, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	if len(got.Resources) != 1 || len(got.Resources[0].Findings) != 1 {
+		t.Fatalf("expected one Cloud Run resource finding, got %#v", got.Resources)
+	}
+	pain := got.Resources[0].Findings[0].Pain
+	rem := got.Resources[0].Findings[0].Remediation
+	if pain == nil || rem == nil {
+		t.Fatalf("expected PAIN/remediation, got pain=%#v remediation=%#v", pain, rem)
+	}
+	if pain.Archetype != "dev-test" || pain.ArchetypeSource != "label" || pain.MultiAgency {
+		t.Fatalf("PAIN = %#v, want resource labels dev-test/single-agency", pain)
+	}
+	if rem.Class != "B" {
+		t.Fatalf("remediation class = %q, want resource label class B", rem.Class)
+	}
+}
+
+func TestBuildCloudRunUsesProjectLabelsAsFallback(t *testing.T) {
+	workload := model.ResourceRef{
+		APIVersion: "run.googleapis.com/v1",
+		Kind:       "Job",
+		Provider:   "gcp-cloud-run",
+		Project:    "p",
+		Region:     "us-east4",
+		Name:       "batch",
+	}
+	container := workload
+	container.ContainerName = "worker"
+	container.ContainerType = "container"
+	inv := &model.Inventory{
+		ContextName: "cloudrun/p",
+		Namespaces: map[string]map[string]string{
+			"cloudrun/p": {
+				"vdr.fedramp.io/asset-archetype": "data-sensitive",
+				"vdr.fedramp.io/multi-agency":    "true",
+				"vdr.fedramp.io/class":           "D",
+			},
+		},
+		Resources: []model.ResourceInventory{{
+			Resource: workload,
+			Images:   []model.ContainerImage{{Name: "worker", ContainerType: "container", ImageRef: "example/app:v1"}},
+		}},
+		Images: []model.ImageInventory{{ImageRef: "example/app:v1", Resources: []model.ResourceRef{container}}},
+	}
+	finding := painFinding("CVE-2026-7001", container)
+	finding.EPSS = &model.EPSS{Score: 0.9}
+
+	got := Build(inv, []model.Finding{finding}, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	if len(got.Resources) != 1 || len(got.Resources[0].Findings) != 1 {
+		t.Fatalf("expected one Cloud Run resource finding, got %#v", got.Resources)
+	}
+	pain := got.Resources[0].Findings[0].Pain
+	rem := got.Resources[0].Findings[0].Remediation
+	if pain == nil || rem == nil {
+		t.Fatalf("expected PAIN/remediation, got pain=%#v remediation=%#v", pain, rem)
+	}
+	if pain.Archetype != "data-sensitive" || pain.ArchetypeSource != "namespaceLabel" || !pain.MultiAgency {
+		t.Fatalf("PAIN = %#v, want project fallback labels data-sensitive/multi-agency", pain)
+	}
+	if rem.Class != "D" {
+		t.Fatalf("remediation class = %q, want project fallback class D", rem.Class)
+	}
+}
+
 func TestBuildManagedNamespaceRuleNoFalseN5(t *testing.T) {
 	inv, ref := labeledInventory("kube-system", "metrics-server-v1", "") // no label
 	finding := painFinding("CVE-2026-3000", ref)

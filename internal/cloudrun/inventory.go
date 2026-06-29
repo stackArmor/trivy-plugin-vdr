@@ -31,6 +31,14 @@ func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.I
 		inventory: &model.Inventory{ContextName: "cloudrun/" + opts.Project},
 		images:    map[string]*model.ImageInventory{},
 	}
+	if labelClient, ok := c.Client.(ProjectLabelClient); ok {
+		labels, err := labelClient.GetProjectLabels(ctx, opts.Project)
+		if err != nil {
+			builder.inventory.Warnings = append(builder.inventory.Warnings, fmt.Sprintf("cloudrun project labels for %s not read (%v); PAIN scoring uses built-in defaults unless resource labels are present", opts.Project, err))
+		} else if len(labels) > 0 {
+			builder.inventory.Namespaces = map[string]map[string]string{ProjectLabelScope(opts.Project): copyStringMap(labels)}
+		}
+	}
 	var allServices []Service
 	var allJobs []Job
 	for _, region := range opts.Regions {
@@ -56,6 +64,10 @@ func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.I
 		allJobs = append(allJobs, jobs...)
 	}
 	return builder.finish(), allServices, allJobs, nil
+}
+
+func ProjectLabelScope(project string) string {
+	return "cloudrun/" + project
 }
 
 type inventoryBuilder struct {
