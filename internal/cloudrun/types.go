@@ -39,6 +39,31 @@ type InventoryClient interface {
 	ListJobs(ctx context.Context, project, region string) ([]Job, error)
 }
 
+type PolicyBinding struct {
+	Role    string
+	Members []string
+}
+
+type LoadBalancerRoute struct {
+	Name                 string
+	Scheme               string
+	IPAddress            string
+	TargetProxy          string
+	URLMap               string
+	BackendService       string
+	ServerlessNEG         string
+	CloudRunService      string
+	CloudRunRegion       string
+	IAPEnabled           bool
+	IAPOAuth2ClientID    string
+	BackendServiceRegion string
+}
+
+type ExposureClient interface {
+	GetServicePolicy(ctx context.Context, project, region, service string) ([]PolicyBinding, error)
+	ListLoadBalancerRoutes(ctx context.Context, project string) ([]LoadBalancerRoute, error)
+}
+
 type Collector struct {
 	Client InventoryClient
 }
