@@ -28,10 +28,23 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
-  release:
-    name: Build & publish
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Unix only: the scanner uses syscall.Statfs, which isn't available on Windows.
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -42,24 +55,37 @@ jobs:
 
       - name: Build release archives
         env:
-          VERSION: ${{ github.ref_name }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Unix only: the scanner uses syscall.Statfs, which isn't available on Windows.
-          platforms="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64"
-          for platform in $platforms; do
-            os="${platform%/*}"
-            arch="${platform#*/}"
-            bin="vdr"
+          bin="vdr"
 
-            echo "Building $os/$arch"
-            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-              go build -trimpath -ldflags "-s -w" -o "$bin" ./cmd/vdr
+          echo "Building ${GOOS}/${GOARCH} at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$bin" ./cmd/vdr
 
-            tar -czf "dist/vdr_${os}_${arch}.tar.gz" "$bin" plugin.yaml
-            rm -f "$bin"
-          done
+          tar -czf "dist/vdr_${GOOS}_${GOARCH}.tar.gz" "$bin" plugin.yaml
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: vdr-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/vdr_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: vdr-*
+          path: dist
+          merge-multiple: true
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
