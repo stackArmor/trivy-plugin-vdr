@@ -26,6 +26,8 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Exploitation", "EPSS score", "Technical impact", "window.__VDR_REPORT__",
 		"CVE-2026-0001",
 		"VDR Report",
+		"Resource type",
+		`id="resource-type"`,
 		"Fix status",
 		`id="status"`,
 		"will_not_fix",
@@ -78,6 +80,55 @@ func TestRenderHTMLResourceTooltipIncludesCloudArmorPolicy(t *testing.T) {
 	for _, want := range []string{"Cloud Armor: ", `"name":"prod-armor"`} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("HTML output missing %q", want)
+		}
+	}
+}
+
+func TestRenderHTMLCloudRunOmitsNamespaceAndIncludesResourceTypeFilter(t *testing.T) {
+	ref := model.ResourceRef{
+		APIVersion:    "run.googleapis.com/v1",
+		Kind:          "Function",
+		Provider:      "gcp-cloud-run",
+		Project:       "armory-gss-prod",
+		Region:        "us-east4",
+		Name:          "processor",
+		ContainerName: "worker",
+		ContainerType: "container",
+	}
+	inventory := &model.Inventory{
+		ContextName: "cloudrun/armory-gss-prod",
+		Resources: []model.ResourceInventory{{
+			Resource: model.ResourceRef{
+				APIVersion: "run.googleapis.com/v1",
+				Kind:       "Function",
+				Provider:   "gcp-cloud-run",
+				Project:    "armory-gss-prod",
+				Region:     "us-east4",
+				Name:       "processor",
+			},
+			Images: []model.ContainerImage{{Name: "worker", ContainerType: "container", ImageRef: "example.com/fn:v1"}},
+		}},
+		Images: []model.ImageInventory{{ImageRef: "example.com/fn:v1", Resources: []model.ResourceRef{ref}}},
+	}
+	finding := sampleFinding("CVE-2026-0003", "HIGH", 0.7)
+	finding.ImageRef = "example.com/fn:v1"
+	finding.AffectedResources = []model.ResourceRef{ref}
+	scanReport := Build(inventory, []model.Finding{finding}, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	var buf bytes.Buffer
+
+	if err := RenderHTML(&buf, scanReport, ""); err != nil {
+		t.Fatalf("RenderHTML returned error: %v", err)
+	}
+
+	output := buf.String()
+	for _, want := range []string{"Resource type", `id="resource-type"`, "Function"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Cloud Run HTML output missing %q", want)
+		}
+	}
+	for _, notWant := range []string{`id="namespace"`, "<th>Namespace</th>"} {
+		if strings.Contains(output, notWant) {
+			t.Fatalf("Cloud Run HTML output should omit %q", notWant)
 		}
 	}
 }

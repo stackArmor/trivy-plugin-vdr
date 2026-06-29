@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
@@ -17,6 +18,7 @@ var templateFS embed.FS
 type htmlTemplateData struct {
 	Report     model.Report
 	ReportJSON template.JS
+	IsCloudRun bool
 }
 
 func RenderHTML(w io.Writer, report model.Report, templatePath string) error {
@@ -33,7 +35,11 @@ func RenderHTML(w io.Writer, report model.Report, templatePath string) error {
 		return err
 	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, htmlTemplateData{Report: report, ReportJSON: template.JS(reportJSON)}); err != nil {
+	if err := tmpl.Execute(&buf, htmlTemplateData{
+		Report:     report,
+		ReportJSON: template.JS(reportJSON),
+		IsCloudRun: strings.HasPrefix(report.ContextName, "cloudrun/"),
+	}); err != nil {
 		return err
 	}
 	_, err = w.Write(buf.Bytes())
