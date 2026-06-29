@@ -503,8 +503,8 @@ func (b *inventoryBuilder) finish() *model.Inventory {
 }
 
 func resourceLess(a, b model.ResourceRef) bool {
-	left := []string{a.Namespace, a.Kind, a.Name, a.ContainerType, a.ContainerName}
-	right := []string{b.Namespace, b.Kind, b.Name, b.ContainerType, b.ContainerName}
+	left := []string{a.Provider, a.Project, a.Region, a.Namespace, a.Kind, a.Name, a.ContainerType, a.ContainerName}
+	right := []string{b.Provider, b.Project, b.Region, b.Namespace, b.Kind, b.Name, b.ContainerType, b.ContainerName}
 	for i := range left {
 		if left[i] != right[i] {
 			return left[i] < right[i]
