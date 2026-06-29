@@ -698,6 +698,101 @@ func TestAnalyzeNodePortLabelFalseNotReachable(t *testing.T) {
 	}
 }
 
+func TestAnalyzeIngressClassLabeledInternetReachable(t *testing.T) {
+	// An nginx-class Ingress is normally ignored (unknown class), but labeling the
+	// IngressClass internet-reachable=true (e.g. nginx fronted by a standalone-NEG L7 LB
+	// built outside the cluster) makes every backend behind that class count.
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "nginx-ing", "nginx", "web-svc", nil)},
+		IngressClasses: []networkingv1.IngressClass{
+			labeledIngressClass("nginx", map[string]string{"vdr.fedramp.io/internet-reachable": "true"}),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	ex := got[resourceRef("default", "web", "app", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("workload behind labeled IngressClass should be internet-reachable; got %+v", ex)
+	}
+	if ex.RouteKind != "Ingress" || ex.RouteName != "nginx-ing" {
+		t.Errorf("unexpected exposure metadata: %+v", ex)
+	}
+	requireEvidence(t, ex, "IngressClass nginx labeled vdr.fedramp.io/internet-reachable=true")
+}
+
+func TestAnalyzeIngressClassLabeledFalseSuppressesPublicClass(t *testing.T) {
+	// A "false" label wins even over a built-in public class such as gce.
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "public-ing", "gce", "web-svc", nil)},
+		IngressClasses: []networkingv1.IngressClass{
+			labeledIngressClass("gce", map[string]string{"vdr.fedramp.io/internet-reachable": "false"}),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("IngressClass labeled false must suppress exposure; got %#v", got)
+	}
+}
+
+func TestAnalyzeServiceLabeledInternetReachable(t *testing.T) {
+	// A ClusterIP controller Service (no Ingress, no type=LoadBalancer) gets surfaced by
+	// the operator label — the standalone-NEG controller-pod case.
+	svc := service("ingress-nginx", "ingress-nginx-controller", map[string]string{"app.kubernetes.io/component": "controller"})
+	svc.Labels = map[string]string{"vdr.fedramp.io/internet-reachable": "true"}
+	inv := inventoryWithWorkload("ingress-nginx", "ingress-nginx-controller",
+		map[string]string{"app.kubernetes.io/component": "controller"},
+		containerImage("controller", "registry.k8s.io/ingress-nginx/controller:v1"))
+
+	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
+
+	ex := got[resourceRef("ingress-nginx", "ingress-nginx-controller", "controller", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("ClusterIP Service labeled true should mark workloads reachable; got %+v", ex)
+	}
+	if ex.RouteKind != "Service" {
+		t.Errorf("RouteKind = %q, want Service", ex.RouteKind)
+	}
+	requireEvidence(t, ex, "Service ingress-nginx/ingress-nginx-controller explicitly marked internet-reachable by label vdr.fedramp.io/internet-reachable=true.")
+}
+
+func TestAnalyzeServiceLabeledFalseSuppressesLoadBalancer(t *testing.T) {
+	svc := service("default", "lb", map[string]string{"app": "x"})
+	svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "203.0.113.10"}}
+	svc.Labels = map[string]string{"vdr.fedramp.io/internet-reachable": "false"}
+	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+
+	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
+
+	ex := got[resourceRef("default", "x", "app", "container", "")]
+	if ex.InternetAccessible {
+		t.Errorf("Service labeled false must suppress LoadBalancer exposure; got %+v", ex)
+	}
+}
+
+func TestAnalyzeServiceLabelPrecedenceOverNodePortLabel(t *testing.T) {
+	svc := nodePortService("false") // -nodePort label says not reachable
+	svc.Labels["vdr.fedramp.io/internet-reachable"] = "true"
+	inv := inventoryWithWorkload("default", "x", map[string]string{"app": "x"}, containerImage("app", "img"))
+
+	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
+
+	ex := got[resourceRef("default", "x", "app", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("generic internet-reachable label should win over -nodePort label; got %+v", ex)
+	}
+	if ex.RouteKind != "Service" {
+		t.Errorf("RouteKind = %q, want Service", ex.RouteKind)
+	}
+}
+
 func inventoryWithWorkload(namespace, name string, labels map[string]string, images ...model.ContainerImage) *model.Inventory {
 	return &model.Inventory{
 		Resources: []model.ResourceInventory{{
@@ -796,6 +891,12 @@ func ingressClass(name, controller, paramsName string) networkingv1.IngressClass
 				Name:     paramsName,
 			},
 		},
+	}
+}
+
+func labeledIngressClass(name string, labels map[string]string) networkingv1.IngressClass {
+	return networkingv1.IngressClass{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
 	}
 }
 
