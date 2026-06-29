@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	SourceK8s   = "k8s"
-	SourceECS   = "ecs"
-	SourceImage = "image"
+	SourceK8s      = "k8s"
+	SourceCloudRun = "cloudrun"
+	SourceECS      = "ecs"
+	SourceImage    = "image"
 
 	FormatJSON  = "json"
 	FormatTable = "table"
@@ -34,6 +35,8 @@ var namespacePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 type Config struct {
 	Source                string
+	Project               string
+	Regions               []string
 	Namespaces            []string
 	AllNamespaces         bool
 	IncludeZeroDaemonSets bool
@@ -83,6 +86,21 @@ func (n *namespaceList) Set(value string) error {
 	return nil
 }
 
+type regionList []string
+
+func (r *regionList) String() string {
+	return fmt.Sprint([]string(*r))
+}
+
+func (r *regionList) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("region cannot be empty")
+	}
+	*r = append(*r, value)
+	return nil
+}
+
 type commaList []string
 
 func (c *commaList) String() string {
@@ -109,15 +127,18 @@ func Parse(args []string) (Config, error) {
 func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	cfg := Default()
 	namespaces := namespaceList(cfg.Namespaces)
+	regions := regionList(cfg.Regions)
 	timeout := cfg.Timeout.String()
 	minEPSS := strconv.FormatFloat(cfg.MinEPSS, 'f', -1, 64)
 
 	fs := flag.NewFlagSet("vdr", flag.ContinueOnError)
 	fs.SetOutput(output)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n\nSources:\n  k8s\n  ecs (not implemented yet)\n  image (not implemented yet)\n\nFlags:\n")
+		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n\nSources:\n  k8s\n  cloudrun\n  ecs (not implemented yet)\n  image (not implemented yet)\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
+	fs.StringVar(&cfg.Project, "project", cfg.Project, "Google Cloud project for cloudrun source")
+	fs.Var(&regions, "region", "Google Cloud region for cloudrun source; may be repeated")
 	fs.Var(&namespaces, "namespace", "Kubernetes namespace to scan; may be repeated")
 	fs.BoolVar(&cfg.AllNamespaces, "all-namespaces", cfg.AllNamespaces, "scan all namespaces")
 	fs.BoolVar(&cfg.IncludeZeroDaemonSets, "include-zero-daemonsets", cfg.IncludeZeroDaemonSets, "include DaemonSets with zero desired pods")
@@ -152,13 +173,13 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	source := fs.Arg(0)
 	cfg.Source = source
 	if source == "" {
-		return Config{}, errors.New("source is required; expected one of: k8s, ecs, image")
+		return Config{}, errors.New("source is required; expected one of: k8s, cloudrun, ecs, image")
 	}
 	if source == SourceECS || source == SourceImage {
 		return Config{}, fmt.Errorf("source %q is not implemented yet", source)
 	}
-	if source != SourceK8s {
-		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, ecs, image", source)
+	if source != SourceK8s && source != SourceCloudRun {
+		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, cloudrun, ecs, image", source)
 	}
 
 	flagArgs := fs.Args()[1:]
@@ -169,9 +190,16 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		return Config{}, fmt.Errorf("unexpected argument %q for source %q", fs.Arg(0), source)
 	}
 	allNamespacesSet := false
+	namespaceSet := false
+	includeZeroDaemonSetsSet := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "all-namespaces" {
+		switch f.Name {
+		case "all-namespaces":
 			allNamespacesSet = true
+		case "namespace":
+			namespaceSet = true
+		case "include-zero-daemonsets":
+			includeZeroDaemonSetsSet = true
 		}
 	})
 
@@ -193,6 +221,24 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	}
 	cfg.MinEPSS = parsedEPSS
 	cfg.Namespaces = []string(namespaces)
+	cfg.Regions = []string(regions)
+	if cfg.Source == SourceCloudRun {
+		if namespaceSet {
+			return Config{}, errors.New("--namespace is only valid for source k8s")
+		}
+		if allNamespacesSet {
+			return Config{}, errors.New("--all-namespaces is only valid for source k8s")
+		}
+		if includeZeroDaemonSetsSet {
+			return Config{}, errors.New("--include-zero-daemonsets is only valid for source k8s")
+		}
+		if strings.TrimSpace(cfg.Project) == "" {
+			return Config{}, errors.New("--project is required for source cloudrun")
+		}
+		if len(cfg.Regions) == 0 {
+			return Config{}, errors.New("--region is required for source cloudrun")
+		}
+	}
 	if len(cfg.Namespaces) > 0 && allNamespacesSet && cfg.AllNamespaces {
 		return Config{}, errors.New("cannot use --namespace with --all-namespaces")
 	}
