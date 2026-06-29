@@ -144,8 +144,16 @@ type Exposure struct {
 }
 
 type AccessProtection struct {
+	Type           string          `json:"type,omitempty"`
+	Enabled        bool            `json:"enabled"`
+	Provider       string          `json:"provider,omitempty"`
+	Evidence       string          `json:"evidence,omitempty"`
+	SecurityPolicy *SecurityPolicy `json:"securityPolicy,omitempty"`
+}
+
+type SecurityPolicy struct {
 	Type     string `json:"type,omitempty"`
-	Enabled  bool   `json:"enabled"`
+	Name     string `json:"name,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Evidence string `json:"evidence,omitempty"`
 }

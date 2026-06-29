@@ -115,13 +115,19 @@ func applyLoadBalancerExposure(service Service, routes []LoadBalancerRoute, expo
 		candidate.Evidence = append(candidate.Evidence,
 			fmt.Sprintf("external load balancer %s routes to serverless NEG %s", route.Name, route.ServerlessNEG),
 		)
+		applyCloudArmorPolicy(&candidate, route)
 		if route.IAPEnabled {
+			var securityPolicy *model.SecurityPolicy
+			if candidate.Protection != nil {
+				securityPolicy = candidate.Protection.SecurityPolicy
+			}
 			candidate.InternetAccessible = false
 			candidate.Protection = &model.AccessProtection{
-				Type:     "iap",
-				Enabled:  true,
-				Provider: "gcp",
-				Evidence: fmt.Sprintf("backend service %s has IAP enabled", route.BackendService),
+				Type:           "iap",
+				Enabled:        true,
+				Provider:       "gcp",
+				Evidence:       fmt.Sprintf("backend service %s has IAP enabled", route.BackendService),
+				SecurityPolicy: securityPolicy,
 			}
 			candidate.Evidence = append(candidate.Evidence, fmt.Sprintf("backend service %s has IAP enabled", route.BackendService))
 			if protected == nil {
@@ -138,6 +144,23 @@ func applyLoadBalancerExposure(service Service, routes []LoadBalancerRoute, expo
 	}
 	exposure.Evidence = append(exposure.Evidence, fmt.Sprintf("Cloud Run Service %s/%s has no public load balancer route found", service.Region, service.Name))
 	return exposure
+}
+
+func applyCloudArmorPolicy(exposure *model.Exposure, route LoadBalancerRoute) {
+	if route.CloudArmorPolicy == "" {
+		return
+	}
+	evidence := fmt.Sprintf("backend service %s has Cloud Armor policy %s", route.BackendService, route.CloudArmorPolicy)
+	if exposure.Protection == nil {
+		exposure.Protection = &model.AccessProtection{Provider: "gcp"}
+	}
+	exposure.Protection.SecurityPolicy = &model.SecurityPolicy{
+		Type:     "cloud-armor",
+		Name:     route.CloudArmorPolicy,
+		Provider: "gcp",
+		Evidence: evidence,
+	}
+	exposure.Evidence = append(exposure.Evidence, evidence)
 }
 
 func hasAllUsersInvoker(bindings []PolicyBinding) bool {

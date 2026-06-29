@@ -55,6 +55,15 @@ func TestBackendIAPEnabledReadsBackendServiceIAP(t *testing.T) {
 	}
 }
 
+func TestBackendSecurityPolicyReadsCloudArmorPolicy(t *testing.T) {
+	backend := &computepb.BackendService{
+		SecurityPolicy: ptrString("https://www.googleapis.com/compute/v1/projects/proj/global/securityPolicies/prod-armor"),
+	}
+	if got := backendSecurityPolicy(backend); got != "prod-armor" {
+		t.Fatalf("backendSecurityPolicy() = %q, want prod-armor", got)
+	}
+}
+
 func TestURLMapBackendServicesIncludesRouteRulesAndDeduplicates(t *testing.T) {
 	urlMap := &computepb.UrlMap{
 		DefaultService: ptrString("https://www.googleapis.com/compute/v1/projects/proj/global/backendServices/default"),

@@ -45,6 +45,39 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	}
 }
 
+func TestRenderHTMLResourceTooltipIncludesCloudArmorPolicy(t *testing.T) {
+	finding := sampleFinding("CVE-2026-0002", "HIGH", 0.7)
+	exposures := map[model.ResourceRef]model.Exposure{
+		sampleContainerRef(): {
+			InternetAccessible: true,
+			Provider:           "gke",
+			RouteKind:          "HTTPRoute",
+			RouteName:          "public-route",
+			Protection: &model.AccessProtection{
+				Provider: "gke",
+				SecurityPolicy: &model.SecurityPolicy{
+					Type:     "cloud-armor",
+					Name:     "prod-armor",
+					Provider: "gke",
+				},
+			},
+		},
+	}
+	scanReport := Build(sampleInventory(), []model.Finding{finding}, exposures, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	var buf bytes.Buffer
+
+	if err := RenderHTML(&buf, scanReport, ""); err != nil {
+		t.Fatalf("RenderHTML returned error: %v", err)
+	}
+
+	output := buf.String()
+	for _, want := range []string{"Cloud Armor: ", `"name":"prod-armor"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("HTML output missing %q", want)
+		}
+	}
+}
+
 func TestRenderHTMLUsesCustomTemplate(t *testing.T) {
 	templatePath := filepath.Join(t.TempDir(), "custom.html")
 	if err := os.WriteFile(templatePath, []byte(`<html><body>{{ .Report.Summary.Findings }} {{ .ReportJSON }}</body></html>`), 0o644); err != nil {

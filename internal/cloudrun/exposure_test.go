@@ -94,7 +94,7 @@ func TestAnalyzeExposureMarksInternalLBServicePublicWhenExternalLBNoIAP(t *testi
 		Scheme:          "EXTERNAL_MANAGED",
 		IPAddress:       "203.0.113.10",
 		BackendService:  "api-backend",
-		ServerlessNEG:    "api-neg",
+		ServerlessNEG:   "api-neg",
 		CloudRunService: "api",
 		CloudRunRegion:  "us-east4",
 		IAPEnabled:      false,
@@ -112,6 +112,42 @@ func TestAnalyzeExposureMarksInternalLBServicePublicWhenExternalLBNoIAP(t *testi
 	requireEvidence(t, ex, "backend service api-backend has IAP disabled")
 }
 
+func TestAnalyzeExposureIncludesCloudArmorPolicyForLoadBalancerBackend(t *testing.T) {
+	service := Service{
+		Project:    "p",
+		Region:     "us-east4",
+		Name:       "api",
+		Ingress:    "internal-and-cloud-load-balancing",
+		Containers: []Container{{Name: "app", Image: "example.com/api:1"}},
+	}
+	inventory := inventoryForExposure(t, []Service{service}, nil)
+	client := &fakeExposureClient{routes: []LoadBalancerRoute{{
+		Name:             "api-lb",
+		Scheme:           "EXTERNAL_MANAGED",
+		BackendService:   "api-backend",
+		ServerlessNEG:    "api-neg",
+		CloudRunService:  "api",
+		CloudRunRegion:   "us-east4",
+		CloudArmorPolicy: "prod-armor",
+	}}}
+
+	got, _, err := AnalyzeExposure(context.Background(), inventory, []Service{service}, nil, client)
+	if err != nil {
+		t.Fatalf("AnalyzeExposure returned error: %v", err)
+	}
+	ex := got[cloudRunRef("Service", "p", "us-east4", "api", "app")]
+	if !ex.InternetAccessible {
+		t.Fatalf("service exposure = %#v, want public through external LB", ex)
+	}
+	if ex.Protection == nil || ex.Protection.SecurityPolicy == nil {
+		t.Fatalf("protection = %#v, want Cloud Armor security policy visibility", ex.Protection)
+	}
+	if ex.Protection.SecurityPolicy.Type != "cloud-armor" || ex.Protection.SecurityPolicy.Name != "prod-armor" {
+		t.Fatalf("security policy = %#v, want Cloud Armor prod-armor", ex.Protection.SecurityPolicy)
+	}
+	requireEvidence(t, ex, "backend service api-backend has Cloud Armor policy prod-armor")
+}
+
 func TestAnalyzeExposureTreatsIAPBackendAsProtected(t *testing.T) {
 	service := Service{
 		Project:    "p",
@@ -125,7 +161,7 @@ func TestAnalyzeExposureTreatsIAPBackendAsProtected(t *testing.T) {
 		Name:            "api-lb",
 		Scheme:          "EXTERNAL_MANAGED",
 		BackendService:  "api-backend",
-		ServerlessNEG:    "api-neg",
+		ServerlessNEG:   "api-neg",
 		CloudRunService: "api",
 		CloudRunRegion:  "us-east4",
 		IAPEnabled:      true,
@@ -158,7 +194,7 @@ func TestAnalyzeExposureIgnoresInternalForwardingRule(t *testing.T) {
 		Name:            "api-lb",
 		Scheme:          "INTERNAL_MANAGED",
 		BackendService:  "api-backend",
-		ServerlessNEG:    "api-neg",
+		ServerlessNEG:   "api-neg",
 		CloudRunService: "api",
 		CloudRunRegion:  "us-east4",
 	}}}

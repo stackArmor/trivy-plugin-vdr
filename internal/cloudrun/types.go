@@ -51,11 +51,12 @@ type LoadBalancerRoute struct {
 	TargetProxy          string
 	URLMap               string
 	BackendService       string
-	ServerlessNEG         string
+	ServerlessNEG        string
 	CloudRunService      string
 	CloudRunRegion       string
 	IAPEnabled           bool
 	IAPOAuth2ClientID    string
+	CloudArmorPolicy     string
 	BackendServiceRegion string
 }
 
