@@ -1,16 +1,17 @@
 # vdr
 
-`vdr` is a Trivy plugin for vulnerability detection and response workflows. It can inventory Kubernetes workloads from the current Kubernetes context or Google Cloud Run services and jobs from a Google Cloud project, scan each unique full image reference once, and report findings back against the resources and containers that use each image.
+`vdr` is a Trivy plugin for vulnerability detection and response workflows. It can inventory Kubernetes workloads from the current Kubernetes context or Google Cloud Run services and jobs from a Google Cloud project, scan each unique full image reference once, and report findings back against the resources and containers that use each image. It can also scan standalone image references directly.
 
-The Kubernetes source collects workload image inventory, scans each unique image with Trivy, enriches CVEs with EPSS and CISA Vulnrichment data, analyzes public ingress/gateway exposure, and emits JSON, table, and optional standalone HTML reports. The Cloud Run source collects every container image used by Cloud Run services and jobs in the selected regions, analyzes service reachability through Cloud Run IAM/ingress and external load balancers/IAP, and emits the same report shapes.
+The Kubernetes source collects workload image inventory, scans each unique image with Trivy, enriches CVEs with EPSS and CISA Vulnrichment data, analyzes public ingress/gateway exposure, and emits JSON, table, and optional standalone HTML reports. The Cloud Run source collects every container image used by Cloud Run services and jobs in the selected regions, analyzes service reachability through Cloud Run IAM/ingress and external load balancers/IAP, and emits the same report shapes. Use `--reachability-only` with Kubernetes or Cloud Run to collect internet-reachability metadata without registry auth, Trivy scans, EPSS, or Vulnrichment enrichment.
 
 ## Features
 
 - Trivy plugin entrypoint named `vdr`.
 - Kubernetes source subcommand named `k8s`.
 - Google Cloud Run source subcommand named `cloudrun`.
+- Standalone image source subcommand named `image`.
 - Workload inventory from Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs, plus standalone Pods. Pods managed by a collected controller are skipped to avoid double-counting; pods owned by other controllers (e.g. operators/CRDs) are still inventoried.
-- Reserved future source subcommands named `ecs` and `image`.
+- Reserved future source subcommand named `ecs`.
 - JSON and table output mode flags.
 - Finding-centric and resource-centric view flags.
 - Per-finding FedRAMP Rev5 VDR **PAIN** (Potential Agency Impact, N1–N5) and **VDR-TFR-PVR** remediation deadline, driven by an asset-archetype classification (see [PAIN scoring and remediation](#pain-scoring-and-remediation)).
@@ -31,6 +32,7 @@ trivy vdr k8s --all-namespaces --min-severity HIGH --min-epss 0.5
 trivy vdr k8s --view resources --output vdr-k8s.json
 trivy vdr k8s --image-src remote --parallel-scans 5
 trivy vdr k8s --skip-enrichment --skip-exposure --debug
+trivy vdr k8s --reachability-only --output vdr-k8s-reachability.json
 trivy vdr k8s --refresh-enrichment
 trivy vdr k8s --skip-registry-auth
 trivy vdr k8s --no-gcloud-auth --no-ecr-auth
@@ -41,9 +43,12 @@ trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
 trivy vdr k8s --all-namespaces --scoring-config vdr-scoring.yaml
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --region us-central1 --output vdr-cloudrun.json
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --view resources --html-output vdr-cloudrun.html
+trivy vdr cloudrun --project my-gcp-project --region us-east4 --reachability-only --output vdr-cloudrun-reachability.json
+trivy vdr image gcr.io/my-gcp-project/app:v1
+trivy vdr image --parallel-scans 2 gcr.io/my-gcp-project/app:v1 nginx:1.25
 ```
 
-Future source commands are reserved but not implemented yet: `trivy vdr ecs` and `trivy vdr image`.
+Future source commands are reserved but not implemented yet: `trivy vdr ecs`.
 
 ## Required permissions
 
@@ -96,9 +101,9 @@ rules:
 
 Notes:
 
-- `secrets/get` is only needed when registry auth from Kubernetes `imagePullSecrets` is enabled. Use `--skip-registry-auth` to avoid reading Secrets.
+- `secrets/get` is only needed when registry auth from Kubernetes `imagePullSecrets` is enabled. Use `--skip-registry-auth` or `--reachability-only` to avoid reading Secrets.
 - `configmaps/get` is used for the optional `kube-system/vdr-fedramp` scoring ConfigMap.
-- Exposure resources are optional. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis.
+- Exposure resources are optional for vulnerability scan reports. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis. `--reachability-only` requires exposure resources and cannot be combined with `--skip-exposure`.
 - If you never use AWS ALB/Gateway resources, the `elbv2.k8s.aws` and `gateway.k8s.aws` rules can be omitted. If you never use GKE ingress/gateway IAP metadata, the `cloud.google.com/backendconfigs` and `networking.gke.io/gcpbackendpolicies` rules can be omitted.
 
 ### GKE IAM alternative
@@ -137,6 +142,7 @@ Notes:
 - `resourcemanager.projects.get` is required to read project labels used as Cloud Run PAIN scoring defaults. Resource-level Cloud Run labels override project labels.
 - The Compute permissions are required only for services whose ingress is `internal-and-cloud-load-balancing`; they let `vdr` resolve public forwarding rules to URL maps, backend services, serverless NEGs, and backend IAP state.
 - Cloud Run jobs are always treated as not internet reachable, but `run.jobs.list` is required to inventory and scan their images.
+- `--reachability-only` uses the same Cloud Run and Compute read permissions, but skips registry authentication, Trivy image scans, EPSS, and Vulnrichment.
 - For private Google Artifact Registry/GCR images, the local `gcloud` identity used for `gcloud auth print-access-token` must also be able to read those images, for example with `roles/artifactregistry.reader` on the relevant repositories or project.
 
 ## Enrichment cache
@@ -161,7 +167,7 @@ Flags:
 - `--no-gcloud-auth` skips the `gcloud` token for GAR/GCR.
 - `--no-ecr-auth` skips the `aws` token for ECR.
 
-This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
+This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run and standalone image scans, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
 
 ## VEX attestations
 
@@ -179,7 +185,7 @@ Progress is logged to stderr (the report is written to stdout or `--output`, so 
 
 ## Image scanning and Trivy cache cleanup
 
-`vdr` scans each unique full image reference once and fans findings back out to every Kubernetes resource that uses that image. Scan results are returned in deterministic image-reference order, independent of the order in which concurrent scans finish.
+`vdr` scans each unique full image reference once and fans findings back out to every Kubernetes, Cloud Run, or standalone image resource that uses that image. Scan results are returned in deterministic image-reference order, independent of the order in which concurrent scans finish.
 
 Scan defaults:
 
@@ -195,6 +201,8 @@ Scan defaults:
 
 A single image that cannot be pulled or scanned does not abort the run: the failure is logged inline and recorded as a warning in the report, the remaining images are still scanned and enriched, and a summary of failed images is printed at the end. If any image fails, `vdr` exits with a non-zero status after writing the report.
 
+Standalone image scans (`trivy vdr image IMAGE...`) never run internet reachability analysis and do not include exposure metadata. They do include EPSS and CISA Vulnrichment enrichment by default, unless `--skip-enrichment` is set.
+
 Cache cleanup runs once after the image scan phase completes:
 
 - `--cache-cleanup never` skips cleanup.
@@ -205,9 +213,11 @@ If cleanup fails after an image scan succeeds, the scan result is kept and a war
 
 ## Reporting
 
-JSON output defaults to a finding-centric report. Each finding includes `affected` — a list of `{resource, exposure}` entries — so a deduplicated image scan can still be traced back to every Kubernetes resource and container using that image, along with that resource's internet exposure.
+JSON output defaults to a finding-centric report. Each finding includes `affected` — a list of `{resource, exposure}` entries — so a deduplicated image scan can still be traced back to every Kubernetes or Cloud Run resource and container using that image, along with that resource's internet exposure when available.
 
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
+
+Use `--reachability-only` with `k8s` or `cloudrun` for an internet-reachability metadata report without vulnerability findings. This mode emits the resources view, skips registry authentication and Trivy scanning, and does not fetch EPSS or Vulnrichment data.
 
 Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a Trivy fix-status filter (including `will_not_fix`), a PAIN filter, a multi-select remediation-deadline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
 
@@ -275,7 +285,7 @@ Normal init containers do not inherit internet exposure. Sidecar-style init cont
 
 ## Known limits
 
-The Kubernetes source currently supports Kubernetes workload image inventory, Trivy image vulnerability scans, EPSS/Vulnrichment enrichment, GKE exposure metadata, and AWS ALB exposure metadata. The Cloud Run source supports Cloud Run services and jobs, Cloud Run IAM ingress checks, and external Google Cloud load balancer/IAP checks for serverless NEG backends. The `ecs` and `image` sources are reserved for future implementation.
+The Kubernetes source currently supports Kubernetes workload image inventory, Trivy image vulnerability scans, EPSS/Vulnrichment enrichment, GKE exposure metadata, and AWS ALB exposure metadata. The Cloud Run source supports Cloud Run services and jobs, Cloud Run IAM ingress checks, and external Google Cloud load balancer/IAP checks for serverless NEG backends. The image source supports direct image vulnerability scans without internet reachability analysis. The `ecs` source is reserved for future implementation.
 
 Run the standalone binary during development:
 

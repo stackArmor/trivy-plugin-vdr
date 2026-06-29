@@ -275,7 +275,7 @@ func TestParseUnknownRootFlagReportsFlagError(t *testing.T) {
 }
 
 func TestParseReservedSourcesReturnNotImplemented(t *testing.T) {
-	for _, source := range []string{"ecs", "image"} {
+	for _, source := range []string{"ecs"} {
 		t.Run(source, func(t *testing.T) {
 			_, err := Parse([]string{source})
 			if err == nil {
@@ -283,6 +283,89 @@ func TestParseReservedSourcesReturnNotImplemented(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), `source "`+source+`" is not implemented yet`) {
 				t.Fatalf("error = %q, want not implemented source context", err.Error())
+			}
+		})
+	}
+}
+
+func TestParseReachabilityOnly(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--reachability-only"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.ReachabilityOnly {
+		t.Fatal("ReachabilityOnly = false, want true")
+	}
+	if cfg.View != ViewResources {
+		t.Fatalf("View = %q, want resources", cfg.View)
+	}
+}
+
+func TestParseReachabilityOnlyRejectsSkipExposure(t *testing.T) {
+	_, err := Parse([]string{"k8s", "--reachability-only", "--skip-exposure"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want conflicting exposure flags error")
+	}
+	if !strings.Contains(err.Error(), "reachability-only") || !strings.Contains(err.Error(), "skip-exposure") {
+		t.Fatalf("error = %q, want reachability-only/skip-exposure context", err.Error())
+	}
+}
+
+func TestParseImageSource(t *testing.T) {
+	cfg, err := Parse([]string{"image", "--parallel-scans", "2", "gcr.io/example/app:v1", "nginx:1.25"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Source != SourceImage {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceImage)
+	}
+	if !reflect.DeepEqual(cfg.ImageRefs, []string{"gcr.io/example/app:v1", "nginx:1.25"}) {
+		t.Fatalf("ImageRefs = %#v", cfg.ImageRefs)
+	}
+	if cfg.ParallelScans != 2 {
+		t.Fatalf("ParallelScans = %d, want 2", cfg.ParallelScans)
+	}
+}
+
+func TestParseImageSourceRequiresImage(t *testing.T) {
+	_, err := Parse([]string{"image"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want image requirement error")
+	}
+	if !strings.Contains(err.Error(), "image reference") {
+		t.Fatalf("error = %q, want image reference context", err.Error())
+	}
+}
+
+func TestParseImageSourceRejectsReachabilityOnly(t *testing.T) {
+	_, err := Parse([]string{"image", "--reachability-only", "nginx:1.25"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want reachability-only rejection")
+	}
+	if !strings.Contains(err.Error(), "reachability-only") || !strings.Contains(err.Error(), "image") {
+		t.Fatalf("error = %q, want reachability-only/image context", err.Error())
+	}
+}
+
+func TestParseImageSourceRejectsClusterFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "namespace", args: []string{"image", "--namespace", "default", "nginx:1.25"}, want: "--namespace"},
+		{name: "project", args: []string{"image", "--project", "p", "nginx:1.25"}, want: "--project"},
+		{name: "region", args: []string{"image", "--region", "us-east4", "nginx:1.25"}, want: "--region"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.args)
+			if err == nil {
+				t.Fatal("Parse returned nil error, want source-specific flag rejection")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %q context", err.Error(), tt.want)
 			}
 		})
 	}
