@@ -35,6 +35,7 @@ var namespacePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 type Config struct {
 	Source                string
+	ImageRefs             []string
 	Project               string
 	Regions               []string
 	Namespaces            []string
@@ -58,6 +59,7 @@ type Config struct {
 	SkipEnrichment        bool
 	RefreshEnrichment     bool
 	SkipExposure          bool
+	ReachabilityOnly      bool
 	SkipRegistryAuth      bool
 	NoGcloudAuth          bool
 	NoECRAuth             bool
@@ -134,7 +136,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs := flag.NewFlagSet("vdr", flag.ContinueOnError)
 	fs.SetOutput(output)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n\nSources:\n  k8s\n  cloudrun\n  ecs (not implemented yet)\n  image (not implemented yet)\n\nFlags:\n")
+		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n       vdr image [flags] IMAGE...\n\nSources:\n  k8s\n  cloudrun\n  ecs (not implemented yet)\n  image\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	fs.StringVar(&cfg.Project, "project", cfg.Project, "Google Cloud project for cloudrun source")
@@ -160,6 +162,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")
 	fs.BoolVar(&cfg.RefreshEnrichment, "refresh-enrichment", cfg.RefreshEnrichment, "force EPSS and Vulnrichment enrichment refresh")
 	fs.BoolVar(&cfg.SkipExposure, "skip-exposure", cfg.SkipExposure, "skip exposure analysis")
+	fs.BoolVar(&cfg.ReachabilityOnly, "reachability-only", cfg.ReachabilityOnly, "collect internet reachability metadata only and skip Trivy image scans")
 	fs.BoolVar(&cfg.SkipRegistryAuth, "skip-registry-auth", cfg.SkipRegistryAuth, "skip automatic private registry authentication")
 	fs.BoolVar(&cfg.NoGcloudAuth, "no-gcloud-auth", cfg.NoGcloudAuth, "skip gcloud authentication for Google Artifact Registry/GCR images")
 	fs.BoolVar(&cfg.NoECRAuth, "no-ecr-auth", cfg.NoECRAuth, "skip aws CLI authentication for ECR images")
@@ -175,10 +178,10 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	if source == "" {
 		return Config{}, errors.New("source is required; expected one of: k8s, cloudrun, ecs, image")
 	}
-	if source == SourceECS || source == SourceImage {
+	if source == SourceECS {
 		return Config{}, fmt.Errorf("source %q is not implemented yet", source)
 	}
-	if source != SourceK8s && source != SourceCloudRun {
+	if source != SourceK8s && source != SourceCloudRun && source != SourceImage {
 		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, cloudrun, ecs, image", source)
 	}
 
@@ -186,12 +189,16 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	if err := fs.Parse(flagArgs); err != nil {
 		return Config{}, err
 	}
-	if fs.NArg() > 0 {
+	if cfg.Source == SourceImage {
+		cfg.ImageRefs = append([]string(nil), fs.Args()...)
+	} else if fs.NArg() > 0 {
 		return Config{}, fmt.Errorf("unexpected argument %q for source %q", fs.Arg(0), source)
 	}
 	allNamespacesSet := false
 	namespaceSet := false
 	includeZeroDaemonSetsSet := false
+	projectSet := false
+	regionSet := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "all-namespaces":
@@ -200,6 +207,10 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			namespaceSet = true
 		case "include-zero-daemonsets":
 			includeZeroDaemonSetsSet = true
+		case "project":
+			projectSet = true
+		case "region":
+			regionSet = true
 		}
 	})
 
@@ -222,6 +233,15 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	cfg.MinEPSS = parsedEPSS
 	cfg.Namespaces = []string(namespaces)
 	cfg.Regions = []string(regions)
+	if cfg.ReachabilityOnly {
+		if cfg.SkipExposure {
+			return Config{}, errors.New("--reachability-only cannot be used with --skip-exposure")
+		}
+		if cfg.Source == SourceImage {
+			return Config{}, errors.New("--reachability-only is only valid for sources k8s and cloudrun, not image")
+		}
+		cfg.View = ViewResources
+	}
 	if cfg.Source == SourceCloudRun {
 		if namespaceSet {
 			return Config{}, errors.New("--namespace is only valid for source k8s")
@@ -237,6 +257,26 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		}
 		if len(cfg.Regions) == 0 {
 			return Config{}, errors.New("--region is required for source cloudrun")
+		}
+	}
+	if cfg.Source == SourceImage {
+		if namespaceSet {
+			return Config{}, errors.New("--namespace is only valid for source k8s")
+		}
+		if allNamespacesSet {
+			return Config{}, errors.New("--all-namespaces is only valid for source k8s")
+		}
+		if includeZeroDaemonSetsSet {
+			return Config{}, errors.New("--include-zero-daemonsets is only valid for source k8s")
+		}
+		if projectSet || strings.TrimSpace(cfg.Project) != "" {
+			return Config{}, errors.New("--project is only valid for source cloudrun")
+		}
+		if regionSet || len(cfg.Regions) > 0 {
+			return Config{}, errors.New("--region is only valid for source cloudrun")
+		}
+		if len(cfg.ImageRefs) == 0 {
+			return Config{}, errors.New("at least one image reference is required for source image")
 		}
 	}
 	if len(cfg.Namespaces) > 0 && allNamespacesSet && cfg.AllNamespaces {

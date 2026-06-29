@@ -14,6 +14,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/epss"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/vulnrichment"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/exposure"
+	imageinventory "github.com/stackArmor/trivy-plugin-vdr/internal/image"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/k8s"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
@@ -52,6 +53,8 @@ func run(args []string) error {
 		return runK8s(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceCloudRun:
 		return runCloudRun(context.Background(), cfg, logger, os.Stdout)
+	case config.SourceImage:
+		return runImage(context.Background(), cfg, logger, os.Stdout)
 	default:
 		return fmt.Errorf("source %q is not implemented yet", cfg.Source)
 	}
@@ -81,6 +84,21 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 	warnings = append(warnings, inventory.Warnings...)
 
+	exposures := map[model.ResourceRef]model.Exposure{}
+	if !cfg.SkipExposure {
+		logger.Info("analyzing service exposure")
+		objects, exposureWarnings, err := collector.CollectExposureObjectsWithWarnings(ctx, k8sOptions)
+		if err != nil {
+			return err
+		}
+		warnings = append(warnings, exposureWarnings...)
+		exposures = exposure.Analyze(inventory, objects)
+	}
+	if cfg.ReachabilityOnly {
+		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
+		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+	}
+
 	var dockerConfigDir string
 	if !cfg.SkipRegistryAuth {
 		secretAuths, secretWarnings, err := collector.CollectPullSecretAuths(ctx, k8sOptions, logger)
@@ -108,17 +126,6 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		for _, w := range res.Warnings {
 			logger.Warn("registry auth: %s", w)
 		}
-	}
-
-	exposures := map[model.ResourceRef]model.Exposure{}
-	if !cfg.SkipExposure {
-		logger.Info("analyzing service exposure")
-		objects, exposureWarnings, err := collector.CollectExposureObjectsWithWarnings(ctx, k8sOptions)
-		if err != nil {
-			return err
-		}
-		warnings = append(warnings, exposureWarnings...)
-		exposures = exposure.Analyze(inventory, objects)
 	}
 
 	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
@@ -150,6 +157,24 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 	}
 	warnings = append(warnings, inventory.Warnings...)
 
+	exposures := map[model.ResourceRef]model.Exposure{}
+	if !cfg.SkipExposure {
+		logger.Info("analyzing Cloud Run exposure")
+		cloudRunExposures, exposureWarnings, err := cloudrun.AnalyzeExposure(ctx, inventory, services, jobs, client)
+		if err != nil {
+			return err
+		}
+		exposures = cloudRunExposures
+		for _, w := range exposureWarnings {
+			warnings = append(warnings, w)
+			logger.Warn("%s", w)
+		}
+	}
+	if cfg.ReachabilityOnly {
+		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
+		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+	}
+
 	var dockerConfigDir string
 	if !cfg.SkipRegistryAuth {
 		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
@@ -168,21 +193,33 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
 	}
 
-	exposures := map[model.ResourceRef]model.Exposure{}
-	if !cfg.SkipExposure {
-		logger.Info("analyzing Cloud Run exposure")
-		cloudRunExposures, exposureWarnings, err := cloudrun.AnalyzeExposure(ctx, inventory, services, jobs, client)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+}
+
+func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+	inventory := imageinventory.Collect(cfg.ImageRefs)
+	logger.Info("inventory: %d standalone images", len(inventory.Images))
+
+	var warnings []string
+	var dockerConfigDir string
+	if !cfg.SkipRegistryAuth {
+		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
+			EnableGcloud: !cfg.NoGcloudAuth,
+			EnableECR:    !cfg.NoECRAuth,
+		}, logger)
 		if err != nil {
 			return err
 		}
-		exposures = cloudRunExposures
-		for _, w := range exposureWarnings {
-			warnings = append(warnings, w)
-			logger.Warn("%s", w)
+		defer res.Cleanup()
+		dockerConfigDir = res.Dir
+		for _, w := range res.Warnings {
+			warnings = append(warnings, "registry auth: "+w)
+			logger.Warn("registry auth: %s", w)
 		}
+		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, nil)
 }
 
 func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, warnings []string, dockerConfigDir string, exposures map[model.ResourceRef]model.Exposure) error {
@@ -257,6 +294,19 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 
 	warnings = append(warnings, scannerWarnings(scanWarnings)...)
 
+	if err := reportInventory(cfg, logger, stdout, inventory, findings, warnings, exposures); err != nil {
+		return err
+	}
+
+	if scanFailures > 0 {
+		logger.Error("completed with %d image scan failure(s); see warnings in the report", scanFailures)
+		return errCompletedWithFailures
+	}
+	logger.Info("completed successfully")
+	return nil
+}
+
+func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, findings []model.Finding, warnings []string, exposures map[model.ResourceRef]model.Exposure) error {
 	scoringConfig := scoring.Default()
 	if cfg.ScoringConfig != "" {
 		loaded, scErr := scoring.Load(cfg.ScoringConfig)
@@ -268,7 +318,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 	}
 	// Cluster-wide FedRAMP defaults (class, multi-agency) from the in-cluster
 	// ConfigMap override the config-file defaults.
-	if len(inventory.ClusterDefaults) > 0 {
+	if inventory != nil && len(inventory.ClusterDefaults) > 0 {
 		if applyErr := scoringConfig.ApplyClusterDefaults(inventory.ClusterDefaults); applyErr != nil {
 			logger.Warn("ignoring invalid cluster FedRAMP config from ConfigMap: %v", applyErr)
 		} else {
@@ -299,12 +349,6 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 		}
 		logger.Info("wrote HTML report to %s", cfg.HTMLOutput)
 	}
-
-	if scanFailures > 0 {
-		logger.Error("completed with %d image scan failure(s); see warnings in the report", scanFailures)
-		return errCompletedWithFailures
-	}
-	logger.Info("completed successfully")
 	return nil
 }
 
