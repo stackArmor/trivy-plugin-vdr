@@ -169,6 +169,65 @@ Flags:
 
 This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run and standalone image scans, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
 
+## Required permissions
+
+`vdr` is read-only against orchestrator and cloud APIs. It needs enough access to list workloads and routing objects, read the optional FedRAMP ConfigMap, read image-pull credentials when registry auth is enabled, and inspect exposure controls.
+
+### Kubernetes RBAC
+
+For Kubernetes clusters, grant the identity running `trivy vdr k8s` a read-only ClusterRole like this:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vdr-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "namespaces", "configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "tlsroutes", "referencegrants"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["gcpbackendpolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["cloud.google.com"]
+    resources: ["backendconfigs"]
+    verbs: ["get", "list"]
+  - apiGroups: ["elbv2.k8s.aws"]
+    resources: ["ingressclassparams"]
+    verbs: ["get", "list"]
+  - apiGroups: ["gateway.k8s.aws"]
+    resources: ["loadbalancerconfigurations"]
+    verbs: ["get", "list"]
+```
+
+Bind it with a `ClusterRoleBinding` for all namespaces, or a `RoleBinding` per namespace when using `--namespace` and when you do not need cluster-scoped resources such as `namespaces` and `ingressclasses`. If `--skip-registry-auth` is set, the `secrets get` rule can be omitted; otherwise unreadable pull Secrets are reported as warnings and affected private images may fail to scan.
+
+For GKE IAM-based Kubernetes API access, `roles/container.viewer` is enough for workload, namespace, Service, Ingress, Gateway, ConfigMap, and GKE exposure metadata reads, but it does not include Secret reads. Reading image-pull Secrets through GKE IAM requires a role containing `container.secrets.get` such as `roles/container.developer`, or a narrower custom role. Prefer Kubernetes RBAC when possible because it can grant `get` on Secrets without broad write access.
+
+### Cloud Run IAM
+
+The planned Cloud Run source uses Google Cloud APIs rather than Kubernetes RBAC. The identity running `trivy vdr cloudrun` should have these project-level predefined roles, or a custom role with the listed permissions:
+
+- `roles/run.viewer` for Cloud Run inventory and IAM policy checks. Required permissions include `run.services.list`, `run.services.get`, `run.services.getIamPolicy`, `run.jobs.list`, `run.jobs.get`, and `run.locations.list`.
+- `roles/compute.networkViewer` for load balancer exposure analysis when a service uses `internal-and-cloud-load-balancing` ingress. Required permissions include reads for global and regional forwarding rules, target HTTP(S) proxies, URL maps, backend services, and network endpoint groups, plus backend service IAP settings.
+
+Cloud Run jobs are treated as not internet reachable and do not need load balancer analysis. Cloud Run services are considered internet reachable only when `allUsers` has `roles/run.invoker` and ingress is `all`, or when `internal-and-cloud-load-balancing` ingress is fronted by a public HTTP(S) load balancer whose Cloud Run backend is not IAP-protected.
+
 ## VEX attestations
 
 `vdr` can opt into Trivy's experimental OCI VEX attestation discovery for trusted registries:
@@ -178,6 +237,18 @@ trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
 ```
 
 The allowlist accepts registry hosts (`registry.example.com`) or repository prefixes (`ghcr.io/acme`). Matching images are scanned with `trivy image --vex oci --show-suppressed`; other images are scanned without OCI VEX. Suppressed VEX findings are not silently dropped: reports keep them in `suppressedFindings` with the VEX status, justification, source, and informational `wouldHaveBeenPain` / `wouldHaveBeenRemediation` values. They are excluded from the active finding count and remediation queue.
+
+> **Important — sign attestations with cosign v2.** Trivy discovers the classic cosign
+> attestation (`.att` tag) layout. cosign **v3** publishes attestations as OCI 1.1
+> referrers, which Trivy does **not** read yet — a v3 attestation is silently ignored by
+> `--vex oci` (the scan logs `No VEX attestations found`). Create attestations with cosign
+> **v2** so they land as the `.att` tag Trivy can find:
+>
+> ```sh
+> cosign attest --predicate vex.json --type openvex --key <gcpkms-or-key> --tlog-upload=false --yes <image>@<digest>
+> ```
+>
+> Revisit once a referrer-aware Trivy ships.
 
 ## Logging
 
@@ -280,6 +351,13 @@ Exposure analysis is intentionally conservative:
 - An Ingress with no load balancer provisioned in its status is treated as not serving traffic and is excluded. When a Gateway and an unprovisioned Ingress both target the same Service, the Gateway's exposure applies.
 - A `Service` of type `LoadBalancer` with a provisioned external address (and no internal-scheme annotation — GKE `networking.gke.io/load-balancer-type: Internal`, AWS `aws-load-balancer-scheme: internal`, Azure `azure-load-balancer-internal: "true"`) marks the pods it selects internet-reachable. This is how **ingress/gateway controller pods** (Traefik, ingress-nginx, Envoy) — which the load balancer forwards to directly — are detected, structurally, without naming the controller. The AWS ALB controller has no in-cluster data-path pod, so it is correctly not flagged.
 - A `Service` of type `NodePort` is **not** counted as internet-reachable by default, because node-IP reachability depends on the nodes having public IPs and permissive firewall rules — which the cluster can't determine. Set the label `vdr.fedramp.io/internet-reachable-nodePort: "true"` (or `"false"`) on the Service to classify it; when the label is absent the finding shows `nodeport` and its tooltip points to the label. (`true` makes it count toward IRV and the remediation deadline.)
+- Some reachability can't be inferred from the cluster at all — e.g. an app behind ingress-nginx whose external L7 load balancer is provisioned outside Kubernetes (standalone NEG / Terraform), where the controller Service stays `ClusterIP`/`NodePort` and the app `Ingress` objects use an unrecognized class such as `nginx`. The label `vdr.fedramp.io/internet-reachable: "true"` (or `"false"`) lets an operator declare it, on either object kind:
+  - On an **`IngressClass`**: every Ingress using that class is treated as public (`"true"`) or forced not-public (`"false"`, which wins even over a built-in public class like `gce`). One label surfaces all backends behind that class.
+  - On a **`Service`** of any type: its selected workloads are forced reachable (`"true"`) or not-reachable (`"false"`, which suppresses even a `type=LoadBalancer` external address). Use this for the ingress controller pods themselves or a standalone-NEG app with no Ingress.
+
+  On a Service this label takes precedence over `vdr.fedramp.io/internet-reachable-nodePort`.
+
+  > **Use this label only when the load balancer is managed outside Kubernetes** (e.g. a standalone NEG wired to a GCP load balancer provisioned in Terraform). It is a manual, operator-asserted override: the cluster has no way to verify it, so it can drift out of sync with the real edge — if the external LB is added, removed, or re-scoped (internal ↔ external) the label won't follow, and the assessment will be silently wrong. This is inherently brittle. The recommended alternative is to let Kubernetes own the load balancer — a native GKE `Ingress` (`gce`), a GKE `Gateway`, or a `type=LoadBalancer` Service — so reachability (and IAP/BackendConfig protection) is inferred directly from cluster state and stays correct automatically, with no label to maintain.
 
 Normal init containers do not inherit internet exposure. Sidecar-style init containers inherit exposure only when their container restart policy is `Always`.
 

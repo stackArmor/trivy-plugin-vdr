@@ -185,6 +185,18 @@ func ingressHasLoadBalancer(ingress networkingv1.Ingress) bool {
 
 func classifyIngress(ingress networkingv1.Ingress, classes map[string]networkingv1.IngressClass, classParams map[string]string) (string, bool, string) {
 	className := ingressClassName(ingress)
+	// An explicit operator label on the IngressClass wins over the built-in class
+	// classification: "true" trusts a class whose edge LB is provisioned outside the
+	// cluster (e.g. ingress-nginx fronted by a standalone-NEG L7 LB), "false" suppresses
+	// a class the plugin would otherwise treat as public.
+	if class, ok := classes[className]; ok {
+		if reachable, set := parseReachableLabel(class.Labels, internetReachableLabel); set {
+			if reachable {
+				return "custom", true, fmt.Sprintf("IngressClass %s labeled %s=true", className, internetReachableLabel)
+			}
+			return "", false, ""
+		}
+	}
 	switch className {
 	case "gce":
 		return "gke", true, fmt.Sprintf("GKE Ingress %s/%s uses public class gce", ingress.Namespace, ingress.Name)
@@ -737,6 +749,13 @@ func applyWorkloadExposure(result map[model.ResourceRef]model.Exposure, resource
 func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
 	var exposures []serviceExposure
 	for _, svc := range services {
+		// An explicit operator label on the Service wins over type-based inference (and
+		// over nodePortReachableLabel): it covers ingress controller pods or standalone-NEG
+		// apps whose external LB is provisioned outside the cluster.
+		if ex, ok := serviceLabelExposure(svc); ok {
+			exposures = append(exposures, ex)
+			continue
+		}
 		switch svc.Spec.Type {
 		case corev1.ServiceTypeLoadBalancer:
 			if !serviceHasLoadBalancerAddress(svc) {
@@ -769,6 +788,59 @@ func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
 // actually internet-reachable (true) or not (false), since the cluster alone can't
 // determine it. When absent, the Service is treated as an unverified advisory.
 const nodePortReachableLabel = "vdr.fedramp.io/internet-reachable-nodePort"
+
+// internetReachableLabel lets an operator declare reachability for cases the cluster
+// can't infer on its own — e.g. an app behind ingress-nginx whose external L7 load
+// balancer is built outside Kubernetes (standalone NEG / Terraform). It is honored on
+// two object kinds:
+//   - an IngressClass: every Ingress using that class is treated as public ("true") or
+//     forced not-public ("false", wins even over a built-in public class like gce).
+//   - a Service of any type: its selected workloads are forced reachable ("true") or
+//     not-reachable ("false", suppresses even a type=LoadBalancer external address).
+//
+// On a Service it takes precedence over nodePortReachableLabel when both are present.
+//
+// This is strictly for load balancers managed OUTSIDE Kubernetes. It is an unverifiable,
+// operator-asserted override that can drift from the real edge (e.g. the external LB is
+// removed or re-scoped internal/external without the label following), so it is inherently
+// brittle. Prefer letting Kubernetes own the load balancer (native gce Ingress, Gateway,
+// or type=LoadBalancer Service) so reachability is inferred from cluster state instead.
+const internetReachableLabel = "vdr.fedramp.io/internet-reachable"
+
+// parseReachableLabel parses a boolean reachability label value. ok is false when the
+// label is absent or unparseable, in which case the caller falls back to inference.
+func parseReachableLabel(labels map[string]string, key string) (value bool, ok bool) {
+	raw, present := labels[key]
+	if !present {
+		return false, false
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return false, false
+	}
+	return b, true
+}
+
+// serviceLabelExposure returns an exposure derived from an explicit
+// internetReachableLabel on the Service, and ok=false when the label is absent or
+// unparseable (the caller then falls back to type-based inference).
+func serviceLabelExposure(svc corev1.Service) (serviceExposure, bool) {
+	reachable, set := parseReachableLabel(svc.Labels, internetReachableLabel)
+	if !set {
+		return serviceExposure{}, false
+	}
+	ex := model.Exposure{InternetAccessible: reachable, RouteKind: "Service", RouteName: svc.Name}
+	if reachable {
+		ex.Evidence = []string{fmt.Sprintf(
+			"Service %s/%s explicitly marked internet-reachable by label %s=true.",
+			svc.Namespace, svc.Name, internetReachableLabel)}
+	} else {
+		ex.Evidence = []string{fmt.Sprintf(
+			"Service %s/%s explicitly marked not internet-reachable by label %s=false.",
+			svc.Namespace, svc.Name, internetReachableLabel)}
+	}
+	return serviceExposure{serviceNamespace: svc.Namespace, serviceName: svc.Name, exposure: ex}, true
+}
 
 func nodePortExposure(svc corev1.Service) serviceExposure {
 	ports := nodePortList(svc)
