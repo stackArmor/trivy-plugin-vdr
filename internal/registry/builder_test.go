@@ -17,15 +17,20 @@ type fakeCall struct {
 }
 
 type fakeRunner struct {
-	calls   []fakeCall
-	outputs map[string]string // keyed by command name
-	errs    map[string]error
+	calls         []fakeCall
+	outputs       map[string]string // keyed by command name
+	outputsByArgs map[string]string
+	errs          map[string]error
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
 	f.calls = append(f.calls, fakeCall{name: name, args: args})
+	key := name + " " + strings.Join(args, " ")
 	if err, ok := f.errs[name]; ok {
 		return nil, nil, err
+	}
+	if output, ok := f.outputsByArgs[key]; ok {
+		return []byte(output), nil, nil
 	}
 	return []byte(f.outputs[name]), nil, nil
 }
@@ -97,6 +102,64 @@ func TestBuildECRCalledOncePerRegion(t *testing.T) {
 	}
 	if !regions["us-east-1"] || !regions["eu-west-1"] {
 		t.Fatalf("expected both regions, got %v", regions)
+	}
+}
+
+func TestBuildECRAssumesRoleARNBeforeLogin(t *testing.T) {
+	runner := &fakeRunner{outputsByArgs: map[string]string{
+		"aws sts assume-role --role-arn arn:aws:iam::123456789012:role/VDRReadOnly --role-session-name vdr-ecr-auth": `{
+		  "Credentials": {
+		    "AccessKeyId": "ASIAVDR",
+		    "SecretAccessKey": "secret",
+		    "SessionToken": "session"
+		  }
+		}`,
+		"aws ecr get-login-password --region us-east-1": "ecr-token",
+	}}
+
+	res, err := Build(context.Background(),
+		[]string{"111111111111.dkr.ecr.us-east-1.amazonaws.com/a:1"},
+		nil,
+		Options{EnableECR: true, AWSRoleARN: "arn:aws:iam::123456789012:role/VDRReadOnly", Runner: runner},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	defer res.Cleanup()
+
+	if got := runner.countCalls("aws"); got != 2 {
+		t.Fatalf("aws called %d times, want sts assume-role and ecr login", got)
+	}
+	if len(runner.calls) != 2 || strings.Join(runner.calls[0].args, " ") != "sts assume-role --role-arn arn:aws:iam::123456789012:role/VDRReadOnly --role-session-name vdr-ecr-auth" {
+		t.Fatalf("first call = %#v, want sts assume-role", runner.calls)
+	}
+	auths := readAuths(t, res.Dir)
+	if auths["111111111111.dkr.ecr.us-east-1.amazonaws.com"].Password != "ecr-token" {
+		t.Fatalf("unexpected ECR auth: %+v", auths["111111111111.dkr.ecr.us-east-1.amazonaws.com"])
+	}
+}
+
+func TestBuildGcloudUsesImpersonatedServiceAccount(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string]string{"gcloud": "gar-token"}}
+
+	res, err := Build(context.Background(),
+		[]string{"gcr.io/p/a:1"},
+		nil,
+		Options{EnableGcloud: true, GCPImpersonateServiceAccount: "vdr-reader@example.iam.gserviceaccount.com", Runner: runner},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	defer res.Cleanup()
+
+	if got := runner.countCalls("gcloud"); got != 1 {
+		t.Fatalf("gcloud called %d times, want 1", got)
+	}
+	args := strings.Join(runner.calls[0].args, " ")
+	if !strings.Contains(args, "--impersonate-service-account vdr-reader@example.iam.gserviceaccount.com") {
+		t.Fatalf("gcloud args = %q, want impersonation flag", args)
 	}
 }
 
