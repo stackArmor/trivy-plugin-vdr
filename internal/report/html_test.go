@@ -25,6 +25,10 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Namespace", "Internet-exposed findings", "Internet exposure", "Automatable",
 		"Exploitation", "EPSS score", "Technical impact", "window.__VDR_REPORT__",
 		"CVE-2026-0001",
+		"packageLabel",          // package sub-line renderer present in the template
+		"pkg-line",              // CSS/markup hook for the package sub-line under the CVE
+		`"packageName":"openssl"`, // package data carried in the embedded report JSON
+
 		"VDR Report",
 		"Resource type",
 		`id="resource-type"`,

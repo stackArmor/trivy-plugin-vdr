@@ -253,10 +253,30 @@ func TestRenderTableIncludesResourceAndEnrichmentColumns(t *testing.T) {
 	}
 
 	output := buf.String()
-	for _, want := range []string{"ID", "SEVERITY", "STATUS", "EPSS", "AUTOMATABLE", "CVE-2026-0001", "HIGH", "will_not_fix", "0.700"} {
+	for _, want := range []string{"ID", "PACKAGE", "SEVERITY", "STATUS", "EPSS", "AUTOMATABLE", "CVE-2026-0001", "openssl 1.0.0 → no fix", "HIGH", "will_not_fix", "0.700"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("table output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestFormatPackage(t *testing.T) {
+	tests := []struct {
+		name    string
+		finding model.Finding
+		want    string
+	}{
+		{"name installed and fixed", model.Finding{PackageName: "openssl", InstalledVersion: "1.0.0", FixedVersion: "1.1.0"}, "openssl 1.0.0 → 1.1.0"},
+		{"no fix", model.Finding{PackageName: "openssl", InstalledVersion: "1.0.0"}, "openssl 1.0.0 → no fix"},
+		{"name only", model.Finding{PackageName: "openssl"}, "openssl"},
+		{"unknown package", model.Finding{}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatPackage(tt.finding); got != tt.want {
+				t.Errorf("formatPackage() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
