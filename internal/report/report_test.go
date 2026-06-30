@@ -168,6 +168,70 @@ func TestBuildResourceViewIncludesCleanInventoryResources(t *testing.T) {
 	}
 }
 
+func TestBuildScanReachabilityReportSuppressesScoringAndEnrichmentButKeepsExposureAndClassification(t *testing.T) {
+	inv := sampleInventory()
+	inv.Resources[0].Labels = map[string]string{"vdr.fedramp.io/asset-archetype": "dev-test"}
+	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	finding.Suppressed = true
+	finding.Suppression = &model.Suppression{Source: "vex", Status: "affected"}
+	exposures := map[model.ResourceRef]model.Exposure{
+		sampleContainerRef(): {InternetAccessible: true, Provider: "gke", RouteKind: "Ingress", RouteName: "web"},
+	}
+
+	got := Build(inv, []model.Finding{finding}, exposures, Options{
+		GeneratedAt:         fixedTime(),
+		View:                ViewFindings,
+		ClassificationOnly:  true,
+		SuppressEnrichments: true,
+	})
+
+	if len(got.SuppressedFindings) != 1 {
+		t.Fatalf("SuppressedFindings = %#v, want one suppressed finding", got.SuppressedFindings)
+	}
+	suppressed := got.SuppressedFindings[0]
+	if suppressed.EPSS != nil || suppressed.Vulnrichment != nil {
+		t.Fatalf("enrichment fields = %#v/%#v, want nil", suppressed.EPSS, suppressed.Vulnrichment)
+	}
+	if suppressed.Pain != nil || suppressed.Remediation != nil || suppressed.WouldHaveBeenPain != nil || suppressed.WouldHaveBeenRemediation != nil {
+		t.Fatalf("scoring fields leaked in suppressed finding: %#v", suppressed)
+	}
+	if suppressed.Exposure == nil || !suppressed.Exposure.InternetAccessible {
+		t.Fatalf("Exposure = %#v, want internet-reachable exposure", suppressed.Exposure)
+	}
+	if len(suppressed.Affected) != 1 {
+		t.Fatalf("Affected = %#v, want one affected resource", suppressed.Affected)
+	}
+	affected := suppressed.Affected[0]
+	if affected.Pain != nil || affected.Remediation != nil {
+		t.Fatalf("affected scoring fields = %#v/%#v, want nil", affected.Pain, affected.Remediation)
+	}
+	if affected.Exposure == nil || !affected.Exposure.InternetAccessible {
+		t.Fatalf("affected Exposure = %#v, want internet-reachable exposure", affected.Exposure)
+	}
+	if affected.Classification == nil {
+		t.Fatalf("Classification missing from affected resource: %#v", affected)
+	}
+	if affected.Classification.Class != "B" || affected.Classification.Archetype != "dev-test" || affected.Classification.ArchetypeSource != "label" {
+		t.Fatalf("Classification = %#v, want class B dev-test from label", affected.Classification)
+	}
+
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, got); err != nil {
+		t.Fatalf("RenderJSON returned error: %v", err)
+	}
+	output := buf.String()
+	for _, want := range []string{`"exposure"`, `"internetAccessible"`, `"classification"`, `"class"`, `"archetype"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("JSON output missing %s:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{`"epss"`, `"vulnrichment"`, `"pain"`, `"remediation"`, `"wouldHaveBeenPain"`, `"wouldHaveBeenRemediation"`} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("JSON output leaked %s:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestBuildFiltersBySeverityAndEPSS(t *testing.T) {
 	inv := sampleInventory()
 	findings := []model.Finding{
@@ -256,6 +320,45 @@ func TestRenderTableIncludesResourceAndEnrichmentColumns(t *testing.T) {
 	for _, want := range []string{"ID", "PACKAGE", "SEVERITY", "STATUS", "EPSS", "AUTOMATABLE", "CVE-2026-0001", "openssl 1.0.0 → no fix", "HIGH", "will_not_fix", "0.700"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("table output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderClassificationOnlyTableOmitsScoringAndEnrichmentColumns(t *testing.T) {
+	classification := &model.AssetClassification{Class: "B", Archetype: "dev-test", ArchetypeSource: "label"}
+	report := model.Report{
+		ClassificationOnly: true,
+		Findings: []model.Finding{{
+			ID:               "CVE-2026-0001",
+			ImageRef:         "example/web:v1",
+			PackageName:      "openssl",
+			InstalledVersion: "1.0.0",
+			Severity:         "HIGH",
+			Exposure:         &model.Exposure{InternetAccessible: true, Provider: "gke", RouteKind: "Ingress", RouteName: "web"},
+			AffectedResources: []model.ResourceRef{
+				sampleContainerRef(),
+			},
+			Affected: []model.Affected{{
+				Resource:       sampleContainerRef(),
+				Classification: classification,
+			}},
+		}},
+	}
+	var buf bytes.Buffer
+
+	if err := RenderTable(&buf, report); err != nil {
+		t.Fatalf("RenderTable returned error: %v", err)
+	}
+
+	output := buf.String()
+	for _, want := range []string{"CLASS", "ASSET ARCHETYPE", "EXPOSED", "B", "dev-test (label)", "yes"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("table output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"PAIN", "REMEDIATION", "EPSS", "AUTOMATABLE", "EXPLOITATION", "TECHNICAL IMPACT"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("table output leaked %q:\n%s", forbidden, output)
 		}
 	}
 }

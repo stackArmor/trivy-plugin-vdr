@@ -20,11 +20,13 @@ const (
 )
 
 type Options struct {
-	GeneratedAt time.Time
-	View        string
-	MinSeverity string
-	MinEPSS     float64
-	Warnings    []string
+	GeneratedAt         time.Time
+	View                string
+	MinSeverity         string
+	MinEPSS             float64
+	Warnings            []string
+	ClassificationOnly  bool
+	SuppressEnrichments bool
 	// Scoring is the FedRAMP PAIN rubric. When nil, the built-in default rubric
 	// (scoring.Default) is used.
 	Scoring *scoring.Config
@@ -56,23 +58,24 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		contextName = inventory.ContextName
 	}
 
-	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS)
+	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS, options.SuppressEnrichments)
 	active, suppressed := partitionFindings(filtered)
-	resourceReports := buildResourceReports(inventory, active, exposures, sc, labelIndex, nsLabels)
+	resourceReports := buildResourceReports(inventory, active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly)
 	report := model.Report{
 		GeneratedAt:        options.GeneratedAt,
 		ContextName:        contextName,
 		Class:              class,
 		Summary:            buildSummary(inventory, active, resourceReports),
-		SuppressedFindings: suppressedWithWouldHaveBeen(suppressed, exposures, sc, labelIndex, nsLabels),
+		SuppressedFindings: suppressedWithWouldHaveBeen(suppressed, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly),
 		Warnings:           append([]string(nil), options.Warnings...),
+		ClassificationOnly: options.ClassificationOnly,
 	}
 	if options.View == ViewResources {
 		report.Resources = resourceReports
 		return report
 	}
 
-	report.Findings = findingsWithBestExposure(active, exposures, sc, labelIndex, nsLabels)
+	report.Findings = findingsWithBestExposure(active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly)
 	return report
 }
 
@@ -187,6 +190,9 @@ func RenderJSON(w io.Writer, report model.Report) error {
 
 func RenderTable(w io.Writer, report model.Report) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if report.ClassificationOnly {
+		return renderClassificationOnlyTable(tw, report)
+	}
 	if len(report.Resources) > 0 {
 		if _, err := fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tCONTAINER\tIMAGE\tEXPOSED\tPAIN\tREMEDIATION\tFINDINGS"); err != nil {
 			return err
@@ -238,6 +244,72 @@ func RenderTable(w io.Writer, report model.Report) error {
 	return tw.Flush()
 }
 
+func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) error {
+	if len(report.Resources) > 0 {
+		if _, err := fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tCONTAINER\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tFINDINGS"); err != nil {
+			return err
+		}
+		for _, resource := range report.Resources {
+			if _, err := fmt.Fprintf(tw, "%s\t%s/%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+				resourceScope(resource.Resource),
+				resource.Resource.Kind,
+				resource.Resource.Name,
+				resource.Resource.ContainerName,
+				classificationClass(resource.Classification),
+				classificationArchetype(resource.Classification),
+				formatResourceImages(resource.Images),
+				formatExposure(resource.Exposure),
+				len(resource.Findings),
+			); err != nil {
+				return err
+			}
+		}
+		return tw.Flush()
+	}
+	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
+		return err
+	}
+	for _, finding := range report.Findings {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			finding.ID,
+			formatPackage(finding),
+			finding.Severity,
+			finding.Status,
+			formatAffectedClasses(finding.Affected),
+			formatAffectedArchetypes(finding.Affected),
+			finding.ImageRef,
+			formatExposure(finding.Exposure),
+			formatAffectedResources(finding.AffectedResources),
+		); err != nil {
+			return err
+		}
+	}
+	if len(report.SuppressedFindings) > 0 {
+		if _, err := fmt.Fprintln(tw, "\nSUPPRESSED FINDINGS"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tVEX STATUS\tJUSTIFICATION\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
+			return err
+		}
+		for _, finding := range report.SuppressedFindings {
+			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				finding.ID,
+				finding.Severity,
+				suppressionStatus(finding.Suppression),
+				suppressionJustification(finding.Suppression),
+				formatAffectedClasses(finding.Affected),
+				formatAffectedArchetypes(finding.Affected),
+				finding.ImageRef,
+				formatExposure(finding.Exposure),
+				formatAffectedResources(finding.AffectedResources),
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return tw.Flush()
+}
+
 // formatPackage renders the vulnerable package as "name installed → fixed", using
 // "no fix" when no fixed version is available. Returns "" when the package is unknown.
 func formatPackage(finding model.Finding) string {
@@ -285,7 +357,7 @@ func renderSuppressedTable(w io.Writer, findings []model.Finding) error {
 	return nil
 }
 
-func filterFindings(findings []model.Finding, minSeverity string, minEPSS float64) []model.Finding {
+func filterFindings(findings []model.Finding, minSeverity string, minEPSS float64, suppressEnrichments bool) []model.Finding {
 	var filtered []model.Finding
 	for _, finding := range findings {
 		if !severityAtLeast(finding.Severity, minSeverity) {
@@ -296,7 +368,11 @@ func filterFindings(findings []model.Finding, minSeverity string, minEPSS float6
 				continue
 			}
 		}
-		filtered = append(filtered, cloneFinding(finding))
+		clone := cloneFinding(finding)
+		if suppressEnrichments {
+			stripEnrichmentFields(&clone)
+		}
+		filtered = append(filtered, clone)
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
 		if filtered[i].ID != filtered[j].ID {
@@ -310,7 +386,7 @@ func filterFindings(findings []model.Finding, minSeverity string, minEPSS float6
 	return filtered
 }
 
-func buildResourceReports(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.ResourceReport {
+func buildResourceReports(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.ResourceReport {
 	if inventory == nil {
 		return nil
 	}
@@ -320,6 +396,9 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 			Resource: ref,
 			Images:   append([]model.ContainerImage(nil), inv.images...),
 			Labels:   copyStringMap(inv.labels),
+		}
+		if classificationOnly {
+			report.Classification = classifyAsset(sc, idx, nsLabels, ref)
 		}
 		if exposure, ok := exposures[ref]; ok {
 			value := exposure
@@ -336,6 +415,9 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 					value := exposure
 					report.Exposure = &value
 				}
+				if classificationOnly {
+					report.Classification = classifyAsset(sc, idx, nsLabels, ref)
+				}
 				reports[ref] = report
 			}
 			scoped := cloneFinding(finding)
@@ -347,10 +429,14 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 				scoped.Affected[0].Exposure = &value
 			}
 			pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(scoped.Exposure))
-			scoped.Pain = pain
-			scoped.Remediation = rem
-			scoped.Affected[0].Pain = pain
-			scoped.Affected[0].Remediation = rem
+			if classificationOnly {
+				scoped.Affected[0].Classification = classificationFromScore(pain, rem)
+			} else {
+				scoped.Pain = pain
+				scoped.Remediation = rem
+				scoped.Affected[0].Pain = pain
+				scoped.Affected[0].Remediation = rem
+			}
 			report.Findings = append(report.Findings, scoped)
 		}
 	}
@@ -419,32 +505,36 @@ func buildSummary(inventory *model.Inventory, findings []model.Finding, resource
 	return summary
 }
 
-func findingsWithBestExposure(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.Finding {
+func findingsWithBestExposure(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Finding {
 	enriched := make([]model.Finding, len(findings))
 	for i, finding := range findings {
 		enriched[i] = cloneFinding(finding)
-		enriched[i].Affected = affectedDetails(finding, exposures, sc, idx, nsLabels)
+		enriched[i].Affected = affectedDetails(finding, exposures, sc, idx, nsLabels, classificationOnly)
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
-		pain, rem := worstAsset(enriched[i].Affected)
-		enriched[i].Pain = pain
-		enriched[i].Remediation = rem
+		if !classificationOnly {
+			pain, rem := worstAsset(enriched[i].Affected)
+			enriched[i].Pain = pain
+			enriched[i].Remediation = rem
+		}
 	}
 	return enriched
 }
 
-func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.Finding {
+func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Finding {
 	enriched := make([]model.Finding, len(findings))
 	for i, finding := range findings {
 		enriched[i] = cloneFinding(finding)
-		enriched[i].Affected = affectedDetails(finding, exposures, sc, idx, nsLabels)
+		enriched[i].Affected = affectedDetails(finding, exposures, sc, idx, nsLabels, classificationOnly)
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
-		pain, rem := worstAsset(enriched[i].Affected)
-		enriched[i].WouldHaveBeenPain = pain
-		enriched[i].WouldHaveBeenRemediation = rem
+		if !classificationOnly {
+			pain, rem := worstAsset(enriched[i].Affected)
+			enriched[i].WouldHaveBeenPain = pain
+			enriched[i].WouldHaveBeenRemediation = rem
+		}
 		enriched[i].Pain = nil
 		enriched[i].Remediation = nil
 		for j := range enriched[i].Affected {
@@ -455,7 +545,7 @@ func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.R
 	return enriched
 }
 
-func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.Affected {
+func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Affected {
 	details := make([]model.Affected, 0, len(finding.AffectedResources))
 	for _, ref := range finding.AffectedResources {
 		detail := model.Affected{Resource: ref}
@@ -463,10 +553,93 @@ func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]mode
 			value := exposure
 			detail.Exposure = &value
 		}
-		detail.Pain, detail.Remediation = scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(detail.Exposure))
+		pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(detail.Exposure))
+		if classificationOnly {
+			detail.Classification = classificationFromScore(pain, rem)
+		} else {
+			detail.Pain, detail.Remediation = pain, rem
+		}
 		details = append(details, detail)
 	}
 	return details
+}
+
+func classificationFromScore(pain *model.Pain, remediation *model.Remediation) *model.AssetClassification {
+	classification := &model.AssetClassification{}
+	if remediation != nil {
+		classification.Class = remediation.Class
+	}
+	if pain != nil {
+		classification.Archetype = pain.Archetype
+		classification.ArchetypeSource = pain.ArchetypeSource
+	}
+	if classification.Class == "" && classification.Archetype == "" && classification.ArchetypeSource == "" {
+		return nil
+	}
+	return classification
+}
+
+func classificationClass(classification *model.AssetClassification) string {
+	if classification == nil {
+		return ""
+	}
+	return classification.Class
+}
+
+func classificationArchetype(classification *model.AssetClassification) string {
+	if classification == nil {
+		return ""
+	}
+	if classification.ArchetypeSource == "" {
+		return classification.Archetype
+	}
+	return fmt.Sprintf("%s (%s)", classification.Archetype, classification.ArchetypeSource)
+}
+
+func formatAffectedClasses(affected []model.Affected) string {
+	values := make([]string, 0, len(affected))
+	seen := map[string]struct{}{}
+	for _, item := range affected {
+		value := classificationClass(item.Classification)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return strings.Join(values, ",")
+}
+
+func formatAffectedArchetypes(affected []model.Affected) string {
+	values := make([]string, 0, len(affected))
+	seen := map[string]struct{}{}
+	for _, item := range affected {
+		value := classificationArchetype(item.Classification)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return strings.Join(values, ",")
+}
+
+func classifyAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, ref model.ResourceRef) *model.AssetClassification {
+	pain, rem := scoreAsset(sc, idx, nsLabels, ref, model.Finding{}, false)
+	return classificationFromScore(pain, rem)
+}
+
+func stripEnrichmentFields(finding *model.Finding) {
+	finding.EPSS = nil
+	finding.Vulnrichment = nil
 }
 
 // worstAsset returns the PAIN and remediation of the most urgent affected
@@ -594,6 +767,10 @@ func cloneAffected(affected []model.Affected) []model.Affected {
 		if item.Exposure != nil {
 			value := *item.Exposure
 			clone[i].Exposure = &value
+		}
+		if item.Classification != nil {
+			value := *item.Classification
+			clone[i].Classification = &value
 		}
 		if item.Pain != nil {
 			value := *item.Pain
