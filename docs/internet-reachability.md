@@ -1,0 +1,145 @@
+# Internet Reachability Evaluation
+
+`vdr` uses internet reachability to set the IRV input for FedRAMP remediation deadlines. The evaluation is intentionally conservative: a resource is marked internet-reachable only when the collected platform metadata shows a public path to the affected workload and no supported access-protection control blocks unauthenticated internet access.
+
+## Cloud Run
+
+Cloud Run jobs are never counted as internet-reachable. Cloud Run services are evaluated from service ingress settings, IAM policy, and, for load-balancer-only ingress, public HTTP(S) load balancer metadata.
+
+```mermaid
+flowchart TD
+    cr[Cloud Run resource] --> kind{Resource kind?}
+    kind -->|Job| crNoJob[Not internet-reachable]
+    kind -->|Service| ingress{Service ingress}
+
+    ingress -->|all| invoker{IAM grants allUsers<br/>roles/run.invoker?}
+    invoker -->|yes| crYesAll[Internet-reachable]
+    invoker -->|no| crNoIam[Not internet-reachable]
+
+    ingress -->|internal| crNoInternal[Not internet-reachable]
+
+    ingress -->|internal-and-cloud-load-balancing| lb{Public HTTP(S)<br/>load balancer targets service?}
+    lb -->|no| crNoLb[Not internet-reachable]
+    lb -->|yes| iap{Cloud Run backend<br/>IAP enabled?}
+    iap -->|yes| crNoIap[Not internet-reachable]
+    iap -->|no| crYesLb[Internet-reachable]
+```
+
+## Kubernetes Ingress And Gateway
+
+Kubernetes route evaluation starts from Ingress and Gateway API objects, resolves their backend Services, then maps those Services to selected workload pods and containers. Provider-specific public/private class and scheme metadata decides whether the route represents a public path.
+
+```mermaid
+flowchart TD
+    route[Ingress or Gateway API route] --> provisioned{Route is serving traffic?}
+    provisioned -->|Ingress without load balancer status| routeNoStatus[Not internet-reachable]
+    provisioned -->|Gateway route or provisioned Ingress| backend{Backend Service can be resolved?}
+
+    backend -->|no| routeNoBackend[Not internet-reachable]
+    backend -->|cross-namespace Gateway backend| grant{Matching ReferenceGrant?}
+    grant -->|no| routeNoGrant[Not internet-reachable]
+    grant -->|yes| routeClass
+    backend -->|same namespace or Ingress backend| routeClass{Public route class or scheme?}
+
+    routeClass -->|GKE external Gateway class| protection
+    routeClass -->|GKE Ingress class gce| protection
+    routeClass -->|AWS ALB internet-facing Ingress| awsAuth
+    routeClass -->|AWS Gateway LoadBalancerConfiguration internet-facing| awsAuth
+    routeClass -->|internal or unknown| routeNoClass[Not internet-reachable]
+
+    protection{GKE IAP enabled<br/>for selected backend?}
+    protection -->|yes| routeNoIap[Not internet-reachable]
+    protection -->|no| routeYes[Internet-reachable]
+
+    awsAuth{AWS OIDC or Cognito<br/>authentication configured?}
+    awsAuth -->|yes| routeYesProtected[Internet-reachable<br/>with access-protection evidence]
+    awsAuth -->|no| routeYes
+```
+
+Notes:
+
+- GKE Gateway is public only for known external GKE Gateway classes.
+- GKE Ingress is public for `gce`; `gce-internal` is not public.
+- GKE IAP is detected through `GCPBackendPolicy` for Gateway backends and `BackendConfig` for Ingress backends. Ingress `BackendConfig` lookup follows the Service port selected by the route; per-port mappings override `default`.
+- AWS ALB Ingress and AWS Gateway are public only when their scheme or load balancer configuration is `internet-facing`.
+- AWS `oidc` and `cognito` authentication are recorded as access-protection evidence, but the backend still has an internet-facing route.
+- If an unprovisioned Ingress and a Gateway both target the same Service, the Gateway route can still make the workload internet-reachable.
+
+### Operator-declared classes
+
+When an edge load balancer is built outside Kubernetes (for example ingress-nginx
+or a custom Gateway fronted by a standalone-NEG / Terraform L7 LB), the cluster
+cannot infer reachability. An operator can declare it two ways:
+
+- **Per-resource label** `vdr.fedramp.io/internet-reachable` on an `IngressClass`
+  (`true` treats every Ingress using that class as public; `false` suppresses even
+  a built-in public class such as `gce`).
+- **Central ConfigMap list** in `kube-system/vdr-fedramp`. List class names under
+  `internetAccessibleIngressClasses` and/or `internetAccessibleGatewayClasses`;
+  any Ingress/Gateway using a listed class is treated as internet-reachable. This
+  avoids labeling resources directly, which is brittle when labels are applied by a
+  Helm chart onto undesired resources or reverted by a managed reconciler. Each
+  value is a YAML list, or a newline- or comma-separated string of class names.
+
+  ```yaml
+  data:
+    internetAccessibleIngressClasses: |
+      - nginx
+    internetAccessibleGatewayClasses: |
+      - istio
+  ```
+
+  Precedence: a per-class `vdr.fedramp.io/internet-reachable` label (including
+  `false`) wins over the ConfigMap list. Built-in public classes stay public.
+  GatewayClass has no label mechanism, so the ConfigMap list is its only override.
+
+## Kubernetes Service LoadBalancer
+
+A `Service` of type `LoadBalancer` can expose the pods it selects directly. This catches data-path pods for ingress and gateway controllers such as Traefik, ingress-nginx, and Envoy without relying on controller names.
+
+```mermaid
+flowchart TD
+    svc[Service] --> type{Service type}
+    type -->|LoadBalancer| lbStatus{External load balancer<br/>address provisioned?}
+    type -->|Other| svcOther[No direct Service exposure]
+
+    lbStatus -->|no| svcNoStatus[Not internet-reachable]
+    lbStatus -->|yes| internal{Internal load balancer<br/>annotation present?}
+
+    internal -->|yes| svcInternal[Not internet-reachable]
+    internal -->|no| selected{Service selector<br/>matches workload pods?}
+
+    selected -->|no| svcNoPods[No affected workload marked]
+    selected -->|yes| svcYes[Selected pods are<br/>internet-reachable]
+```
+
+Internal load balancer annotations include:
+
+- GKE: `networking.gke.io/load-balancer-type: Internal`
+- AWS: `aws-load-balancer-scheme: internal`
+- Azure: `azure-load-balancer-internal: "true"`
+
+## Kubernetes Service NodePort
+
+NodePort reachability depends on node public IPs and firewall rules, which are not reliably visible from Kubernetes API objects alone. `vdr` records unlabeled NodePort Services as advisory evidence but does not count them as internet-reachable unless the operator labels the Service.
+
+```mermaid
+flowchart TD
+    np[Service type NodePort] --> label{Label<br/>vdr.fedramp.io/internet-reachable-nodePort}
+    label -->|true| npYes[Internet-reachable]
+    label -->|false| npNo[Not internet-reachable]
+    label -->|absent| npAdvisory[Advisory only:<br/>not counted as internet-reachable]
+```
+
+## Container Exposure Inheritance
+
+When a workload is internet-reachable, normal containers inherit that exposure. Init containers do not inherit exposure unless they are sidecar-style init containers with restart policy `Always`.
+
+```mermaid
+flowchart TD
+    exposed[Workload has internet-reachable route] --> container{Container type}
+    container -->|regular container| inheritYes[Container inherits exposure]
+    container -->|init container| restart{Restart policy Always?}
+    restart -->|yes| inheritYes
+    restart -->|no| inheritNo[Container does not inherit exposure]
+```

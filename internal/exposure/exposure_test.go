@@ -793,6 +793,130 @@ func TestAnalyzeServiceLabelPrecedenceOverNodePortLabel(t *testing.T) {
 	}
 }
 
+func TestAnalyzeIngressClassDeclaredInternetAccessibleByConfigMap(t *testing.T) {
+	// An nginx-class Ingress is normally ignored (unknown class). Listing the class name
+	// in the cluster ConfigMap's internetAccessibleIngressClasses makes every backend
+	// behind that class count — without labeling any resource.
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:                         []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses:                        []networkingv1.Ingress{ingress("default", "nginx-ing", "nginx", "web-svc", nil)},
+		InternetAccessibleIngressClasses: []string{"nginx"},
+	}
+
+	got := Analyze(inv, objects)
+
+	ex := got[resourceRef("default", "web", "app", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("workload behind ConfigMap-declared IngressClass should be internet-reachable; got %+v", ex)
+	}
+	if ex.RouteKind != "Ingress" || ex.RouteName != "nginx-ing" {
+		t.Errorf("unexpected exposure metadata: %+v", ex)
+	}
+	requireEvidence(t, ex, "IngressClass nginx declared internet-accessible by cluster ConfigMap internetAccessibleIngressClasses")
+}
+
+func TestAnalyzeIngressClassLabelFalseWinsOverConfigMapList(t *testing.T) {
+	// An explicit per-class label=false wins even when the class is listed in the ConfigMap.
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "nginx-ing", "nginx", "web-svc", nil)},
+		IngressClasses: []networkingv1.IngressClass{
+			labeledIngressClass("nginx", map[string]string{"vdr.fedramp.io/internet-reachable": "false"}),
+		},
+		InternetAccessibleIngressClasses: []string{"nginx"},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("IngressClass labeled false must win over ConfigMap list; got %#v", got)
+	}
+}
+
+func TestAnalyzeGatewayClassDeclaredInternetAccessibleByConfigMap(t *testing.T) {
+	// A non-built-in Gateway class (e.g. istio) is normally not public. Listing it in the
+	// cluster ConfigMap's internetAccessibleGatewayClasses makes its route backends count.
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "custom-gw", "istio"),
+			httpRoute("default", "custom-route", "custom-gw", "web-svc"),
+		},
+		InternetAccessibleGatewayClasses: []string{"istio"},
+	}
+
+	got := Analyze(inv, objects)
+
+	ex := got[resourceRef("default", "web", "app", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("workload behind ConfigMap-declared GatewayClass should be internet-reachable; got %+v", ex)
+	}
+	if ex.RouteKind != "HTTPRoute" || ex.RouteName != "custom-route" {
+		t.Errorf("unexpected exposure metadata: %+v", ex)
+	}
+	requireEvidence(t, ex, "Gateway default/custom-gw uses class istio declared internet-accessible by cluster ConfigMap internetAccessibleGatewayClasses")
+}
+
+func TestAnalyzeGatewayClassNotDeclaredIsNotPublic(t *testing.T) {
+	// Regression: without the ConfigMap list, a non-built-in Gateway class stays private.
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "custom-gw", "istio"),
+			httpRoute("default", "custom-route", "custom-gw", "web-svc"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	if len(got) != 0 {
+		t.Fatalf("Analyze() returned %#v, want no exposure for undeclared Gateway class", got)
+	}
+}
+
+func TestClassOverridesFromConfigMap(t *testing.T) {
+	data := map[string]string{
+		ConfigKeyInternetAccessibleIngressClasses: "- nginx\n- traefik\n",
+		ConfigKeyInternetAccessibleGatewayClasses: "istio, envoy-gateway",
+	}
+	ingress, gateway := ClassOverridesFromConfigMap(data)
+	if got, want := strings.Join(ingress, ","), "nginx,traefik"; got != want {
+		t.Errorf("ingress classes = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(gateway, ","), "istio,envoy-gateway"; got != want {
+		t.Errorf("gateway classes = %q, want %q", got, want)
+	}
+}
+
+func TestParseClassList(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"empty", "", nil},
+		{"whitespace", "   \n  ", nil},
+		{"yaml block list", "- nginx\n- traefik", []string{"nginx", "traefik"}},
+		{"yaml flow list", "[nginx, traefik]", []string{"nginx", "traefik"}},
+		{"single scalar", "nginx", []string{"nginx"}},
+		{"comma separated", "nginx, traefik ,istio", []string{"nginx", "traefik", "istio"}},
+		{"newline separated", "nginx\ntraefik\n", []string{"nginx", "traefik"}},
+		{"dedup and blanks", "nginx,,nginx, traefik", []string{"nginx", "traefik"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseClassList(tt.raw)
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("parseClassList(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 func inventoryWithWorkload(namespace, name string, labels map[string]string, images ...model.ContainerImage) *model.Inventory {
 	return &model.Inventory{
 		Resources: []model.ResourceInventory{{

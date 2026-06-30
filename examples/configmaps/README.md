@@ -33,6 +33,15 @@ The ConfigMap carries:
   cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`,
   `amazon-cloudwatch`, `azure-*`, …) that cannot carry `vdr.fedramp.io/*` labels
   because their managed reconcilers revert manual changes.
+- `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` —
+  optional lists of Ingress/Gateway class names to treat as internet-reachable
+  (for edge load balancers built outside Kubernetes, e.g. ingress-nginx fronted by
+  a standalone-NEG / Terraform L7 LB). A cleaner alternative to labeling each
+  resource with `vdr.fedramp.io/internet-reachable` (which a Helm chart may apply
+  to undesired resources). Each value is a YAML list, or a newline- or
+  comma-separated string. A per-class `vdr.fedramp.io/internet-reachable` label
+  still wins over the list. See
+  [`../../docs/internet-reachability.md`](../../docs/internet-reachability.md).
 
 > **Governance:** the calibratable PAIN word thresholds (`wordThresholds`) are
 > **not** read from this ConfigMap — a `wordThresholds` block in the ConfigMap's
