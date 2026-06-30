@@ -104,7 +104,7 @@ rules:
 Notes:
 
 - `secrets/get` is only needed when registry auth from Kubernetes `imagePullSecrets` is enabled. Use `--skip-registry-auth` or `--reachability-only` to avoid reading Secrets.
-- `configmaps/get` is used for the optional `kube-system/vdr-fedramp` scoring ConfigMap.
+- `configmaps/get` is used for the optional `fedramp-vdr-trivy/vdr-fedramp` scoring ConfigMap.
 - Exposure resources are optional for vulnerability scan reports. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis. `--reachability-only` requires exposure resources and cannot be combined with `--skip-exposure`.
 - If you never use AWS ALB/Gateway resources, the `elbv2.k8s.aws` and `gateway.k8s.aws` rules can be omitted. If you never use GKE ingress/gateway IAP metadata, the `cloud.google.com/backendconfigs` and `networking.gke.io/gcpbackendpolicies` rules can be omitted.
 
@@ -334,7 +334,7 @@ So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively
 
 ### Cluster configuration
 
-The provider **Certification Class** (A/B/C/D), the **agency scope**, and the archetype **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in **`kube-system`** — no flag required. It carries the scalar keys `class` and `multiAgency`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (catalog, algorithm, EPSS threshold, and the `unclassified` default). It can also carry `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` — lists of Ingress/Gateway class names to treat as internet-reachable when their edge load balancer is built outside Kubernetes, a cleaner alternative to labeling each resource (see [exposure rules](#exposure-rules)). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules).
+The provider **Certification Class** (A/B/C/D), the **agency scope**, and the archetype **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in the **`fedramp-vdr-trivy`** namespace — no flag required. It carries the scalar keys `class` and `multiAgency`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (catalog, algorithm, EPSS threshold, and the `unclassified` default). It can also carry `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` — lists of Ingress/Gateway class names to treat as internet-reachable when their edge load balancer is built outside Kubernetes, a cleaner alternative to labeling each resource (see [exposure rules](#exposure-rules)). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules).
 
 See [`examples/configmaps/`](examples/configmaps/) for starter GKE, EKS, and AKS ConfigMaps. The optional `--scoring-config <file>` flag layers a local YAML/JSON config under the ConfigMap for testing or non-cluster use.
 
