@@ -140,8 +140,46 @@ type Exposure struct {
 	Provider           string            `json:"provider,omitempty"`
 	RouteKind          string            `json:"routeKind,omitempty"`
 	RouteName          string            `json:"routeName,omitempty"`
+	Routes             []RouteMetadata   `json:"routes,omitempty"`
 	Protection         *AccessProtection `json:"protection,omitempty"`
 	Evidence           []string          `json:"evidence,omitempty"`
+}
+
+type RouteMetadata struct {
+	Kind             string         `json:"kind,omitempty"`
+	Namespace        string         `json:"namespace,omitempty"`
+	Name             string         `json:"name,omitempty"`
+	Hostnames        []string       `json:"hostnames,omitempty"`
+	Paths            []RoutePath    `json:"paths,omitempty"`
+	Headers          []RouteHeader  `json:"headers,omitempty"`
+	Rewrites         []RouteRewrite `json:"rewrites,omitempty"`
+	BackendService   string         `json:"backendService,omitempty"`
+	BackendNamespace string         `json:"backendNamespace,omitempty"`
+	URLMap           string         `json:"urlMap,omitempty"`
+	TargetProxy      string         `json:"targetProxy,omitempty"`
+	LoadBalancerIP   string         `json:"loadBalancerIp,omitempty"`
+}
+
+type RoutePath struct {
+	Type  string `json:"type,omitempty"`
+	Value string `json:"value,omitempty"`
+}
+
+type RouteHeader struct {
+	Type  string `json:"type,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Value string `json:"value,omitempty"`
+}
+
+type RouteRewrite struct {
+	HostnameReplace           string `json:"hostnameReplace,omitempty"`
+	PathReplaceFullPath       string `json:"pathReplaceFullPath,omitempty"`
+	PathReplacePrefixMatch    string `json:"pathReplacePrefixMatch,omitempty"`
+	RequestRedirectHostname   string `json:"requestRedirectHostname,omitempty"`
+	RequestRedirectPath       string `json:"requestRedirectPath,omitempty"`
+	RequestRedirectPrefix     string `json:"requestRedirectPrefix,omitempty"`
+	RequestRedirectScheme     string `json:"requestRedirectScheme,omitempty"`
+	RequestRedirectStatusCode int32  `json:"requestRedirectStatusCode,omitempty"`
 }
 
 type AccessProtection struct {

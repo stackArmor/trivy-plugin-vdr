@@ -6,6 +6,8 @@
 
 Cloud Run jobs are never counted as internet-reachable. Cloud Run services are evaluated from service ingress settings, IAM policy, and, for load-balancer-only ingress, public HTTP(S) load balancer metadata.
 
+When load-balancer route details are available, JSON output includes informational `exposure.routes` metadata such as forwarding rule, URL map, target proxy, hostnames, paths, rewrites, and backend service. These fields do not change reachability decisions by themselves.
+
 ```mermaid
 flowchart TD
     cr[Cloud Run resource] --> kind{Resource kind?}
@@ -64,6 +66,7 @@ Notes:
 - AWS ALB Ingress and AWS Gateway are public only when their scheme or load balancer configuration is `internet-facing`.
 - AWS `oidc` and `cognito` authentication are recorded as access-protection evidence, but the backend still has an internet-facing route.
 - If an unprovisioned Ingress and a Gateway both target the same Service, the Gateway route can still make the workload internet-reachable.
+- JSON output includes informational `exposure.routes` metadata when available. Ingress metadata can include hostnames and paths. Gateway API metadata can include hostnames, path matches, header matches, URL rewrite filters, request redirects, and backend Service references.
 
 ### Operator-declared classes
 
@@ -74,7 +77,7 @@ cannot infer reachability. An operator can declare it two ways:
 - **Per-resource label** `vdr.fedramp.io/internet-reachable` on an `IngressClass`
   (`true` treats every Ingress using that class as public; `false` suppresses even
   a built-in public class such as `gce`).
-- **Central ConfigMap list** in `kube-system/vdr-fedramp`. List class names under
+- **Central ConfigMap list** in `fedramp-vdr-trivy/vdr-fedramp`. List class names under
   `internetAccessibleIngressClasses` and/or `internetAccessibleGatewayClasses`;
   any Ingress/Gateway using a listed class is treated as internet-reachable. This
   avoids labeling resources directly, which is brittle when labels are applied by a

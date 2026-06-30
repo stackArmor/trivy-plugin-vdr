@@ -110,8 +110,10 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		warnings = append(warnings, secretWarnings...)
 
 		res, err := registry.Build(ctx, inventoryImageRefs(inventory), secretAuths, registry.Options{
-			EnableGcloud: !cfg.NoGcloudAuth,
-			EnableECR:    !cfg.NoECRAuth,
+			EnableGcloud:                 !cfg.NoGcloudAuth,
+			EnableECR:                    !cfg.NoECRAuth,
+			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
+			AWSRoleARN:                   cfg.AWSRoleARN,
 		}, logger)
 		if err != nil {
 			return err
@@ -134,7 +136,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 }
 
 func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
-	client, err := cloudrun.NewGCPClient(ctx)
+	client, err := cloudrun.NewGCPClient(ctx, cloudrun.ClientOptions{ImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount})
 	if err != nil {
 		return err
 	}
@@ -180,8 +182,10 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 	var dockerConfigDir string
 	if !cfg.SkipRegistryAuth {
 		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
-			EnableGcloud: !cfg.NoGcloudAuth,
-			EnableECR:    !cfg.NoECRAuth,
+			EnableGcloud:                 !cfg.NoGcloudAuth,
+			EnableECR:                    !cfg.NoECRAuth,
+			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
+			AWSRoleARN:                   cfg.AWSRoleARN,
 		}, logger)
 		if err != nil {
 			return err
@@ -206,8 +210,10 @@ func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 	var dockerConfigDir string
 	if !cfg.SkipRegistryAuth {
 		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
-			EnableGcloud: !cfg.NoGcloudAuth,
-			EnableECR:    !cfg.NoECRAuth,
+			EnableGcloud:                 !cfg.NoGcloudAuth,
+			EnableECR:                    !cfg.NoECRAuth,
+			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
+			AWSRoleARN:                   cfg.AWSRoleARN,
 		}, logger)
 		if err != nil {
 			return err

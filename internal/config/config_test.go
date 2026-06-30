@@ -79,6 +79,8 @@ func TestParseRegistryAuthAndLogFlags(t *testing.T) {
 		"--skip-registry-auth",
 		"--no-gcloud-auth",
 		"--no-ecr-auth",
+		"--gcp-impersonate-service-account", "vdr-reader@example.iam.gserviceaccount.com",
+		"--aws-role-arn", "arn:aws:iam::123456789012:role/VDRReadOnly",
 		"--quiet",
 	})
 	if err != nil {
@@ -86,6 +88,12 @@ func TestParseRegistryAuthAndLogFlags(t *testing.T) {
 	}
 	if !cfg.SkipRegistryAuth || !cfg.NoGcloudAuth || !cfg.NoECRAuth || !cfg.Quiet {
 		t.Fatalf("flags = %v/%v/%v/%v, want all true", cfg.SkipRegistryAuth, cfg.NoGcloudAuth, cfg.NoECRAuth, cfg.Quiet)
+	}
+	if cfg.GCPImpersonateServiceAccount != "vdr-reader@example.iam.gserviceaccount.com" {
+		t.Fatalf("GCPImpersonateServiceAccount = %q", cfg.GCPImpersonateServiceAccount)
+	}
+	if cfg.AWSRoleARN != "arn:aws:iam::123456789012:role/VDRReadOnly" {
+		t.Fatalf("AWSRoleARN = %q", cfg.AWSRoleARN)
 	}
 }
 
