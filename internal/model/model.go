@@ -160,10 +160,17 @@ type SecurityPolicy struct {
 }
 
 type Affected struct {
-	Resource    ResourceRef  `json:"resource"`
-	Exposure    *Exposure    `json:"exposure,omitempty"`
-	Pain        *Pain        `json:"pain,omitempty"`
-	Remediation *Remediation `json:"remediation,omitempty"`
+	Resource       ResourceRef          `json:"resource"`
+	Exposure       *Exposure            `json:"exposure,omitempty"`
+	Classification *AssetClassification `json:"classification,omitempty"`
+	Pain           *Pain                `json:"pain,omitempty"`
+	Remediation    *Remediation         `json:"remediation,omitempty"`
+}
+
+type AssetClassification struct {
+	Class           string `json:"class,omitempty"`
+	Archetype       string `json:"archetype,omitempty"`
+	ArchetypeSource string `json:"archetypeSource,omitempty"`
 }
 
 // Remediation is the FedRAMP Rev5 VDR-TFR-PVR remediation deadline for a finding
@@ -210,14 +217,16 @@ type Report struct {
 	SuppressedFindings []Finding        `json:"suppressedFindings,omitempty"`
 	Resources          []ResourceReport `json:"resources,omitempty"`
 	Warnings           []string         `json:"warnings,omitempty"`
+	ClassificationOnly bool             `json:"-"`
 }
 
 type ResourceReport struct {
-	Resource ResourceRef       `json:"resource"`
-	Images   []ContainerImage  `json:"images,omitempty"`
-	Exposure *Exposure         `json:"exposure,omitempty"`
-	Findings []Finding         `json:"findings"`
-	Labels   map[string]string `json:"labels,omitempty"`
+	Resource       ResourceRef          `json:"resource"`
+	Images         []ContainerImage     `json:"images,omitempty"`
+	Exposure       *Exposure            `json:"exposure,omitempty"`
+	Classification *AssetClassification `json:"classification,omitempty"`
+	Findings       []Finding            `json:"findings"`
+	Labels         map[string]string    `json:"labels,omitempty"`
 }
 
 type Summary struct {

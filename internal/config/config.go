@@ -60,6 +60,7 @@ type Config struct {
 	RefreshEnrichment     bool
 	SkipExposure          bool
 	ReachabilityOnly      bool
+	ScanReachabilityOnly  bool
 	SkipRegistryAuth      bool
 	NoGcloudAuth          bool
 	NoECRAuth             bool
@@ -163,6 +164,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.RefreshEnrichment, "refresh-enrichment", cfg.RefreshEnrichment, "force EPSS and Vulnrichment enrichment refresh")
 	fs.BoolVar(&cfg.SkipExposure, "skip-exposure", cfg.SkipExposure, "skip exposure analysis")
 	fs.BoolVar(&cfg.ReachabilityOnly, "reachability-only", cfg.ReachabilityOnly, "collect internet reachability metadata only and skip Trivy image scans")
+	fs.BoolVar(&cfg.ScanReachabilityOnly, "scan-reachability-only", cfg.ScanReachabilityOnly, "scan images and include internet reachability plus asset classification, without EPSS, Vulnrichment, PAIN, or remediation scoring output")
 	fs.BoolVar(&cfg.SkipRegistryAuth, "skip-registry-auth", cfg.SkipRegistryAuth, "skip automatic private registry authentication")
 	fs.BoolVar(&cfg.NoGcloudAuth, "no-gcloud-auth", cfg.NoGcloudAuth, "skip gcloud authentication for Google Artifact Registry/GCR images")
 	fs.BoolVar(&cfg.NoECRAuth, "no-ecr-auth", cfg.NoECRAuth, "skip aws CLI authentication for ECR images")
@@ -199,6 +201,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	includeZeroDaemonSetsSet := false
 	projectSet := false
 	regionSet := false
+	htmlOutputSet := false
+	htmlTemplateSet := false
+	minEPSSSet := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "all-namespaces":
@@ -211,6 +216,12 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			projectSet = true
 		case "region":
 			regionSet = true
+		case "html-output":
+			htmlOutputSet = true
+		case "html-template":
+			htmlTemplateSet = true
+		case "min-epss":
+			minEPSSSet = true
 		}
 	})
 
@@ -234,6 +245,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	cfg.Namespaces = []string(namespaces)
 	cfg.Regions = []string(regions)
 	if cfg.ReachabilityOnly {
+		if cfg.ScanReachabilityOnly {
+			return Config{}, errors.New("--reachability-only cannot be used with --scan-reachability-only")
+		}
 		if cfg.SkipExposure {
 			return Config{}, errors.New("--reachability-only cannot be used with --skip-exposure")
 		}
@@ -241,6 +255,23 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			return Config{}, errors.New("--reachability-only is only valid for sources k8s and cloudrun, not image")
 		}
 		cfg.View = ViewResources
+	}
+	if cfg.ScanReachabilityOnly {
+		if cfg.SkipExposure {
+			return Config{}, errors.New("--scan-reachability-only cannot be used with --skip-exposure")
+		}
+		if cfg.Source == SourceImage {
+			return Config{}, errors.New("--scan-reachability-only is only valid for sources k8s and cloudrun, not image")
+		}
+		if htmlOutputSet || cfg.HTMLOutput != "" {
+			return Config{}, errors.New("--scan-reachability-only cannot be used with --html-output")
+		}
+		if htmlTemplateSet || cfg.HTMLTemplate != "" {
+			return Config{}, errors.New("--scan-reachability-only cannot be used with --html-template")
+		}
+		if minEPSSSet {
+			return Config{}, errors.New("--scan-reachability-only cannot be used with --min-epss")
+		}
 	}
 	if cfg.Source == SourceCloudRun {
 		if namespaceSet {
