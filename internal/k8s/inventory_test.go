@@ -98,7 +98,7 @@ func TestCollectsNamespaceMetadata(t *testing.T) {
 
 func TestCollectsClusterDefaultsConfigMap(t *testing.T) {
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "vdr-fedramp"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "fedramp-vdr-trivy", Name: "vdr-fedramp"},
 		Data:       map[string]string{"class": "C", "multiAgency": "false"},
 	}
 	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
@@ -118,6 +118,31 @@ func TestCollectsClusterDefaultsConfigMap(t *testing.T) {
 	}
 }
 
+func TestCollectsClusterDefaultsFromCustomConfigMapNamespace(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "custom-vdr", Name: "vdr-fedramp"},
+		Data:       map[string]string{"class": "D", "multiAgency": "true"},
+	}
+	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
+	client := fake.NewSimpleClientset(cm, deploy)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{
+		AllNamespaces:             true,
+		ClusterConfigMapNamespace: "custom-vdr",
+	})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if inv.ClusterDefaults["class"] != "D" || inv.ClusterDefaults["multiAgency"] != "true" {
+		t.Fatalf("ClusterDefaults = %#v, want class=D multiAgency=true", inv.ClusterDefaults)
+	}
+	for _, w := range inv.Warnings {
+		if strings.Contains(w, "built-in defaults") {
+			t.Errorf("unexpected built-in defaults warning when custom ConfigMap present: %q", w)
+		}
+	}
+}
+
 func TestWarnsWhenClusterConfigMapMissing(t *testing.T) {
 	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
 	client := fake.NewSimpleClientset(deploy) // no vdr-fedramp ConfigMap
@@ -131,7 +156,7 @@ func TestWarnsWhenClusterConfigMapMissing(t *testing.T) {
 	}
 	found := false
 	for _, w := range inv.Warnings {
-		if strings.Contains(w, "kube-system/vdr-fedramp") && strings.Contains(w, "built-in defaults") {
+		if strings.Contains(w, "fedramp-vdr-trivy/vdr-fedramp") && strings.Contains(w, "built-in defaults") {
 			found = true
 		}
 	}

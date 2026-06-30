@@ -21,14 +21,14 @@ type Options struct {
 	AllNamespaces         bool
 	IncludeZeroDaemonSets bool
 	// ClusterConfigMapNamespace/Name locate the cluster-wide FedRAMP metadata
-	// ConfigMap (cluster default class / multi-agency). Defaults: kube-system /
-	// vdr-fedramp.
+	// ConfigMap (cluster default class / multi-agency). Defaults:
+	// fedramp-vdr-trivy/vdr-fedramp.
 	ClusterConfigMapNamespace string
 	ClusterConfigMapName      string
 }
 
 const (
-	defaultClusterConfigMapNamespace = "kube-system"
+	defaultClusterConfigMapNamespace = "fedramp-vdr-trivy"
 	defaultClusterConfigMapName      = "vdr-fedramp"
 )
 
