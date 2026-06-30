@@ -282,7 +282,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 	}
 	logger.Info("scan complete: %d findings, %d images failed", len(findings), scanFailures)
 
-	if !cfg.SkipEnrichment {
+	if !cfg.SkipEnrichment && !cfg.ScanReachabilityOnly {
 		logger.Info("enriching findings with EPSS and vulnrichment data")
 		epssStore := epss.NewStore(cfg.CacheDir, epss.WithForceRefresh(cfg.RefreshEnrichment), epss.WithLogger(logger))
 		vulnrichmentStore := vulnrichment.NewStore(cfg.CacheDir, vulnrichment.WithForceRefresh(cfg.RefreshEnrichment))
@@ -292,6 +292,8 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 		}
 		fetched, cached := vulnrichmentStore.Stats()
 		logger.Info("vulnrichment: %d records fetched, %d from cache", fetched, cached)
+	} else if cfg.ScanReachabilityOnly {
+		logger.Info("scan-reachability-only mode: skipping EPSS and vulnrichment enrichment")
 	}
 
 	warnings = append(warnings, scannerWarnings(scanWarnings)...)
@@ -329,22 +331,26 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 	}
 
 	primary := report.Build(inventory, findings, exposures, report.Options{
-		View:        cfg.View,
-		MinSeverity: cfg.MinSeverity,
-		MinEPSS:     cfg.MinEPSS,
-		Warnings:    warnings,
-		Scoring:     scoringConfig,
+		View:                cfg.View,
+		MinSeverity:         cfg.MinSeverity,
+		MinEPSS:             cfg.MinEPSS,
+		Warnings:            warnings,
+		Scoring:             scoringConfig,
+		ClassificationOnly:  cfg.ScanReachabilityOnly,
+		SuppressEnrichments: cfg.ScanReachabilityOnly,
 	})
 	if err := writePrimaryReport(stdout, cfg.Output, cfg.Format, primary); err != nil {
 		return err
 	}
 	if cfg.HTMLOutput != "" {
 		htmlReport := report.Build(inventory, findings, exposures, report.Options{
-			View:        report.ViewResources,
-			MinSeverity: cfg.MinSeverity,
-			MinEPSS:     cfg.MinEPSS,
-			Warnings:    warnings,
-			Scoring:     scoringConfig,
+			View:                report.ViewResources,
+			MinSeverity:         cfg.MinSeverity,
+			MinEPSS:             cfg.MinEPSS,
+			Warnings:            warnings,
+			Scoring:             scoringConfig,
+			ClassificationOnly:  cfg.ScanReachabilityOnly,
+			SuppressEnrichments: cfg.ScanReachabilityOnly,
 		})
 		if err := writeHTMLReport(cfg.HTMLOutput, cfg.HTMLTemplate, htmlReport); err != nil {
 			return err
