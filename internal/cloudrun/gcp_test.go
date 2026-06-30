@@ -1,9 +1,13 @@
 package cloudrun
 
 import (
+	"context"
 	"testing"
 
 	"cloud.google.com/go/compute/apiv1/computepb"
+	"golang.org/x/oauth2"
+	"google.golang.org/api/impersonate"
+	"google.golang.org/api/option"
 )
 
 func TestServerlessNEGParsesCloudRunService(t *testing.T) {
@@ -23,6 +27,27 @@ func TestServerlessNEGParsesCloudRunService(t *testing.T) {
 	}
 	if region != "us-east4" {
 		t.Fatalf("region = %q, want us-east4", region)
+	}
+}
+
+func TestClientOptionsUseImpersonatedServiceAccount(t *testing.T) {
+	var gotTarget string
+	original := impersonateCredentialsTokenSource
+	impersonateCredentialsTokenSource = func(_ context.Context, config impersonate.CredentialsConfig, _ ...option.ClientOption) (oauth2.TokenSource, error) {
+		gotTarget = config.TargetPrincipal
+		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"}), nil
+	}
+	t.Cleanup(func() { impersonateCredentialsTokenSource = original })
+
+	opts, err := clientOptions(context.Background(), ClientOptions{ImpersonateServiceAccount: "vdr-reader@example.iam.gserviceaccount.com"})
+	if err != nil {
+		t.Fatalf("clientOptions returned error: %v", err)
+	}
+	if len(opts) == 0 {
+		t.Fatal("clientOptions returned no options, want impersonation option")
+	}
+	if gotTarget != "vdr-reader@example.iam.gserviceaccount.com" {
+		t.Fatalf("TargetPrincipal = %q", gotTarget)
 	}
 }
 
@@ -84,6 +109,38 @@ func TestURLMapBackendServicesIncludesRouteRulesAndDeduplicates(t *testing.T) {
 	}
 	if got[1] != "https://www.googleapis.com/compute/v1/projects/proj/global/backendServices/path" {
 		t.Fatalf("got[1] = %q", got[1])
+	}
+}
+
+func TestURLMapRouteMetadataIncludesHostsPathsAndRewrites(t *testing.T) {
+	urlMap := &computepb.UrlMap{
+		HostRules: []*computepb.HostRule{{
+			Hosts:       []string{"api.example.com"},
+			PathMatcher: ptrString("api-matcher"),
+		}},
+		PathMatchers: []*computepb.PathMatcher{{
+			Name: ptrString("api-matcher"),
+			PathRules: []*computepb.PathRule{{
+				Paths:   []string{"/api/*"},
+				Service: ptrString("https://www.googleapis.com/compute/v1/projects/proj/global/backendServices/api-backend"),
+				RouteAction: &computepb.HttpRouteAction{UrlRewrite: &computepb.UrlRewrite{
+					PathPrefixRewrite: ptrString("/"),
+				}},
+			}},
+		}},
+	}
+
+	got := routeMetadataByBackendURLFromURLMap(urlMap)
+
+	metadata := got["https://www.googleapis.com/compute/v1/projects/proj/global/backendServices/api-backend"]
+	if len(metadata.Hostnames) != 1 || metadata.Hostnames[0] != "api.example.com" {
+		t.Fatalf("Hostnames = %#v, want api.example.com", metadata.Hostnames)
+	}
+	if len(metadata.Paths) != 1 || metadata.Paths[0].Value != "/api/*" {
+		t.Fatalf("Paths = %#v, want /api/*", metadata.Paths)
+	}
+	if len(metadata.PathRedirects) != 1 || metadata.PathRedirects[0].PathReplacePrefixMatch != "/" {
+		t.Fatalf("PathRedirects = %#v, want prefix rewrite /", metadata.PathRedirects)
 	}
 }
 

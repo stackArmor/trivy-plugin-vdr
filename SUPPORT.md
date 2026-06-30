@@ -1,9 +1,7 @@
 # Support
 
-This project is provided as-is, without warranty, support commitment, or service level agreement.
+This project is provided as-is, without any support SLA or guarantee that issues will be read, triaged, or resolved.
 
-Issues, feature requests, and questions may be opened, but they are handled on a best-effort basis only. There is no guarantee that any request will be read, triaged, accepted, implemented, reviewed, released, or supported.
+Bug reports and feature requests are welcome when they include enough detail to reproduce or evaluate the request. I may be more open to issues and pull requests related to EKS and ECS because most of my testing has been on GKE and Cloud Run.
 
-Pull requests are not accepted at this time. If this project does not fit your environment or priorities, you are encouraged to fork it and adapt it for your own workloads.
-
-Security, compliance, remediation, reporting, and operational decisions remain the responsibility of each user and organization using this software.
+For security-sensitive reports, avoid posting secrets, tokens, customer data, or private infrastructure details in public issues. Provide a minimal reproduction or redacted metadata whenever possible.

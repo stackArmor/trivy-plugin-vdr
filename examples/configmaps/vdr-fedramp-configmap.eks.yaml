@@ -1,8 +1,8 @@
 ---
 # Example trivy-plugin-vdr scoring ConfigMap for an EKS cluster.
 #
-# The plugin reads kube-system/vdr-fedramp from the cluster automatically (no
-# --scoring-config flag needed) and deep-merges the embedded scoring.yaml over its
+# The plugin reads fedramp-vdr-trivy/vdr-fedramp from the cluster automatically
+# (no --scoring-config flag needed). It deep-merges the embedded scoring.yaml over its
 # built-in rubric. The built-in rubric already provides the full archetype catalog,
 # the algorithm, the EPSS LEV threshold (0.70), and the H/H/H "unclassified"
 # cluster-default archetype for new/unclassified resources — so this file only
@@ -14,10 +14,15 @@
 #
 # Apply with:  kubectl apply -f vdr-fedramp-configmap.eks.yaml
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: fedramp-vdr-trivy
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: vdr-fedramp
-  namespace: kube-system
+  namespace: fedramp-vdr-trivy
 data:
   # --- cluster-wide scalars (override anything the embedded doc sets) ---
   class: "B"            # set to your FedRAMP Certification Class: A, B, C, or D

@@ -21,9 +21,11 @@ type CommandRunner interface {
 
 // Options controls which credential sources Build consults.
 type Options struct {
-	EnableGcloud bool
-	EnableECR    bool
-	Runner       CommandRunner
+	EnableGcloud                 bool
+	EnableECR                    bool
+	GCPImpersonateServiceAccount string
+	AWSRoleARN                   string
+	Runner                       CommandRunner
 }
 
 // Result is the outcome of building registry credentials.
@@ -76,7 +78,11 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 	var warnings []string
 
 	if needGAR && opts.EnableGcloud {
-		token, err := runToken(ctx, runner, "gcloud", "auth", "print-access-token")
+		args := []string{"auth", "print-access-token"}
+		if opts.GCPImpersonateServiceAccount != "" {
+			args = append(args, "--impersonate-service-account", opts.GCPImpersonateServiceAccount)
+		}
+		token, err := runToken(ctx, runner, "gcloud", args...)
 		if err != nil {
 			warnings = append(warnings, "Google Artifact Registry auth unavailable: "+cliError("gcloud", err))
 		} else {
@@ -91,12 +97,16 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 	}
 
 	if opts.EnableECR {
+		env, err := awsRoleEnv(ctx, runner, opts.AWSRoleARN)
+		if err != nil {
+			warnings = append(warnings, "AWS role assumption unavailable: "+cliError("aws", err))
+		}
 		for _, host := range sortedKeys(ecrHosts) {
 			if _, exists := auths[host]; exists {
 				continue
 			}
 			region := ecrHosts[host]
-			token, err := runToken(ctx, runner, "aws", "ecr", "get-login-password", "--region", region)
+			token, err := runTokenWithEnv(ctx, runner, env, "aws", "ecr", "get-login-password", "--region", region)
 			if err != nil {
 				warnings = append(warnings, "AWS ECR auth unavailable for "+host+": "+cliError("aws", err))
 				continue
@@ -137,7 +147,25 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 // runToken runs a command expected to print a credential token to stdout and
 // returns the trimmed token. The token is never logged.
 func runToken(ctx context.Context, runner CommandRunner, name string, args ...string) (string, error) {
-	stdout, _, err := runner.Run(ctx, name, args...)
+	return runTokenWithEnv(ctx, runner, nil, name, args...)
+}
+
+type envCommandRunner interface {
+	RunWithEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, []byte, error)
+}
+
+func runTokenWithEnv(ctx context.Context, runner CommandRunner, env []string, name string, args ...string) (string, error) {
+	var stdout []byte
+	var err error
+	if len(env) > 0 {
+		if envRunner, ok := runner.(envCommandRunner); ok {
+			stdout, _, err = envRunner.RunWithEnv(ctx, env, name, args...)
+		} else {
+			stdout, _, err = runner.Run(ctx, name, args...)
+		}
+	} else {
+		stdout, _, err = runner.Run(ctx, name, args...)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -146,6 +174,36 @@ func runToken(ctx context.Context, runner CommandRunner, name string, args ...st
 		return "", errEmptyToken
 	}
 	return token, nil
+}
+
+type awsAssumeRoleResponse struct {
+	Credentials struct {
+		AccessKeyID     string `json:"AccessKeyId"`
+		SecretAccessKey string `json:"SecretAccessKey"`
+		SessionToken    string `json:"SessionToken"`
+	} `json:"Credentials"`
+}
+
+func awsRoleEnv(ctx context.Context, runner CommandRunner, roleARN string) ([]string, error) {
+	if roleARN == "" {
+		return nil, nil
+	}
+	stdout, _, err := runner.Run(ctx, "aws", "sts", "assume-role", "--role-arn", roleARN, "--role-session-name", "vdr-ecr-auth")
+	if err != nil {
+		return nil, err
+	}
+	var response awsAssumeRoleResponse
+	if err := json.Unmarshal(stdout, &response); err != nil {
+		return nil, err
+	}
+	if response.Credentials.AccessKeyID == "" || response.Credentials.SecretAccessKey == "" || response.Credentials.SessionToken == "" {
+		return nil, errString("assume-role response missing credentials")
+	}
+	return []string{
+		"AWS_ACCESS_KEY_ID=" + response.Credentials.AccessKeyID,
+		"AWS_SECRET_ACCESS_KEY=" + response.Credentials.SecretAccessKey,
+		"AWS_SESSION_TOKEN=" + response.Credentials.SessionToken,
+	}, nil
 }
 
 // cliError returns a token-free description of a failed CLI invocation.
@@ -179,7 +237,14 @@ const errEmptyToken = errString("command produced an empty token")
 type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+	return execRunner{}.RunWithEnv(ctx, nil, name, args...)
+}
+
+func (execRunner) RunWithEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

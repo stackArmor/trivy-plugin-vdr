@@ -13,7 +13,9 @@ import (
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	run "cloud.google.com/go/run/apiv2"
 	"cloud.google.com/go/run/apiv2/runpb"
+	"google.golang.org/api/impersonate"
 	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 	runv1 "google.golang.org/api/run/v1"
 )
 
@@ -36,34 +38,48 @@ type GCPClient struct {
 	regionNEGs              *compute.RegionNetworkEndpointGroupsClient
 }
 
-func NewGCPClient(ctx context.Context) (*GCPClient, error) {
-	servicesV1, err := runv1.NewService(ctx)
+type ClientOptions struct {
+	ImpersonateServiceAccount string
+}
+
+var impersonateCredentialsTokenSource = impersonate.CredentialsTokenSource
+
+func NewGCPClient(ctx context.Context, options ...ClientOptions) (*GCPClient, error) {
+	var clientOptions ClientOptions
+	if len(options) > 0 {
+		clientOptions = options[0]
+	}
+	opts, err := clientOptionsForCloudRun(ctx, clientOptions)
+	if err != nil {
+		return nil, err
+	}
+	servicesV1, err := runv1.NewService(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create cloud run v1 service client: %w", err)
 	}
-	services, err := run.NewServicesClient(ctx)
+	services, err := run.NewServicesClient(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create cloud run services client: %w", err)
 	}
-	jobs, err := run.NewJobsClient(ctx)
+	jobs, err := run.NewJobsClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		return nil, fmt.Errorf("create cloud run jobs client: %w", err)
 	}
-	projects, err := resourcemanager.NewProjectsClient(ctx)
+	projects, err := resourcemanager.NewProjectsClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
 		return nil, fmt.Errorf("create resource manager projects client: %w", err)
 	}
-	regions, err := compute.NewRegionsRESTClient(ctx)
+	regions, err := compute.NewRegionsRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
 		projects.Close()
 		return nil, fmt.Errorf("create compute regions client: %w", err)
 	}
-	globalForwardingRules, err := compute.NewGlobalForwardingRulesRESTClient(ctx)
+	globalForwardingRules, err := compute.NewGlobalForwardingRulesRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -71,7 +87,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		regions.Close()
 		return nil, fmt.Errorf("create global forwarding rules client: %w", err)
 	}
-	regionalForwardingRules, err := compute.NewForwardingRulesRESTClient(ctx)
+	regionalForwardingRules, err := compute.NewForwardingRulesRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -80,7 +96,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		globalForwardingRules.Close()
 		return nil, fmt.Errorf("create forwarding rules client: %w", err)
 	}
-	targetHTTPProxies, err := compute.NewTargetHttpProxiesRESTClient(ctx)
+	targetHTTPProxies, err := compute.NewTargetHttpProxiesRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -90,7 +106,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		regionalForwardingRules.Close()
 		return nil, fmt.Errorf("create target http proxies client: %w", err)
 	}
-	targetHTTPSProxies, err := compute.NewTargetHttpsProxiesRESTClient(ctx)
+	targetHTTPSProxies, err := compute.NewTargetHttpsProxiesRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -101,7 +117,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		targetHTTPProxies.Close()
 		return nil, fmt.Errorf("create target https proxies client: %w", err)
 	}
-	regionTargetHTTP, err := compute.NewRegionTargetHttpProxiesRESTClient(ctx)
+	regionTargetHTTP, err := compute.NewRegionTargetHttpProxiesRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -113,7 +129,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		targetHTTPSProxies.Close()
 		return nil, fmt.Errorf("create regional target http proxies client: %w", err)
 	}
-	regionTargetHTTPS, err := compute.NewRegionTargetHttpsProxiesRESTClient(ctx)
+	regionTargetHTTPS, err := compute.NewRegionTargetHttpsProxiesRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -126,7 +142,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		regionTargetHTTP.Close()
 		return nil, fmt.Errorf("create regional target https proxies client: %w", err)
 	}
-	urlMaps, err := compute.NewUrlMapsRESTClient(ctx)
+	urlMaps, err := compute.NewUrlMapsRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -140,7 +156,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		regionTargetHTTPS.Close()
 		return nil, fmt.Errorf("create url maps client: %w", err)
 	}
-	regionURLMaps, err := compute.NewRegionUrlMapsRESTClient(ctx)
+	regionURLMaps, err := compute.NewRegionUrlMapsRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -155,7 +171,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		urlMaps.Close()
 		return nil, fmt.Errorf("create regional url maps client: %w", err)
 	}
-	backendServices, err := compute.NewBackendServicesRESTClient(ctx)
+	backendServices, err := compute.NewBackendServicesRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -171,7 +187,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		regionURLMaps.Close()
 		return nil, fmt.Errorf("create backend services client: %w", err)
 	}
-	regionBackendServices, err := compute.NewRegionBackendServicesRESTClient(ctx)
+	regionBackendServices, err := compute.NewRegionBackendServicesRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -188,7 +204,7 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		backendServices.Close()
 		return nil, fmt.Errorf("create regional backend services client: %w", err)
 	}
-	regionNEGs, err := compute.NewRegionNetworkEndpointGroupsRESTClient(ctx)
+	regionNEGs, err := compute.NewRegionNetworkEndpointGroupsRESTClient(ctx, opts...)
 	if err != nil {
 		services.Close()
 		jobs.Close()
@@ -224,6 +240,26 @@ func NewGCPClient(ctx context.Context) (*GCPClient, error) {
 		regionBackendServices:   regionBackendServices,
 		regionNEGs:              regionNEGs,
 	}, nil
+}
+
+func clientOptions(ctx context.Context, options ClientOptions) ([]option.ClientOption, error) {
+	return clientOptionsForCloudRun(ctx, options)
+}
+
+func clientOptionsForCloudRun(ctx context.Context, options ClientOptions) ([]option.ClientOption, error) {
+	if options.ImpersonateServiceAccount == "" {
+		return nil, nil
+	}
+	tokenSource, err := impersonateCredentialsTokenSource(ctx, impersonate.CredentialsConfig{
+		TargetPrincipal: options.ImpersonateServiceAccount,
+		Scopes: []string{
+			"https://www.googleapis.com/auth/cloud-platform",
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create impersonated Google credentials for %s: %w", options.ImpersonateServiceAccount, err)
+	}
+	return []option.ClientOption{option.WithTokenSource(tokenSource)}, nil
 }
 
 func (c *GCPClient) Close() error {
@@ -367,12 +403,13 @@ func (c *GCPClient) listGlobalLoadBalancerRoutes(ctx context.Context, project st
 			continue
 		}
 		backendURLs := backendServiceURLsFromURLMap(urlMap)
+		routeMetadata := routeMetadataByBackendURLFromURLMap(urlMap)
 		for _, backendURL := range backendURLs {
 			backend, err := c.backendServices.Get(ctx, &computepb.GetBackendServiceRequest{Project: project, BackendService: path.Base(backendURL)})
 			if err != nil {
 				return nil, fmt.Errorf("get global backend service %s: %w", path.Base(backendURL), err)
 			}
-			routeEntries, err := c.routesForBackend(ctx, project, rule, urlMap.GetName(), backend, "")
+			routeEntries, err := c.routesForBackend(ctx, project, rule, urlMap.GetName(), backend, "", routeMetadata[backendURL])
 			if err != nil {
 				return nil, err
 			}
@@ -404,6 +441,7 @@ func (c *GCPClient) listRegionalLoadBalancerRoutes(ctx context.Context, project,
 			continue
 		}
 		backendURLs := backendServiceURLsFromURLMap(urlMap)
+		routeMetadata := routeMetadataByBackendURLFromURLMap(urlMap)
 		for _, backendURL := range backendURLs {
 			backendRegion := regionFromURL(backendURL)
 			if backendRegion == "" {
@@ -413,7 +451,7 @@ func (c *GCPClient) listRegionalLoadBalancerRoutes(ctx context.Context, project,
 			if err != nil {
 				return nil, fmt.Errorf("get regional backend service %s/%s: %w", backendRegion, path.Base(backendURL), err)
 			}
-			routeEntries, err := c.routesForBackend(ctx, project, rule, urlMap.GetName(), backend, backendRegion)
+			routeEntries, err := c.routesForBackend(ctx, project, rule, urlMap.GetName(), backend, backendRegion, routeMetadata[backendURL])
 			if err != nil {
 				return nil, err
 			}
@@ -505,7 +543,7 @@ func (c *GCPClient) regionalURLMapForForwardingRule(ctx context.Context, project
 	return urlMap, nil
 }
 
-func (c *GCPClient) routesForBackend(ctx context.Context, project string, rule *computepb.ForwardingRule, urlMapName string, backend *computepb.BackendService, backendRegion string) ([]LoadBalancerRoute, error) {
+func (c *GCPClient) routesForBackend(ctx context.Context, project string, rule *computepb.ForwardingRule, urlMapName string, backend *computepb.BackendService, backendRegion string, metadata LoadBalancerRoute) ([]LoadBalancerRoute, error) {
 	var routes []LoadBalancerRoute
 	for _, backendEndpoint := range backend.GetBackends() {
 		group := backendEndpoint.GetGroup()
@@ -524,21 +562,24 @@ func (c *GCPClient) routesForBackend(ctx context.Context, project string, rule *
 		if serviceRegion == "" {
 			serviceRegion = region
 		}
-		routes = append(routes, LoadBalancerRoute{
-			Name:                 rule.GetName(),
-			Scheme:               rule.GetLoadBalancingScheme(),
-			IPAddress:            rule.GetIPAddress(),
-			TargetProxy:          path.Base(rule.GetTarget()),
-			URLMap:               urlMapName,
-			BackendService:       backend.GetName(),
-			ServerlessNEG:        neg.GetName(),
-			CloudRunService:      service,
-			CloudRunRegion:       serviceRegion,
-			IAPEnabled:           backendIAPEnabled(backend),
-			IAPOAuth2ClientID:    backend.GetIap().GetOauth2ClientId(),
-			CloudArmorPolicy:     backendSecurityPolicy(backend),
-			BackendServiceRegion: backendRegion,
-		})
+		route := metadata
+		route.Name = rule.GetName()
+		route.Scheme = rule.GetLoadBalancingScheme()
+		route.IPAddress = rule.GetIPAddress()
+		route.TargetProxy = path.Base(rule.GetTarget())
+		route.URLMap = urlMapName
+		route.BackendService = backend.GetName()
+		route.ServerlessNEG = neg.GetName()
+		route.CloudRunService = service
+		route.CloudRunRegion = serviceRegion
+		route.IAPEnabled = backendIAPEnabled(backend)
+		route.IAPOAuth2ClientID = backend.GetIap().GetOauth2ClientId()
+		route.CloudArmorPolicy = backendSecurityPolicy(backend)
+		route.BackendServiceRegion = backendRegion
+		if route.BackendReference == "" {
+			route.BackendReference = backend.GetName()
+		}
+		routes = append(routes, route)
 	}
 	return routes, nil
 }
@@ -687,6 +728,75 @@ func backendServiceURLsFromURLMap(urlMap *computepb.UrlMap) []string {
 		}
 	}
 	return urls
+}
+
+func routeMetadataByBackendURLFromURLMap(urlMap *computepb.UrlMap) map[string]LoadBalancerRoute {
+	result := map[string]LoadBalancerRoute{}
+	matcherHosts := map[string][]string{}
+	for _, hostRule := range urlMap.GetHostRules() {
+		matcherHosts[hostRule.GetPathMatcher()] = append(matcherHosts[hostRule.GetPathMatcher()], hostRule.GetHosts()...)
+	}
+	add := func(backendURL string, metadata LoadBalancerRoute) {
+		if backendURL == "" {
+			return
+		}
+		existing := result[backendURL]
+		existing.Hostnames = appendStringSet(existing.Hostnames, metadata.Hostnames...)
+		existing.Paths = append(existing.Paths, metadata.Paths...)
+		existing.Headers = append(existing.Headers, metadata.Headers...)
+		existing.PathRedirects = append(existing.PathRedirects, metadata.PathRedirects...)
+		if existing.BackendReference == "" {
+			existing.BackendReference = path.Base(backendURL)
+		}
+		result[backendURL] = existing
+	}
+	add(urlMap.GetDefaultService(), LoadBalancerRoute{})
+	for _, matcher := range urlMap.GetPathMatchers() {
+		base := LoadBalancerRoute{Hostnames: append([]string(nil), matcherHosts[matcher.GetName()]...)}
+		add(matcher.GetDefaultService(), base)
+		for _, rule := range matcher.GetPathRules() {
+			metadata := base
+			for _, pathValue := range rule.GetPaths() {
+				metadata.Paths = append(metadata.Paths, RoutePath{Type: "PathRule", Value: pathValue})
+			}
+			if rewrite := routeActionRewrite(rule.GetRouteAction()); len(rewrite) > 0 {
+				metadata.PathRedirects = append(metadata.PathRedirects, rewrite...)
+			}
+			add(rule.GetService(), metadata)
+		}
+	}
+	return result
+}
+
+func routeActionRewrite(action *computepb.HttpRouteAction) []RouteRewrite {
+	if action == nil || action.GetUrlRewrite() == nil {
+		return nil
+	}
+	urlRewrite := action.GetUrlRewrite()
+	rewrite := RouteRewrite{
+		HostnameReplace:        urlRewrite.GetHostRewrite(),
+		PathReplacePrefixMatch: urlRewrite.GetPathPrefixRewrite(),
+	}
+	if rewrite.HostnameReplace == "" && rewrite.PathReplacePrefixMatch == "" {
+		return nil
+	}
+	return []RouteRewrite{rewrite}
+}
+
+func appendStringSet(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		found := false
+		for _, value := range values {
+			if value == addition {
+				found = true
+				break
+			}
+		}
+		if !found && addition != "" {
+			values = append(values, addition)
+		}
+	}
+	return values
 }
 
 func cloudRunServiceFromNEG(neg *computepb.NetworkEndpointGroup) (string, string, bool) {

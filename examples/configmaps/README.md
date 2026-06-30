@@ -1,7 +1,7 @@
 # Cluster scoring ConfigMap examples
 
 `trivy-plugin-vdr` reads a ConfigMap named **`vdr-fedramp`** in the
-**`kube-system`** namespace to set cluster-wide FedRAMP metadata and the
+**`fedramp-vdr-trivy`** namespace to set cluster-wide FedRAMP metadata and the
 asset-archetype rules used for PAIN scoring and the VDR-TFR-PVR remediation
 deadline. The plugin reads it from the cluster automatically — no
 `--scoring-config` flag is required.
@@ -76,8 +76,8 @@ namespace label → this ConfigMap → built-in default (`B`, single-agency).
 kubectl apply -f vdr-fedramp-configmap.<provider>.yaml
 ```
 
-If the ConfigMap is absent, the plugin emits a warning and scores with its built-in
-defaults — a missing ConfigMap is visible, not silent.
+If the ConfigMap is absent, the plugin emits a warning and scores with its
+built-in defaults — a missing ConfigMap is visible, not silent.
 
 ## Customize
 

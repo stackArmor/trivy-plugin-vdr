@@ -1,9 +1,7 @@
 # Contributing
 
-Forks are encouraged. This plugin is intended to be adapted for different workloads, environments, reporting needs, and operational processes.
+Forks are encouraged. This plugin may need different defaults, metadata sources, or reporting behavior for different workloads, and forking is a reasonable way to adapt it.
 
-Pull requests are not accepted at this time.
+Issues and pull requests may be considered, but there is no SLA or guarantee that they will be read, accepted, or worked on. Please keep proposed changes focused, include tests for behavior changes, and document any new flags or report fields.
 
-Feature requests and issues may be opened, but they are handled on a best-effort basis only. Opening an issue does not create any support obligation, service level agreement, implementation commitment, review timeline, or release commitment. There is no guarantee that any request will be read, triaged, accepted, implemented, reviewed, released, or supported.
-
-If you need changes for your own environment, fork this repository and make those changes in your fork.
+I may be more open to contributions for EKS and ECS coverage because most of my testing has been on GKE and Cloud Run. For EKS or ECS changes, include the cloud resources, IAM assumptions, and reachability evidence used for testing so the behavior can be reviewed without guessing.

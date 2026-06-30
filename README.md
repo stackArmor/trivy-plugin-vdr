@@ -104,7 +104,7 @@ rules:
 Notes:
 
 - `secrets/get` is only needed when registry auth from Kubernetes `imagePullSecrets` is enabled. Use `--skip-registry-auth` or `--reachability-only` to avoid reading Secrets.
-- `configmaps/get` is used for the optional `kube-system/vdr-fedramp` scoring ConfigMap.
+- `configmaps/get` is used for the optional `fedramp-vdr-trivy/vdr-fedramp` scoring ConfigMap.
 - Exposure resources are optional for vulnerability scan reports. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis. `--reachability-only` requires exposure resources and cannot be combined with `--skip-exposure`.
 - If you never use AWS ALB/Gateway resources, the `elbv2.k8s.aws` and `gateway.k8s.aws` rules can be omitted. If you never use GKE ingress/gateway IAP metadata, the `cloud.google.com/backendconfigs` and `networking.gke.io/gcpbackendpolicies` rules can be omitted.
 
@@ -168,6 +168,8 @@ Flags:
 - `--skip-registry-auth` disables all automatic authentication.
 - `--no-gcloud-auth` skips the `gcloud` token for GAR/GCR.
 - `--no-ecr-auth` skips the `aws` token for ECR.
+- `--gcp-impersonate-service-account <email>` uses an impersonated Google service account for Cloud Run metadata clients and adds `--impersonate-service-account` to GAR/GCR `gcloud` token fetches.
+- `--aws-role-arn <arn>` assumes the AWS role ARN with `aws sts assume-role` before fetching ECR tokens.
 
 This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run and standalone image scans, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
 
@@ -334,7 +336,7 @@ So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively
 
 ### Cluster configuration
 
-The provider **Certification Class** (A/B/C/D), the **agency scope**, and the archetype **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in **`kube-system`** — no flag required. It carries the scalar keys `class` and `multiAgency`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (catalog, algorithm, EPSS threshold, and the `unclassified` default). It can also carry `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` — lists of Ingress/Gateway class names to treat as internet-reachable when their edge load balancer is built outside Kubernetes, a cleaner alternative to labeling each resource (see [exposure rules](#exposure-rules)). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules).
+The provider **Certification Class** (A/B/C/D), the **agency scope**, and the archetype **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in the **`fedramp-vdr-trivy`** namespace — no flag required. It carries the scalar keys `class` and `multiAgency`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (catalog, algorithm, EPSS threshold, and the `unclassified` default). It can also carry `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` — lists of Ingress/Gateway class names to treat as internet-reachable when their edge load balancer is built outside Kubernetes, a cleaner alternative to labeling each resource (see [exposure rules](#exposure-rules)). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules).
 
 See [`examples/configmaps/`](examples/configmaps/) for starter GKE, EKS, and AKS ConfigMaps. The optional `--scoring-config <file>` flag layers a local YAML/JSON config under the ConfigMap for testing or non-cluster use.
 
@@ -359,9 +361,11 @@ Exposure analysis is intentionally conservative:
   - On an **`IngressClass`**: every Ingress using that class is treated as public (`"true"`) or forced not-public (`"false"`, which wins even over a built-in public class like `gce`). One label surfaces all backends behind that class.
   - On a **`Service`** of any type: its selected workloads are forced reachable (`"true"`) or not-reachable (`"false"`, which suppresses even a `type=LoadBalancer` external address). Use this for the ingress controller pods themselves or a standalone-NEG app with no Ingress.
 
-  On a Service this label takes precedence over `vdr.fedramp.io/internet-reachable-nodePort`.
+	  On a Service this label takes precedence over `vdr.fedramp.io/internet-reachable-nodePort`.
 
-  > **Use this label only when the load balancer is managed outside Kubernetes** (e.g. a standalone NEG wired to a GCP load balancer provisioned in Terraform). It is a manual, operator-asserted override: the cluster has no way to verify it, so it can drift out of sync with the real edge — if the external LB is added, removed, or re-scoped (internal ↔ external) the label won't follow, and the assessment will be silently wrong. This is inherently brittle. The recommended alternative is to let Kubernetes own the load balancer — a native GKE `Ingress` (`gce`), a GKE `Gateway`, or a `type=LoadBalancer` Service — so reachability (and IAP/BackendConfig protection) is inferred directly from cluster state and stays correct automatically, with no label to maintain.
+	  > **Use this label only when the load balancer is managed outside Kubernetes** (e.g. a standalone NEG wired to a GCP load balancer provisioned in Terraform). It is a manual, operator-asserted override: the cluster has no way to verify it, so it can drift out of sync with the real edge — if the external LB is added, removed, or re-scoped (internal ↔ external) the label won't follow, and the assessment will be silently wrong. This is inherently brittle. The recommended alternative is to let Kubernetes own the load balancer — a native GKE `Ingress` (`gce`), a GKE `Gateway`, or a `type=LoadBalancer` Service — so reachability (and IAP/BackendConfig protection) is inferred directly from cluster state and stays correct automatically, with no label to maintain.
+
+JSON output also includes optional `exposure.routes` metadata when route details are available. For Kubernetes this can include Ingress/Gateway hostnames, path matches, header matches, rewrite filters, and backend Service references. For Cloud Run load-balancer paths this can include forwarding-rule, URL-map, target-proxy, hostname, path, rewrite, and backend-service metadata. These details are informational; the current table and HTML reports keep the existing high-level internet exposure column.
 
 Normal init containers do not inherit internet exposure. Sidecar-style init containers inherit exposure only when their container restart policy is `Always`.
 
