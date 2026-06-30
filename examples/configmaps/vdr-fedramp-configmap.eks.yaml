@@ -23,6 +23,19 @@ data:
   class: "B"            # set to your FedRAMP Certification Class: A, B, C, or D
   multiAgency: "false"  # "true" if this cluster serves more than one agency
 
+  # --- operator-declared internet-reachable classes (optional) ---
+  # List Ingress/Gateway class names whose edge load balancer is provisioned
+  # outside Kubernetes (e.g. ingress-nginx or a custom Gateway fronted by an LB
+  # built via Terraform), so reachability cannot be inferred from cluster state.
+  # Any Ingress/Gateway using a listed class is treated as internet-reachable.
+  # This is a cleaner alternative to labeling each resource with
+  # vdr.fedramp.io/internet-reachable (which a Helm chart may apply to undesired
+  # resources). A per-class label still wins over this list.
+  # internetAccessibleIngressClasses: |
+  #   - nginx
+  # internetAccessibleGatewayClasses: |
+  #   - istio
+
   scoring.yaml: |
     # First match wins. nameRules win over namespaceRules. namespace is an optional
     # glob on the workload namespace; match is a glob on the workload name.

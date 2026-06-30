@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,6 +19,13 @@ type Objects struct {
 	Ingresses      []networkingv1.Ingress
 	IngressClasses []networkingv1.IngressClass
 	Unstructured   []unstructured.Unstructured
+	// InternetAccessibleIngressClasses / InternetAccessibleGatewayClasses are
+	// class names an operator declared internet-reachable in the cluster
+	// ConfigMap. A class named here is treated exactly like an
+	// internetReachableLabel=true label, without touching any resource. See
+	// ClassOverridesFromConfigMap.
+	InternetAccessibleIngressClasses []string
+	InternetAccessibleGatewayClasses []string
 }
 
 type serviceExposure struct {
@@ -60,12 +68,14 @@ func Analyze(inventory *model.Inventory, objects Objects) map[model.ResourceRef]
 	backendConfigs := indexBackendConfigs(objects.Unstructured)
 	ingressClasses := indexIngressClasses(objects.IngressClasses)
 	ingressClassParams := indexIngressClassParams(objects.Unstructured)
-	gateways := indexGateways(objects.Unstructured)
+	ingressClassOverrides := stringSet(objects.InternetAccessibleIngressClasses)
+	gatewayClassOverrides := stringSet(objects.InternetAccessibleGatewayClasses)
+	gateways := indexGateways(objects.Unstructured, gatewayClassOverrides)
 	awsGatewayPublic := indexAWSGatewayLoadBalancers(objects.Unstructured)
 	referenceGrants := indexReferenceGrants(objects.Unstructured)
 
 	serviceExposures := make([]serviceExposure, 0)
-	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, backendConfigs)...)
+	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, ingressClassOverrides, backendConfigs)...)
 	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, gateways, awsGatewayPublic, gcpBackendPolicies, referenceGrants)...)
 	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services)...)
 
@@ -125,6 +135,7 @@ func analyzeIngresses(
 	services map[serviceKey]corev1.Service,
 	classes map[string]networkingv1.IngressClass,
 	classParams map[string]string,
+	classOverrides map[string]struct{},
 	backendConfigs map[serviceKey]protectionInfo,
 ) []serviceExposure {
 	exposures := make([]serviceExposure, 0)
@@ -136,7 +147,7 @@ func analyzeIngresses(
 		if !ingressHasLoadBalancer(ingress) {
 			continue
 		}
-		provider, public, evidence := classifyIngress(ingress, classes, classParams)
+		provider, public, evidence := classifyIngress(ingress, classes, classParams, classOverrides)
 		if !public {
 			continue
 		}
@@ -183,7 +194,7 @@ func ingressHasLoadBalancer(ingress networkingv1.Ingress) bool {
 	return false
 }
 
-func classifyIngress(ingress networkingv1.Ingress, classes map[string]networkingv1.IngressClass, classParams map[string]string) (string, bool, string) {
+func classifyIngress(ingress networkingv1.Ingress, classes map[string]networkingv1.IngressClass, classParams map[string]string, classOverrides map[string]struct{}) (string, bool, string) {
 	className := ingressClassName(ingress)
 	// An explicit operator label on the IngressClass wins over the built-in class
 	// classification: "true" trusts a class whose edge LB is provisioned outside the
@@ -195,6 +206,14 @@ func classifyIngress(ingress networkingv1.Ingress, classes map[string]networking
 				return "custom", true, fmt.Sprintf("IngressClass %s labeled %s=true", className, internetReachableLabel)
 			}
 			return "", false, ""
+		}
+	}
+	// A class named in the cluster ConfigMap's internetAccessibleIngressClasses is an
+	// operator declaration equivalent to internetReachableLabel=true, but without
+	// labeling the resource. The per-class label above (if set) still wins.
+	if className != "" {
+		if _, ok := classOverrides[className]; ok {
+			return "custom", true, fmt.Sprintf("IngressClass %s declared internet-accessible by cluster ConfigMap %s", className, ConfigKeyInternetAccessibleIngressClasses)
 		}
 	}
 	switch className {
@@ -477,7 +496,7 @@ func analyzeGatewayRoutes(
 	return exposures
 }
 
-func indexGateways(objects []unstructured.Unstructured) map[serviceKey]gatewayInfo {
+func indexGateways(objects []unstructured.Unstructured, classOverrides map[string]struct{}) map[serviceKey]gatewayInfo {
 	index := map[serviceKey]gatewayInfo{}
 	for _, object := range objects {
 		if !hasGroupKind(object, "gateway.networking.k8s.io", "Gateway") {
@@ -488,6 +507,17 @@ func indexGateways(objects []unstructured.Unstructured) map[serviceKey]gatewayIn
 		evidence := ""
 		if public && provider == "gke" {
 			evidence = fmt.Sprintf("GKE Gateway %s/%s uses public class %s", object.GetNamespace(), object.GetName(), className)
+		}
+		// A class named in the cluster ConfigMap's internetAccessibleGatewayClasses is an
+		// operator declaration that the class is internet-reachable (its edge LB is built
+		// outside Kubernetes). GatewayClass carries no label mechanism, so this is the only
+		// override. Built-in public classes already resolved above are left untouched.
+		if !public && className != "" {
+			if _, ok := classOverrides[className]; ok {
+				provider = "custom"
+				public = true
+				evidence = fmt.Sprintf("Gateway %s/%s uses class %s declared internet-accessible by cluster ConfigMap %s", object.GetNamespace(), object.GetName(), className, ConfigKeyInternetAccessibleGatewayClasses)
+			}
 		}
 		index[serviceKey{namespace: object.GetNamespace(), name: object.GetName()}] = gatewayInfo{
 			provider: provider,
@@ -806,6 +836,70 @@ const nodePortReachableLabel = "vdr.fedramp.io/internet-reachable-nodePort"
 // brittle. Prefer letting Kubernetes own the load balancer (native gce Ingress, Gateway,
 // or type=LoadBalancer Service) so reachability is inferred from cluster state instead.
 const internetReachableLabel = "vdr.fedramp.io/internet-reachable"
+
+// ConfigKeyInternetAccessibleIngressClasses and ConfigKeyInternetAccessibleGatewayClasses
+// are the cluster ConfigMap (kube-system/vdr-fedramp) data keys an operator uses to declare
+// Ingress/Gateway class names as internet-reachable centrally, instead of labeling each
+// resource (which is brittle when labels are sprayed by a Helm chart onto undesired
+// resources, or reverted by a managed reconciler). A class named here is treated exactly
+// like internetReachableLabel=true. Each value is a list of class names: a YAML list, or a
+// newline- or comma-separated string.
+const (
+	ConfigKeyInternetAccessibleIngressClasses = "internetAccessibleIngressClasses"
+	ConfigKeyInternetAccessibleGatewayClasses = "internetAccessibleGatewayClasses"
+)
+
+// ClassOverridesFromConfigMap extracts the operator-declared internet-reachable Ingress and
+// Gateway class names from cluster ConfigMap data (inventory.ClusterDefaults).
+func ClassOverridesFromConfigMap(data map[string]string) (ingress, gateway []string) {
+	return parseClassList(data[ConfigKeyInternetAccessibleIngressClasses]),
+		parseClassList(data[ConfigKeyInternetAccessibleGatewayClasses])
+}
+
+// parseClassList parses a class-name list from a ConfigMap string value. It accepts a YAML
+// list ("- nginx") as well as a newline- or comma-separated string ("nginx, traefik"),
+// trimming whitespace and dropping blanks and duplicates.
+func parseClassList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var items []string
+	if err := yaml.Unmarshal([]byte(raw), &items); err != nil || len(items) == 0 {
+		// Not a YAML sequence (e.g. a bare scalar or comma-separated string): split manually.
+		items = strings.FieldsFunc(raw, func(r rune) bool {
+			return r == '\n' || r == '\r' || r == ','
+		})
+	}
+	seen := map[string]struct{}{}
+	var result []string
+	for _, item := range items {
+		name := strings.TrimSpace(item)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	return result
+}
+
+// stringSet builds a lookup set from a slice of strings, skipping blanks.
+func stringSet(items []string) map[string]struct{} {
+	if len(items) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if item == "" {
+			continue
+		}
+		set[item] = struct{}{}
+	}
+	return set
+}
 
 // parseReachableLabel parses a boolean reachability label value. ok is false when the
 // label is absent or unparseable, in which case the caller falls back to inference.
