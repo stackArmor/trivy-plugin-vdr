@@ -211,12 +211,13 @@ func RenderTable(w io.Writer, report model.Report) error {
 		}
 		return tw.Flush()
 	}
-	if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tSTATUS\tPAIN\tREMEDIATION\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tIMAGE\tAFFECTED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tPAIN\tREMEDIATION\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tIMAGE\tAFFECTED"); err != nil {
 		return err
 	}
 	for _, finding := range report.Findings {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			finding.ID,
+			formatPackage(finding),
 			finding.Severity,
 			finding.Status,
 			formatPain(finding.Pain),
@@ -235,6 +236,26 @@ func RenderTable(w io.Writer, report model.Report) error {
 		return err
 	}
 	return tw.Flush()
+}
+
+// formatPackage renders the vulnerable package as "name installed → fixed", using
+// "no fix" when no fixed version is available. Returns "" when the package is unknown.
+func formatPackage(finding model.Finding) string {
+	if finding.PackageName == "" {
+		return ""
+	}
+	out := finding.PackageName
+	if finding.InstalledVersion != "" {
+		out += " " + finding.InstalledVersion
+	}
+	if finding.InstalledVersion != "" || finding.FixedVersion != "" {
+		fixed := finding.FixedVersion
+		if fixed == "" {
+			fixed = "no fix"
+		}
+		out += " → " + fixed
+	}
+	return out
 }
 
 func renderSuppressedTable(w io.Writer, findings []model.Finding) error {

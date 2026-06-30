@@ -66,6 +66,7 @@
     .muted { color: var(--muted); }
     .suppressed-table { margin-top: 18px; }
     td.derived { font-style: italic; }
+    .pkg-line { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
     .legend { margin-top: 10px; font-size: 12px; color: var(--muted); }
     .empty { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
   </style>
@@ -171,6 +172,18 @@
     const resources = report.resources || [];
     const findings = report.findings || [];
     const suppressedFindings = report.suppressedFindings || [];
+    // Vulnerable package as "name installed → fixed" ("no fix" when unfixed), shown
+    // as a muted sub-line under the CVE id. Empty when the package is unknown.
+    function packageLabel(finding) {
+      const name = finding.packageName || "";
+      if (!name) return "";
+      const installed = finding.installedVersion || "";
+      const fixed = finding.fixedVersion || "";
+      let out = name;
+      if (installed) out += " " + installed;
+      if (installed || fixed) out += " → " + (fixed || "no fix");
+      return out;
+    }
     function addFinding(finding, resource, exposure, resourceReport) {
       const vuln = finding.vulnrichment || {};
       const epss = finding.epss || {};
@@ -183,6 +196,7 @@
         key: [finding.id || "", finding.imageRef || "", finding.packageName || ""].join("|"),
         severity: finding.severity || "",
         status: finding.status || "",
+        package: packageLabel(finding),
         epss: typeof epss.score === "number" ? epss.score : null,
         namespace: ref.namespace || "",
         resourceType: ref.kind || "",
@@ -645,7 +659,14 @@
           const value = cell.value;
           const td = document.createElement("td");
           td.textContent = value;
-          if (cell.key === "severity") {
+          if (cell.key === "id") {
+            if (row.package) {
+              const pkg = document.createElement("span");
+              pkg.className = "pkg-line";
+              pkg.textContent = row.package;
+              td.appendChild(pkg);
+            }
+          } else if (cell.key === "severity") {
             td.className = "sev-" + row.severity;
             td.title = row.cvssVector ? ("CVSS vector: " + row.cvssVector) : "no CVSS vector";
           } else if (cell.key === "status") {
