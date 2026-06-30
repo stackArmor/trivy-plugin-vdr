@@ -2,13 +2,8 @@
 
 Forks are encouraged. This plugin is intended to be adapted for different workloads, environments, reporting needs, and operational processes.
 
-Pull requests and feature requests are welcome, but they are accepted on a best-effort basis only. Opening an issue or pull request does not create any support obligation, service level agreement, implementation commitment, review timeline, or release commitment.
+Pull requests are not accepted at this time.
 
-Before opening a pull request:
+Feature requests and issues may be opened, but they are handled on a best-effort basis only. Opening an issue does not create any support obligation, service level agreement, implementation commitment, review timeline, or release commitment. There is no guarantee that any request will be read, triaged, accepted, implemented, reviewed, released, or supported.
 
-- Keep changes focused and scoped to one purpose.
-- Add or update tests for behavior changes when practical.
-- Run `go test ./...`.
-- Update documentation when behavior, flags, output shape, or user expectations change.
-
-By contributing, you agree that your contribution may be distributed under the MIT License used by this repository.
+If you need changes for your own environment, fork this repository and make those changes in your fork.
