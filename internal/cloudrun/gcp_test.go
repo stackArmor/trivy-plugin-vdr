@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"cloud.google.com/go/compute/apiv1/computepb"
+	"golang.org/x/oauth2"
+	"google.golang.org/api/impersonate"
+	"google.golang.org/api/option"
 )
 
 func TestServerlessNEGParsesCloudRunService(t *testing.T) {
@@ -28,12 +31,23 @@ func TestServerlessNEGParsesCloudRunService(t *testing.T) {
 }
 
 func TestClientOptionsUseImpersonatedServiceAccount(t *testing.T) {
+	var gotTarget string
+	original := impersonateCredentialsTokenSource
+	impersonateCredentialsTokenSource = func(_ context.Context, config impersonate.CredentialsConfig, _ ...option.ClientOption) (oauth2.TokenSource, error) {
+		gotTarget = config.TargetPrincipal
+		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"}), nil
+	}
+	t.Cleanup(func() { impersonateCredentialsTokenSource = original })
+
 	opts, err := clientOptions(context.Background(), ClientOptions{ImpersonateServiceAccount: "vdr-reader@example.iam.gserviceaccount.com"})
 	if err != nil {
 		t.Fatalf("clientOptions returned error: %v", err)
 	}
 	if len(opts) == 0 {
 		t.Fatal("clientOptions returned no options, want impersonation option")
+	}
+	if gotTarget != "vdr-reader@example.iam.gserviceaccount.com" {
+		t.Fatalf("TargetPrincipal = %q", gotTarget)
 	}
 }
 

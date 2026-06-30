@@ -42,6 +42,8 @@ type ClientOptions struct {
 	ImpersonateServiceAccount string
 }
 
+var impersonateCredentialsTokenSource = impersonate.CredentialsTokenSource
+
 func NewGCPClient(ctx context.Context, options ...ClientOptions) (*GCPClient, error) {
 	var clientOptions ClientOptions
 	if len(options) > 0 {
@@ -248,7 +250,7 @@ func clientOptionsForCloudRun(ctx context.Context, options ClientOptions) ([]opt
 	if options.ImpersonateServiceAccount == "" {
 		return nil, nil
 	}
-	tokenSource, err := impersonate.CredentialsTokenSource(ctx, impersonate.CredentialsConfig{
+	tokenSource, err := impersonateCredentialsTokenSource(ctx, impersonate.CredentialsConfig{
 		TargetPrincipal: options.ImpersonateServiceAccount,
 		Scopes: []string{
 			"https://www.googleapis.com/auth/cloud-platform",
