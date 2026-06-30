@@ -168,6 +168,8 @@ Flags:
 - `--skip-registry-auth` disables all automatic authentication.
 - `--no-gcloud-auth` skips the `gcloud` token for GAR/GCR.
 - `--no-ecr-auth` skips the `aws` token for ECR.
+- `--gcp-impersonate-service-account <email>` uses an impersonated Google service account for Cloud Run metadata clients and adds `--impersonate-service-account` to GAR/GCR `gcloud` token fetches.
+- `--aws-role-arn <arn>` assumes the AWS role ARN with `aws sts assume-role` before fetching ECR tokens.
 
 This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run and standalone image scans, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
 
@@ -359,9 +361,11 @@ Exposure analysis is intentionally conservative:
   - On an **`IngressClass`**: every Ingress using that class is treated as public (`"true"`) or forced not-public (`"false"`, which wins even over a built-in public class like `gce`). One label surfaces all backends behind that class.
   - On a **`Service`** of any type: its selected workloads are forced reachable (`"true"`) or not-reachable (`"false"`, which suppresses even a `type=LoadBalancer` external address). Use this for the ingress controller pods themselves or a standalone-NEG app with no Ingress.
 
-  On a Service this label takes precedence over `vdr.fedramp.io/internet-reachable-nodePort`.
+	  On a Service this label takes precedence over `vdr.fedramp.io/internet-reachable-nodePort`.
 
-  > **Use this label only when the load balancer is managed outside Kubernetes** (e.g. a standalone NEG wired to a GCP load balancer provisioned in Terraform). It is a manual, operator-asserted override: the cluster has no way to verify it, so it can drift out of sync with the real edge — if the external LB is added, removed, or re-scoped (internal ↔ external) the label won't follow, and the assessment will be silently wrong. This is inherently brittle. The recommended alternative is to let Kubernetes own the load balancer — a native GKE `Ingress` (`gce`), a GKE `Gateway`, or a `type=LoadBalancer` Service — so reachability (and IAP/BackendConfig protection) is inferred directly from cluster state and stays correct automatically, with no label to maintain.
+	  > **Use this label only when the load balancer is managed outside Kubernetes** (e.g. a standalone NEG wired to a GCP load balancer provisioned in Terraform). It is a manual, operator-asserted override: the cluster has no way to verify it, so it can drift out of sync with the real edge — if the external LB is added, removed, or re-scoped (internal ↔ external) the label won't follow, and the assessment will be silently wrong. This is inherently brittle. The recommended alternative is to let Kubernetes own the load balancer — a native GKE `Ingress` (`gce`), a GKE `Gateway`, or a `type=LoadBalancer` Service — so reachability (and IAP/BackendConfig protection) is inferred directly from cluster state and stays correct automatically, with no label to maintain.
+
+JSON output also includes optional `exposure.routes` metadata when route details are available. For Kubernetes this can include Ingress/Gateway hostnames, path matches, header matches, rewrite filters, and backend Service references. For Cloud Run load-balancer paths this can include forwarding-rule, URL-map, target-proxy, hostname, path, rewrite, and backend-service metadata. These details are informational; the current table and HTML reports keep the existing high-level internet exposure column.
 
 Normal init containers do not inherit internet exposure. Sidecar-style init containers inherit exposure only when their container restart policy is `Always`.
 

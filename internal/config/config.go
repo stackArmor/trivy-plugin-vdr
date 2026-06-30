@@ -34,39 +34,41 @@ const (
 var namespacePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 type Config struct {
-	Source                string
-	ImageRefs             []string
-	Project               string
-	Regions               []string
-	Namespaces            []string
-	AllNamespaces         bool
-	IncludeZeroDaemonSets bool
-	Format                string
-	View                  string
-	Output                string
-	CacheDir              string
-	Timeout               time.Duration
-	ImageSrc              string
-	ParallelScans         int
-	CacheCleanup          string
-	CacheMinFreeGB        int
-	CacheMinFreePercent   int
-	HTMLOutput            string
-	HTMLTemplate          string
-	ScoringConfig         string
-	MinSeverity           string
-	MinEPSS               float64
-	SkipEnrichment        bool
-	RefreshEnrichment     bool
-	SkipExposure          bool
-	ReachabilityOnly      bool
-	ScanReachabilityOnly  bool
-	SkipRegistryAuth      bool
-	NoGcloudAuth          bool
-	NoECRAuth             bool
-	VEXOCIRegistries      []string
-	Quiet                 bool
-	Debug                 bool
+	Source                       string
+	ImageRefs                    []string
+	Project                      string
+	Regions                      []string
+	Namespaces                   []string
+	AllNamespaces                bool
+	IncludeZeroDaemonSets        bool
+	Format                       string
+	View                         string
+	Output                       string
+	CacheDir                     string
+	Timeout                      time.Duration
+	ImageSrc                     string
+	ParallelScans                int
+	CacheCleanup                 string
+	CacheMinFreeGB               int
+	CacheMinFreePercent          int
+	HTMLOutput                   string
+	HTMLTemplate                 string
+	ScoringConfig                string
+	MinSeverity                  string
+	MinEPSS                      float64
+	SkipEnrichment               bool
+	RefreshEnrichment            bool
+	SkipExposure                 bool
+	ReachabilityOnly             bool
+	ScanReachabilityOnly         bool
+	SkipRegistryAuth             bool
+	NoGcloudAuth                 bool
+	NoECRAuth                    bool
+	GCPImpersonateServiceAccount string
+	AWSRoleARN                   string
+	VEXOCIRegistries             []string
+	Quiet                        bool
+	Debug                        bool
 }
 
 type namespaceList []string
@@ -168,6 +170,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.SkipRegistryAuth, "skip-registry-auth", cfg.SkipRegistryAuth, "skip automatic private registry authentication")
 	fs.BoolVar(&cfg.NoGcloudAuth, "no-gcloud-auth", cfg.NoGcloudAuth, "skip gcloud authentication for Google Artifact Registry/GCR images")
 	fs.BoolVar(&cfg.NoECRAuth, "no-ecr-auth", cfg.NoECRAuth, "skip aws CLI authentication for ECR images")
+	fs.StringVar(&cfg.GCPImpersonateServiceAccount, "gcp-impersonate-service-account", cfg.GCPImpersonateServiceAccount, "Google service account email to impersonate for Cloud Run metadata and GAR/GCR auth")
+	fs.StringVar(&cfg.AWSRoleARN, "aws-role-arn", cfg.AWSRoleARN, "AWS role ARN to assume for ECR auth")
 	fs.Var((*commaList)(&cfg.VEXOCIRegistries), "vex-oci-registries", "comma-separated registry hosts or repository prefixes that may use OCI VEX attestations")
 	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "suppress progress logging (warnings and errors only)")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
