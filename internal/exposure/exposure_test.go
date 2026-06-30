@@ -36,6 +36,49 @@ func TestAnalyzeGKEGatewayPublicAndInternalClasses(t *testing.T) {
 	requireEvidence(t, exposure, "GKE Gateway default/public-gw uses public class gke-l7-global-external-managed")
 }
 
+func TestAnalyzeGatewayRouteIncludesReachabilityMetadata(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	route := routeWithBackendRef("HTTPRoute", "default", "public-route", "public-gw", map[string]any{"name": "web-svc", "port": int64(80)})
+	route.Object["spec"].(map[string]any)["hostnames"] = []any{"api.example.com"}
+	route.Object["spec"].(map[string]any)["rules"] = []any{map[string]any{
+		"matches": []any{map[string]any{
+			"path":    map[string]any{"type": "PathPrefix", "value": "/api"},
+			"headers": []any{map[string]any{"type": "Exact", "name": "x-tenant", "value": "fedramp"}},
+		}},
+		"filters": []any{map[string]any{
+			"type": "URLRewrite",
+			"urlRewrite": map[string]any{
+				"path": map[string]any{"type": "ReplacePrefixMatch", "replacePrefixMatch": "/"},
+			},
+		}},
+		"backendRefs": []any{map[string]any{"name": "web-svc", "port": int64(80)}},
+	}}
+	objects := Objects{
+		Services: []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "public-gw", "gke-l7-global-external-managed"),
+			route,
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if len(exposure.Routes) != 1 {
+		t.Fatalf("Routes = %#v, want one route metadata entry", exposure.Routes)
+	}
+	metadata := exposure.Routes[0]
+	if metadata.Hostnames[0] != "api.example.com" || metadata.Paths[0].Value != "/api" {
+		t.Fatalf("route metadata = %#v, want hostname and /api path", metadata)
+	}
+	if metadata.Headers[0].Name != "x-tenant" || metadata.Headers[0].Value != "fedramp" {
+		t.Fatalf("headers = %#v, want x-tenant=fedramp", metadata.Headers)
+	}
+	if metadata.Rewrites[0].PathReplacePrefixMatch != "/" {
+		t.Fatalf("rewrites = %#v, want ReplacePrefixMatch /", metadata.Rewrites)
+	}
+}
+
 func TestAnalyzeGKEGatewayInternalClassIsNotPublic(t *testing.T) {
 	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
 	objects := Objects{

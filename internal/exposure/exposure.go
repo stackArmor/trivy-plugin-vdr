@@ -161,6 +161,7 @@ func analyzeIngresses(
 				Provider:           provider,
 				RouteKind:          "Ingress",
 				RouteName:          ingress.Name,
+				Routes:             []model.RouteMetadata{ingressRouteMetadata(ingress, serviceRef)},
 				Evidence:           []string{evidence},
 			}
 			if provider == "gke" {
@@ -464,20 +465,24 @@ func analyzeGatewayRoutes(
 			if !public {
 				continue
 			}
-			for _, backend := range routeBackendRefs(route) {
-				serviceNamespace := backend.namespace
+			for _, backend := range routeBackendRoutes(route) {
+				serviceNamespace := backend.ref.namespace
 				if serviceNamespace == "" {
 					serviceNamespace = route.GetNamespace()
 				}
-				if serviceNamespace != route.GetNamespace() && !referenceGrantAllows(referenceGrants[serviceNamespace], route, backend) {
+				if serviceNamespace != route.GetNamespace() && !referenceGrantAllows(referenceGrants[serviceNamespace], route, backend.ref) {
 					continue
 				}
-				key := serviceKey{namespace: serviceNamespace, name: backend.name}
+				key := serviceKey{namespace: serviceNamespace, name: backend.ref.name}
+				routeMetadata := backend.metadata
+				routeMetadata.BackendNamespace = serviceNamespace
+				routeMetadata.BackendService = backend.ref.name
 				exposure := model.Exposure{
 					InternetAccessible: true,
 					Provider:           gateway.provider,
 					RouteKind:          routeKind,
 					RouteName:          route.GetName(),
+					Routes:             []model.RouteMetadata{routeMetadata},
 					Evidence:           []string{evidence},
 				}
 				if gateway.provider == "gke" {
@@ -701,8 +706,23 @@ func routeParentRefs(route unstructured.Unstructured) []objectRef {
 }
 
 func routeBackendRefs(route unstructured.Unstructured) []objectRef {
+	infos := routeBackendRoutes(route)
+	result := make([]objectRef, 0, len(infos))
+	for _, info := range infos {
+		result = append(result, info.ref)
+	}
+	return result
+}
+
+type routeBackendInfo struct {
+	ref      objectRef
+	metadata model.RouteMetadata
+}
+
+func routeBackendRoutes(route unstructured.Unstructured) []routeBackendInfo {
 	seen := map[objectRef]struct{}{}
-	var result []objectRef
+	var result []routeBackendInfo
+	hostnames := stringSlice(route.Object, "spec", "hostnames")
 	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
 	for _, ruleItem := range rules {
 		rule, ok := ruleItem.(map[string]any)
@@ -733,16 +753,184 @@ func routeBackendRefs(route unstructured.Unstructured) []objectRef {
 				continue
 			}
 			seen[ref] = struct{}{}
-			result = append(result, ref)
+			result = append(result, routeBackendInfo{
+				ref:      ref,
+				metadata: gatewayRouteMetadata(route, rule, hostnames),
+			})
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
-		if result[i].namespace != result[j].namespace {
-			return result[i].namespace < result[j].namespace
+		if result[i].ref.namespace != result[j].ref.namespace {
+			return result[i].ref.namespace < result[j].ref.namespace
 		}
-		return result[i].name < result[j].name
+		return result[i].ref.name < result[j].ref.name
 	})
 	return result
+}
+
+func ingressRouteMetadata(ingress networkingv1.Ingress, ref ingressServiceRef) model.RouteMetadata {
+	metadata := model.RouteMetadata{
+		Kind:             "Ingress",
+		Namespace:        ingress.Namespace,
+		Name:             ingress.Name,
+		BackendNamespace: ingress.Namespace,
+		BackendService:   ref.name,
+	}
+	for _, rule := range ingress.Spec.Rules {
+		if rule.Host != "" {
+			metadata.Hostnames = appendUnique(metadata.Hostnames, rule.Host)
+		}
+		if rule.HTTP == nil {
+			continue
+		}
+		for _, path := range rule.HTTP.Paths {
+			if path.Backend.Service == nil || path.Backend.Service.Name != ref.name {
+				continue
+			}
+			routePath := model.RoutePath{Value: path.Path}
+			if path.PathType != nil {
+				routePath.Type = string(*path.PathType)
+			}
+			metadata.Paths = append(metadata.Paths, routePath)
+		}
+	}
+	return metadata
+}
+
+func gatewayRouteMetadata(route unstructured.Unstructured, rule map[string]any, hostnames []string) model.RouteMetadata {
+	return model.RouteMetadata{
+		Kind:      route.GetKind(),
+		Namespace: route.GetNamespace(),
+		Name:      route.GetName(),
+		Hostnames: append([]string(nil), hostnames...),
+		Paths:     gatewayRoutePaths(rule),
+		Headers:   gatewayRouteHeaders(rule),
+		Rewrites:  gatewayRouteRewrites(rule),
+	}
+}
+
+func gatewayRoutePaths(rule map[string]any) []model.RoutePath {
+	var paths []model.RoutePath
+	matches, _ := rule["matches"].([]any)
+	for _, item := range matches {
+		match, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		pathMatch, ok := match["path"].(map[string]any)
+		if !ok {
+			continue
+		}
+		paths = append(paths, model.RoutePath{
+			Type:  stringField(pathMatch, "type"),
+			Value: stringField(pathMatch, "value"),
+		})
+	}
+	return paths
+}
+
+func gatewayRouteHeaders(rule map[string]any) []model.RouteHeader {
+	var headers []model.RouteHeader
+	matches, _ := rule["matches"].([]any)
+	for _, item := range matches {
+		match, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		headerMatches, _ := match["headers"].([]any)
+		for _, headerItem := range headerMatches {
+			header, ok := headerItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			headers = append(headers, model.RouteHeader{
+				Type:  stringField(header, "type"),
+				Name:  stringField(header, "name"),
+				Value: stringField(header, "value"),
+			})
+		}
+	}
+	return headers
+}
+
+func gatewayRouteRewrites(rule map[string]any) []model.RouteRewrite {
+	var rewrites []model.RouteRewrite
+	filters, _ := rule["filters"].([]any)
+	for _, item := range filters {
+		filter, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch stringField(filter, "type") {
+		case "URLRewrite":
+			urlRewrite, _ := filter["urlRewrite"].(map[string]any)
+			rewrite := model.RouteRewrite{HostnameReplace: stringField(urlRewrite, "hostname")}
+			pathRewrite, _ := urlRewrite["path"].(map[string]any)
+			switch stringField(pathRewrite, "type") {
+			case "ReplaceFullPath":
+				rewrite.PathReplaceFullPath = stringField(pathRewrite, "replaceFullPath")
+			case "ReplacePrefixMatch":
+				rewrite.PathReplacePrefixMatch = stringField(pathRewrite, "replacePrefixMatch")
+			}
+			rewrites = append(rewrites, rewrite)
+		case "RequestRedirect":
+			redirect, _ := filter["requestRedirect"].(map[string]any)
+			rewrites = append(rewrites, model.RouteRewrite{
+				RequestRedirectHostname:   stringField(redirect, "hostname"),
+				RequestRedirectPath:       stringField(redirect, "path"),
+				RequestRedirectPrefix:     stringField(redirect, "prefix"),
+				RequestRedirectScheme:     stringField(redirect, "scheme"),
+				RequestRedirectStatusCode: int32Field(redirect, "statusCode"),
+			})
+		}
+	}
+	return rewrites
+}
+
+func stringSlice(object map[string]any, fields ...string) []string {
+	items, _, _ := unstructured.NestedSlice(object, fields...)
+	values := make([]string, 0, len(items))
+	for _, item := range items {
+		if value, ok := item.(string); ok && value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func stringField(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	value, _ := m[key].(string)
+	return value
+}
+
+func int32Field(m map[string]any, key string) int32 {
+	if m == nil {
+		return 0
+	}
+	switch value := m[key].(type) {
+	case int64:
+		return int32(value)
+	case int32:
+		return value
+	case int:
+		return int32(value)
+	case float64:
+		return int32(value)
+	default:
+		return 0
+	}
 }
 
 func applyWorkloadExposure(result map[model.ResourceRef]model.Exposure, resource model.ResourceInventory, exposure model.Exposure) {
@@ -838,7 +1026,7 @@ const nodePortReachableLabel = "vdr.fedramp.io/internet-reachable-nodePort"
 const internetReachableLabel = "vdr.fedramp.io/internet-reachable"
 
 // ConfigKeyInternetAccessibleIngressClasses and ConfigKeyInternetAccessibleGatewayClasses
-// are the cluster ConfigMap (kube-system/vdr-fedramp) data keys an operator uses to declare
+// are the cluster ConfigMap (fedramp-vdr-trivy/vdr-fedramp) data keys an operator uses to declare
 // Ingress/Gateway class names as internet-reachable centrally, instead of labeling each
 // resource (which is brittle when labels are sprayed by a Helm chart onto undesired
 // resources, or reverted by a managed reconciler). A class named here is treated exactly

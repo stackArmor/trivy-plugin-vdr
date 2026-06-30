@@ -112,6 +112,7 @@ func applyLoadBalancerExposure(service Service, routes []LoadBalancerRoute, expo
 		candidate := exposure
 		candidate.RouteKind = "LoadBalancer"
 		candidate.RouteName = route.Name
+		candidate.Routes = []model.RouteMetadata{loadBalancerRouteMetadata(route)}
 		candidate.Evidence = append(candidate.Evidence,
 			fmt.Sprintf("external load balancer %s routes to serverless NEG %s", route.Name, route.ServerlessNEG),
 		)
@@ -144,6 +145,25 @@ func applyLoadBalancerExposure(service Service, routes []LoadBalancerRoute, expo
 	}
 	exposure.Evidence = append(exposure.Evidence, fmt.Sprintf("Cloud Run Service %s/%s has no public load balancer route found", service.Region, service.Name))
 	return exposure
+}
+
+func loadBalancerRouteMetadata(route LoadBalancerRoute) model.RouteMetadata {
+	backendService := route.BackendReference
+	if backendService == "" {
+		backendService = route.BackendService
+	}
+	return model.RouteMetadata{
+		Kind:           "LoadBalancer",
+		Name:           route.Name,
+		Hostnames:      append([]string(nil), route.Hostnames...),
+		Paths:          append([]model.RoutePath(nil), route.Paths...),
+		Headers:        append([]model.RouteHeader(nil), route.Headers...),
+		Rewrites:       append([]model.RouteRewrite(nil), route.PathRedirects...),
+		BackendService: backendService,
+		URLMap:         route.URLMap,
+		TargetProxy:    route.TargetProxy,
+		LoadBalancerIP: route.IPAddress,
+	}
 }
 
 func applyCloudArmorPolicy(exposure *model.Exposure, route LoadBalancerRoute) {

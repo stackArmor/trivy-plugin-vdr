@@ -1,6 +1,10 @@
 package cloudrun
 
-import "context"
+import (
+	"context"
+
+	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+)
 
 const Provider = "gcp-cloud-run"
 
@@ -63,7 +67,16 @@ type LoadBalancerRoute struct {
 	IAPOAuth2ClientID    string
 	CloudArmorPolicy     string
 	BackendServiceRegion string
+	Hostnames            []string
+	Paths                []RoutePath
+	Headers              []RouteHeader
+	PathRedirects        []RouteRewrite
+	BackendReference     string
 }
+
+type RoutePath = model.RoutePath
+type RouteHeader = model.RouteHeader
+type RouteRewrite = model.RouteRewrite
 
 type ExposureClient interface {
 	GetServicePolicy(ctx context.Context, project, region, service string) ([]PolicyBinding, error)

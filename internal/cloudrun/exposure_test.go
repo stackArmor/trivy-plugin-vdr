@@ -112,6 +112,48 @@ func TestAnalyzeExposureMarksInternalLBServicePublicWhenExternalLBNoIAP(t *testi
 	requireEvidence(t, ex, "backend service api-backend has IAP disabled")
 }
 
+func TestAnalyzeExposureIncludesLoadBalancerRouteMetadata(t *testing.T) {
+	service := Service{
+		Project:    "p",
+		Region:     "us-east4",
+		Name:       "api",
+		Ingress:    "internal-and-cloud-load-balancing",
+		Containers: []Container{{Name: "app", Image: "example.com/api:1"}},
+	}
+	inventory := inventoryForExposure(t, []Service{service}, nil)
+	client := &fakeExposureClient{routes: []LoadBalancerRoute{{
+		Name:             "api-lb",
+		Scheme:           "EXTERNAL_MANAGED",
+		IPAddress:        "203.0.113.10",
+		TargetProxy:      "https-proxy",
+		URLMap:           "api-map",
+		BackendService:   "api-backend",
+		ServerlessNEG:    "api-neg",
+		CloudRunService:  "api",
+		CloudRunRegion:   "us-east4",
+		Hostnames:        []string{"api.example.com"},
+		Paths:            []RoutePath{{Type: "PathPrefix", Value: "/api"}},
+		PathRedirects:    []RouteRewrite{{PathReplacePrefixMatch: "/"}},
+		BackendReference: "api-backend",
+	}}}
+
+	got, _, err := AnalyzeExposure(context.Background(), inventory, []Service{service}, nil, client)
+	if err != nil {
+		t.Fatalf("AnalyzeExposure returned error: %v", err)
+	}
+	ex := got[cloudRunRef("Service", "p", "us-east4", "api", "app")]
+	if len(ex.Routes) != 1 {
+		t.Fatalf("Routes = %#v, want one load balancer route", ex.Routes)
+	}
+	metadata := ex.Routes[0]
+	if metadata.Hostnames[0] != "api.example.com" || metadata.Paths[0].Value != "/api" {
+		t.Fatalf("route metadata = %#v, want hostname and path", metadata)
+	}
+	if metadata.URLMap != "api-map" || metadata.TargetProxy != "https-proxy" || metadata.BackendService != "api-backend" {
+		t.Fatalf("route metadata = %#v, want LB object names", metadata)
+	}
+}
+
 func TestAnalyzeExposureIncludesCloudArmorPolicyForLoadBalancerBackend(t *testing.T) {
 	service := Service{
 		Project:    "p",
