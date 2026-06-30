@@ -311,6 +311,44 @@ func TestParseReachabilityOnlyRejectsSkipExposure(t *testing.T) {
 	}
 }
 
+func TestParseScanReachabilityOnly(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--scan-reachability-only"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.ScanReachabilityOnly {
+		t.Fatal("ScanReachabilityOnly = false, want true")
+	}
+	if cfg.SkipEnrichment {
+		t.Fatal("SkipEnrichment = true, want flag to preserve the user setting and suppress enrichment in execution")
+	}
+}
+
+func TestParseScanReachabilityOnlyRejectsConflictingFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "skip exposure", args: []string{"k8s", "--scan-reachability-only", "--skip-exposure"}, want: "skip-exposure"},
+		{name: "html output", args: []string{"k8s", "--scan-reachability-only", "--html-output", "report.html"}, want: "html-output"},
+		{name: "html template", args: []string{"k8s", "--scan-reachability-only", "--html-template", "template.html"}, want: "html-template"},
+		{name: "min epss", args: []string{"k8s", "--scan-reachability-only", "--min-epss", "0.5"}, want: "min-epss"},
+		{name: "reachability only", args: []string{"k8s", "--scan-reachability-only", "--reachability-only"}, want: "reachability-only"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.args)
+			if err == nil {
+				t.Fatal("Parse returned nil error, want conflict error")
+			}
+			if !strings.Contains(err.Error(), "scan-reachability-only") || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want scan-reachability-only/%s context", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
 func TestParseImageSource(t *testing.T) {
 	cfg, err := Parse([]string{"image", "--parallel-scans", "2", "gcr.io/example/app:v1", "nginx:1.25"})
 	if err != nil {
@@ -344,6 +382,16 @@ func TestParseImageSourceRejectsReachabilityOnly(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "reachability-only") || !strings.Contains(err.Error(), "image") {
 		t.Fatalf("error = %q, want reachability-only/image context", err.Error())
+	}
+}
+
+func TestParseImageSourceRejectsScanReachabilityOnly(t *testing.T) {
+	_, err := Parse([]string{"image", "--scan-reachability-only", "nginx:1.25"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want scan-reachability-only rejection")
+	}
+	if !strings.Contains(err.Error(), "scan-reachability-only") || !strings.Contains(err.Error(), "image") {
+		t.Fatalf("error = %q, want scan-reachability-only/image context", err.Error())
 	}
 }
 
