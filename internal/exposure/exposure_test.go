@@ -167,6 +167,30 @@ func TestAnalyzeGKEIngressGCEAndInternalClasses(t *testing.T) {
 	requireEvidence(t, exposure, "GKE Ingress default/public-ing uses public class gce")
 }
 
+func TestAnalyzeGKEIngressIncludesAppProtocolMetadata(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services: []corev1.Service{serviceWithPortsAndAnnotations("default", "web-svc", map[string]string{"app": "web"}, map[string]string{
+			"cloud.google.com/app-protocols": `{"public":"HTTP2"}`,
+		}, servicePort("public", 80))},
+		Ingresses: []networkingv1.Ingress{ingressWithServicePortName("default", "public-ing", "gce", "web-svc", "public", nil)},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "web", "app", "container", "")]
+	if len(exposure.Routes) != 1 {
+		t.Fatalf("Routes = %#v, want one route metadata entry", exposure.Routes)
+	}
+	metadata := exposure.Routes[0]
+	if metadata.BackendProtocol != "HTTP" || metadata.BackendProtocolVersion != "HTTP2" {
+		t.Fatalf("protocol metadata = %#v, want HTTP backend with HTTP2 version", metadata)
+	}
+	if len(metadata.ALPN) != 1 || metadata.ALPN[0] != "h2" {
+		t.Fatalf("ALPN = %#v, want h2", metadata.ALPN)
+	}
+}
+
 func TestAnalyzeGKEIngressInternalClassIsNotPublic(t *testing.T) {
 	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
 	objects := Objects{
@@ -383,6 +407,37 @@ func TestAnalyzeAWSALBIngressClassParamsInternetFacing(t *testing.T) {
 	requireEvidence(t, exposure, "AWS ALB IngressClassParams internet-facing-params uses internet-facing scheme")
 }
 
+func TestAnalyzeAWSALBIngressIncludesProtocolMetadata(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "grpc-alb", "", "api-svc", map[string]string{
+			"kubernetes.io/ingress.class":                        "alb",
+			"alb.ingress.kubernetes.io/scheme":                   "internet-facing",
+			"alb.ingress.kubernetes.io/listen-ports":             `[{"HTTPS":443}]`,
+			"alb.ingress.kubernetes.io/backend-protocol":         "HTTPS",
+			"alb.ingress.kubernetes.io/backend-protocol-version": "GRPC",
+		})},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "api", "api", "container", "")]
+	if len(exposure.Routes) != 1 {
+		t.Fatalf("Routes = %#v, want one route metadata entry", exposure.Routes)
+	}
+	metadata := exposure.Routes[0]
+	if metadata.FrontendProtocol != "HTTPS" || metadata.BackendProtocol != "HTTPS" || metadata.BackendProtocolVersion != "GRPC" {
+		t.Fatalf("protocol metadata = %#v, want HTTPS frontend/backend and GRPC backend version", metadata)
+	}
+	if !metadata.BackendTLS {
+		t.Fatalf("BackendTLS = false, want true for HTTPS backend: %#v", metadata)
+	}
+	if len(metadata.ALPN) != 1 || metadata.ALPN[0] != "h2" {
+		t.Fatalf("ALPN = %#v, want h2", metadata.ALPN)
+	}
+}
+
 func TestAnalyzeAWSALBAuthAnnotationsProtectOIDCAndCognito(t *testing.T) {
 	for _, authType := range []string{"oidc", "cognito"} {
 		t.Run(authType, func(t *testing.T) {
@@ -455,6 +510,36 @@ func TestAnalyzeAWSGatewayLoadBalancerConfigurationInternetFacing(t *testing.T) 
 		t.Fatalf("unexpected exposure metadata: %#v", exposure)
 	}
 	requireEvidence(t, exposure, "AWS Gateway default/aws-gw LoadBalancerConfiguration scheme is internet-facing")
+}
+
+func TestAnalyzeAWSGatewayIncludesTargetGroupProtocolMetadata(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "aws-gw", "amazon-vpc-lattice"),
+			routeWithBackendRef("GRPCRoute", "default", "aws-route", "aws-gw", map[string]any{"name": "api-svc", "port": int64(50051)}),
+			loadBalancerConfiguration("default", "aws-gw", "internet-facing"),
+			targetGroupConfiguration("default", "api-svc-tg", "api-svc", "HTTPS", "GRPC"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "api", "api", "container", "")]
+	if len(exposure.Routes) != 1 {
+		t.Fatalf("Routes = %#v, want one route metadata entry", exposure.Routes)
+	}
+	metadata := exposure.Routes[0]
+	if metadata.BackendProtocol != "HTTPS" || metadata.BackendProtocolVersion != "GRPC" {
+		t.Fatalf("protocol metadata = %#v, want HTTPS/GRPC target group", metadata)
+	}
+	if !metadata.BackendTLS {
+		t.Fatalf("BackendTLS = false, want true for HTTPS target group: %#v", metadata)
+	}
+	if len(metadata.ALPN) != 1 || metadata.ALPN[0] != "h2" {
+		t.Fatalf("ALPN = %#v, want h2", metadata.ALPN)
+	}
 }
 
 func TestAnalyzeGatewayRouteIgnoresCrossNamespaceBackendRefWithoutReferenceGrant(t *testing.T) {
@@ -666,6 +751,30 @@ func TestAnalyzeLoadBalancerServiceExposesControllerPods(t *testing.T) {
 	}
 	if got[ref].RouteKind != "Service/LoadBalancer" {
 		t.Errorf("RouteKind = %q, want Service/LoadBalancer", got[ref].RouteKind)
+	}
+}
+
+func TestAnalyzeAWSLoadBalancerServiceIncludesALPNPolicyMetadata(t *testing.T) {
+	svc := serviceWithAnnotations("default", "nlb", map[string]string{"app": "api"}, map[string]string{
+		"service.beta.kubernetes.io/aws-load-balancer-scheme":      "internet-facing",
+		"service.beta.kubernetes.io/aws-load-balancer-alpn-policy": "HTTP2Preferred",
+	})
+	svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{Hostname: "nlb.example.com"}}
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+
+	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
+
+	exposure := got[resourceRef("default", "api", "api", "container", "")]
+	if len(exposure.Routes) != 1 {
+		t.Fatalf("Routes = %#v, want one Service route metadata entry", exposure.Routes)
+	}
+	metadata := exposure.Routes[0]
+	if metadata.Kind != "Service/LoadBalancer" || metadata.ALPNPolicy != "HTTP2Preferred" {
+		t.Fatalf("service route metadata = %#v, want Service/LoadBalancer with HTTP2Preferred ALPN policy", metadata)
+	}
+	if len(metadata.ALPN) != 2 || metadata.ALPN[0] != "h2" || metadata.ALPN[1] != "http/1.1" {
+		t.Fatalf("ALPN = %#v, want h2 and http/1.1", metadata.ALPN)
 	}
 }
 
@@ -1207,6 +1316,22 @@ func loadBalancerConfiguration(namespace, gatewayName, scheme string) unstructur
 			"name":      gatewayName,
 		},
 		"spec": map[string]any{"scheme": scheme},
+	}}
+}
+
+func targetGroupConfiguration(namespace, name, serviceName, protocol, protocolVersion string) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.k8s.aws/v1beta1",
+		"kind":       "TargetGroupConfiguration",
+		"metadata": map[string]any{
+			"namespace": namespace,
+			"name":      name,
+		},
+		"spec": map[string]any{
+			"targetReference": map[string]any{"name": serviceName},
+			"protocol":        protocol,
+			"protocolVersion": protocolVersion,
+		},
 	}}
 }
 

@@ -51,6 +51,15 @@ type gatewayInfo struct {
 	evidence string
 }
 
+type routeProtocolInfo struct {
+	FrontendProtocol       string
+	BackendProtocol        string
+	BackendProtocolVersion string
+	BackendTLS             bool
+	ALPN                   []string
+	ALPNPolicy             string
+}
+
 type protectionInfo struct {
 	protection model.AccessProtection
 	evidence   string
@@ -72,11 +81,12 @@ func Analyze(inventory *model.Inventory, objects Objects) map[model.ResourceRef]
 	gatewayClassOverrides := stringSet(objects.InternetAccessibleGatewayClasses)
 	gateways := indexGateways(objects.Unstructured, gatewayClassOverrides)
 	awsGatewayPublic := indexAWSGatewayLoadBalancers(objects.Unstructured)
+	awsTargetGroups := indexAWSTargetGroupConfigurations(objects.Unstructured)
 	referenceGrants := indexReferenceGrants(objects.Unstructured)
 
 	serviceExposures := make([]serviceExposure, 0)
 	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, ingressClassOverrides, backendConfigs)...)
-	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, gateways, awsGatewayPublic, gcpBackendPolicies, referenceGrants)...)
+	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, gateways, awsGatewayPublic, awsTargetGroups, gcpBackendPolicies, referenceGrants)...)
 	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services)...)
 
 	result := map[model.ResourceRef]model.Exposure{}
@@ -161,7 +171,7 @@ func analyzeIngresses(
 				Provider:           provider,
 				RouteKind:          "Ingress",
 				RouteName:          ingress.Name,
-				Routes:             []model.RouteMetadata{ingressRouteMetadata(ingress, serviceRef)},
+				Routes:             []model.RouteMetadata{ingressRouteMetadata(ingress, services[key], serviceRef, provider)},
 				Evidence:           []string{evidence},
 			}
 			if provider == "gke" {
@@ -436,6 +446,7 @@ func analyzeGatewayRoutes(
 	objects []unstructured.Unstructured,
 	gateways map[serviceKey]gatewayInfo,
 	awsGatewayPublic map[serviceKey]string,
+	awsTargetGroups map[serviceKey]routeProtocolInfo,
 	gcpBackendPolicies map[serviceKey]protectionInfo,
 	referenceGrants map[string][]referenceGrantInfo,
 ) []serviceExposure {
@@ -477,6 +488,10 @@ func analyzeGatewayRoutes(
 				routeMetadata := backend.metadata
 				routeMetadata.BackendNamespace = serviceNamespace
 				routeMetadata.BackendService = backend.ref.name
+				applyRouteProtocol(&routeMetadata, gatewayRouteProtocol(routeKind))
+				if gateway.provider == "aws" {
+					applyRouteProtocol(&routeMetadata, awsTargetGroups[key])
+				}
 				exposure := model.Exposure{
 					InternetAccessible: true,
 					Provider:           gateway.provider,
@@ -560,6 +575,28 @@ func indexAWSGatewayLoadBalancers(objects []unstructured.Unstructured) map[servi
 		}
 		evidence := fmt.Sprintf("AWS Gateway %s/%s LoadBalancerConfiguration scheme is internet-facing", object.GetNamespace(), gatewayName)
 		index[serviceKey{namespace: object.GetNamespace(), name: gatewayName}] = evidence
+	}
+	return index
+}
+
+func indexAWSTargetGroupConfigurations(objects []unstructured.Unstructured) map[serviceKey]routeProtocolInfo {
+	index := map[serviceKey]routeProtocolInfo{}
+	for _, object := range objects {
+		if !hasGroupKind(object, "gateway.k8s.aws", "TargetGroupConfiguration") {
+			continue
+		}
+		serviceName, _, _ := unstructured.NestedString(object.Object, "spec", "targetReference", "name")
+		if serviceName == "" {
+			continue
+		}
+		serviceNamespace, _, _ := unstructured.NestedString(object.Object, "spec", "targetReference", "namespace")
+		if serviceNamespace == "" {
+			serviceNamespace = object.GetNamespace()
+		}
+		protocol, _, _ := unstructured.NestedString(object.Object, "spec", "protocol")
+		protocolVersion, _, _ := unstructured.NestedString(object.Object, "spec", "protocolVersion")
+		info := protocolInfo("", protocol, protocolVersion)
+		index[serviceKey{namespace: serviceNamespace, name: serviceName}] = info
 	}
 	return index
 }
@@ -768,13 +805,19 @@ func routeBackendRoutes(route unstructured.Unstructured) []routeBackendInfo {
 	return result
 }
 
-func ingressRouteMetadata(ingress networkingv1.Ingress, ref ingressServiceRef) model.RouteMetadata {
+func ingressRouteMetadata(ingress networkingv1.Ingress, service corev1.Service, ref ingressServiceRef, provider string) model.RouteMetadata {
 	metadata := model.RouteMetadata{
 		Kind:             "Ingress",
 		Namespace:        ingress.Namespace,
 		Name:             ingress.Name,
 		BackendNamespace: ingress.Namespace,
 		BackendService:   ref.name,
+	}
+	switch provider {
+	case "aws":
+		applyRouteProtocol(&metadata, awsALBIngressProtocol(ingress, service))
+	case "gke":
+		applyRouteProtocol(&metadata, gkeIngressProtocol(service, ref))
 	}
 	for _, rule := range ingress.Spec.Rules {
 		if rule.Host != "" {
@@ -807,6 +850,197 @@ func gatewayRouteMetadata(route unstructured.Unstructured, rule map[string]any, 
 		Headers:   gatewayRouteHeaders(rule),
 		Rewrites:  gatewayRouteRewrites(rule),
 	}
+}
+
+func awsALBIngressProtocol(ingress networkingv1.Ingress, service corev1.Service) routeProtocolInfo {
+	frontend := awsALBFrontendProtocol(ingress)
+	backend := awsAnnotation(service.Annotations, ingress.Annotations, "alb.ingress.kubernetes.io/backend-protocol")
+	version := awsAnnotation(service.Annotations, ingress.Annotations, "alb.ingress.kubernetes.io/backend-protocol-version")
+	return protocolInfo(frontend, defaultString(backend, "HTTP"), defaultString(version, "HTTP1"))
+}
+
+func awsALBFrontendProtocol(ingress networkingv1.Ingress) string {
+	listenPorts := strings.TrimSpace(ingress.Annotations["alb.ingress.kubernetes.io/listen-ports"])
+	if listenPorts != "" {
+		var ports []map[string]any
+		if err := json.Unmarshal([]byte(listenPorts), &ports); err == nil {
+			seenHTTP := false
+			for _, port := range ports {
+				for proto := range port {
+					normalized := strings.ToUpper(strings.TrimSpace(proto))
+					if normalized == "HTTPS" {
+						return "HTTPS"
+					}
+					if normalized == "HTTP" {
+						seenHTTP = true
+					}
+				}
+			}
+			if seenHTTP {
+				return "HTTP"
+			}
+		}
+	}
+	if strings.TrimSpace(ingress.Annotations["alb.ingress.kubernetes.io/certificate-arn"]) != "" {
+		return "HTTPS"
+	}
+	return "HTTP"
+}
+
+func awsAnnotation(serviceAnnotations, ingressAnnotations map[string]string, key string) string {
+	if value := strings.TrimSpace(serviceAnnotations[key]); value != "" {
+		return value
+	}
+	return strings.TrimSpace(ingressAnnotations[key])
+}
+
+func gkeIngressProtocol(service corev1.Service, ref ingressServiceRef) routeProtocolInfo {
+	appProtocols := strings.TrimSpace(service.Annotations["cloud.google.com/app-protocols"])
+	if appProtocols == "" {
+		return routeProtocolInfo{}
+	}
+	var protocols map[string]string
+	if err := json.Unmarshal([]byte(appProtocols), &protocols); err != nil {
+		return routeProtocolInfo{}
+	}
+	portName := ref.portName
+	if portName == "" {
+		for _, port := range service.Spec.Ports {
+			if port.Port == ref.portNumber {
+				portName = port.Name
+				break
+			}
+		}
+	}
+	if portName == "" {
+		return routeProtocolInfo{}
+	}
+	switch normalizeProtocol(protocols[portName]) {
+	case "HTTP":
+		return protocolInfo("", "HTTP", "HTTP1")
+	case "HTTPS":
+		return protocolInfo("", "HTTPS", "HTTP1")
+	case "HTTP2":
+		return protocolInfo("", "HTTP", "HTTP2")
+	default:
+		return routeProtocolInfo{}
+	}
+}
+
+func gatewayRouteProtocol(kind string) routeProtocolInfo {
+	switch kind {
+	case "GRPCRoute":
+		return protocolInfo("", "", "GRPC")
+	default:
+		return routeProtocolInfo{}
+	}
+}
+
+func serviceRouteMetadata(svc corev1.Service) model.RouteMetadata {
+	metadata := model.RouteMetadata{
+		Kind:           "Service/LoadBalancer",
+		Namespace:      svc.Namespace,
+		Name:           svc.Name,
+		LoadBalancerIP: serviceLBAddress(svc),
+	}
+	backendProtocol := strings.TrimSpace(svc.Annotations["service.beta.kubernetes.io/aws-load-balancer-backend-protocol"])
+	if backendProtocol != "" {
+		applyRouteProtocol(&metadata, protocolInfo("", backendProtocol, ""))
+	}
+	alpnPolicy := strings.TrimSpace(svc.Annotations["service.beta.kubernetes.io/aws-load-balancer-alpn-policy"])
+	if alpnPolicy != "" {
+		applyRouteProtocol(&metadata, routeProtocolInfo{
+			ALPNPolicy: alpnPolicy,
+			ALPN:       alpnForPolicy(alpnPolicy),
+		})
+	}
+	return metadata
+}
+
+func protocolInfo(frontend, backend, version string) routeProtocolInfo {
+	info := routeProtocolInfo{
+		FrontendProtocol:       normalizeProtocol(frontend),
+		BackendProtocol:        normalizeProtocol(backend),
+		BackendProtocolVersion: normalizeProtocol(version),
+	}
+	if info.BackendProtocol == "HTTPS" || info.BackendProtocol == "TLS" || strings.EqualFold(backend, "ssl") {
+		info.BackendTLS = true
+	}
+	if len(info.ALPN) == 0 {
+		info.ALPN = alpnForProtocolVersion(info.BackendProtocolVersion)
+	}
+	return info
+}
+
+func normalizeProtocol(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	switch strings.ToLower(value) {
+	case "grpc":
+		return "GRPC"
+	case "http1", "http/1.1":
+		return "HTTP1"
+	case "http2", "h2", "http/2":
+		return "HTTP2"
+	case "https", "ssl", "tls":
+		return strings.ToUpper(value)
+	default:
+		return strings.ToUpper(value)
+	}
+}
+
+func alpnForProtocolVersion(version string) []string {
+	switch normalizeProtocol(version) {
+	case "GRPC", "HTTP2":
+		return []string{"h2"}
+	case "HTTP1":
+		return []string{"http/1.1"}
+	default:
+		return nil
+	}
+}
+
+func alpnForPolicy(policy string) []string {
+	switch normalizeProtocol(policy) {
+	case "HTTP1ONLY":
+		return []string{"http/1.1"}
+	case "HTTP2ONLY":
+		return []string{"h2"}
+	case "HTTP2OPTIONAL", "HTTP2PREFERRED":
+		return []string{"h2", "http/1.1"}
+	default:
+		return nil
+	}
+}
+
+func applyRouteProtocol(metadata *model.RouteMetadata, info routeProtocolInfo) {
+	if info.FrontendProtocol != "" {
+		metadata.FrontendProtocol = info.FrontendProtocol
+	}
+	if info.BackendProtocol != "" {
+		metadata.BackendProtocol = info.BackendProtocol
+	}
+	if info.BackendProtocolVersion != "" {
+		metadata.BackendProtocolVersion = info.BackendProtocolVersion
+	}
+	if info.BackendTLS {
+		metadata.BackendTLS = true
+	}
+	if len(info.ALPN) > 0 {
+		metadata.ALPN = append([]string(nil), info.ALPN...)
+	}
+	if info.ALPNPolicy != "" {
+		metadata.ALPNPolicy = info.ALPNPolicy
+	}
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func gatewayRoutePaths(rule map[string]any) []model.RoutePath {
@@ -990,6 +1224,7 @@ func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
 					Provider:           lbProvider(svc),
 					RouteKind:          "Service/LoadBalancer",
 					RouteName:          svc.Name,
+					Routes:             []model.RouteMetadata{serviceRouteMetadata(svc)},
 					Evidence: []string{fmt.Sprintf(
 						"Service %s/%s is type=LoadBalancer with a provisioned external address (%s); the pods it selects are directly internet-reachable",
 						svc.Namespace, svc.Name, serviceLBAddress(svc))},
@@ -1240,6 +1475,9 @@ func cloneExposure(exposure model.Exposure) model.Exposure {
 	clone := exposure
 	if len(exposure.Evidence) > 0 {
 		clone.Evidence = append([]string(nil), exposure.Evidence...)
+	}
+	if len(exposure.Routes) > 0 {
+		clone.Routes = append([]model.RouteMetadata(nil), exposure.Routes...)
 	}
 	if exposure.Protection != nil {
 		clone.Protection = copyProtection(*exposure.Protection)

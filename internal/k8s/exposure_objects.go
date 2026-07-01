@@ -29,6 +29,7 @@ var exposureResources = []exposureResource{
 	{gvr: schema.GroupVersionResource{Group: "cloud.google.com", Version: "v1", Resource: "backendconfigs"}, namespaced: true},
 	{gvr: schema.GroupVersionResource{Group: "elbv2.k8s.aws", Version: "v1beta1", Resource: "ingressclassparams"}, namespaced: false},
 	{gvr: schema.GroupVersionResource{Group: "gateway.k8s.aws", Version: "v1beta1", Resource: "loadbalancerconfigurations"}, namespaced: true},
+	{gvr: schema.GroupVersionResource{Group: "gateway.k8s.aws", Version: "v1beta1", Resource: "targetgroupconfigurations"}, namespaced: true},
 }
 
 func (c *Collector) CollectExposureObjects(ctx context.Context, opts Options) (exposure.Objects, error) {
