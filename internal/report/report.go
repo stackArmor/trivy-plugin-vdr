@@ -397,6 +397,7 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 			Resource: ref,
 			Images:   append([]model.ContainerImage(nil), inv.images...),
 			Labels:   copyStringMap(inv.labels),
+			Posture:  inv.posture,
 		}
 		if classificationOnly {
 			report.Classification = classifyAsset(sc, idx, nsLabels, ref)
@@ -457,8 +458,9 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 }
 
 type containerInventory struct {
-	images []model.ContainerImage
-	labels map[string]string
+	images  []model.ContainerImage
+	labels  map[string]string
+	posture *model.WorkloadPosture
 }
 
 func indexContainerInventory(inventory *model.Inventory) map[model.ResourceRef]containerInventory {
@@ -470,8 +472,9 @@ func indexContainerInventory(inventory *model.Inventory) map[model.ResourceRef]c
 			ref.ContainerType = image.ContainerType
 			ref.RestartPolicy = image.RestartPolicy
 			index[ref] = containerInventory{
-				images: []model.ContainerImage{image},
-				labels: copyStringMap(resource.Labels),
+				images:  []model.ContainerImage{image},
+				labels:  copyStringMap(resource.Labels),
+				posture: resource.Posture,
 			}
 		}
 	}

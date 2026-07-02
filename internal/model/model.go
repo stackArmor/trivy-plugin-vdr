@@ -31,6 +31,109 @@ type ResourceInventory struct {
 	Labels     map[string]string `json:"labels,omitempty"`
 	Images     []ContainerImage  `json:"images"`
 	Conditions []string          `json:"conditions,omitempty"`
+	// Posture holds neutral Kubernetes security-posture facts observed for this
+	// workload (see WorkloadPosture). It is captured read-only for a downstream
+	// evaluator; no scoring or control semantics are applied here.
+	Posture *WorkloadPosture `json:"posture,omitempty"`
+}
+
+// WorkloadPosture is a read-only, neutral capture of Kubernetes security-posture
+// facts observed directly on a workload's pod template and the namespace policy
+// objects that select it. Every field is a fact read verbatim from a Kubernetes
+// object; no cloud-provider control, product, or scoring interpretation is applied
+// here (e.g. no IMDS/metadata/identity-provider inference — only the raw CIDRs and
+// podspec values). It is emitted for a downstream evaluator to interpret.
+// Collection is best-effort and fail-open: fields backed by an object the
+// collector could not read (RBAC denied) are left unset.
+type WorkloadPosture struct {
+	SecurityContext *PostureSecurityContext `json:"securityContext,omitempty"`
+	Workload        *PostureWorkload        `json:"workload,omitempty"`
+	Identity        *PostureIdentity        `json:"identity,omitempty"`
+	Volumes         *PostureVolumes         `json:"volumes,omitempty"`
+	NetworkPolicy   *PostureNetworkPolicy   `json:"networkPolicy,omitempty"`
+}
+
+// PostureSecurityContext captures pod/container securityContext facts, aggregated
+// across the workload's app (non-init) containers.
+type PostureSecurityContext struct {
+	// ReadOnlyRootFilesystem is true only when every app container sets
+	// securityContext.readOnlyRootFilesystem=true.
+	ReadOnlyRootFilesystem bool `json:"readOnlyRootFilesystem,omitempty"`
+	// RunAsNonRoot is true only when every app container runs as non-root
+	// (container securityContext.runAsNonRoot, else the pod-level value).
+	RunAsNonRoot bool `json:"runAsNonRoot,omitempty"`
+	// Privileged is true when any app container sets
+	// securityContext.privileged=true.
+	Privileged bool `json:"privileged,omitempty"`
+	// AllowPrivilegeEscalation is true when any app container sets
+	// securityContext.allowPrivilegeEscalation=true.
+	AllowPrivilegeEscalation bool `json:"allowPrivilegeEscalation,omitempty"`
+	// DroppedCapabilities lists the capabilities dropped by every app container
+	// (the intersection of each container's securityContext.capabilities.drop),
+	// sorted.
+	DroppedCapabilities []string `json:"droppedCapabilities,omitempty"`
+	// SeccompProfileType is the seccompProfile.type in effect for the workload:
+	// the pod-level value, else the type shared by all app containers.
+	SeccompProfileType string `json:"seccompProfileType,omitempty"`
+}
+
+// PostureWorkload captures workload-shape and availability facts.
+type PostureWorkload struct {
+	// Replicas is the workload's declared replica count (Deployment/StatefulSet).
+	// Nil for kinds without a replica field (Pod/DaemonSet/Job/CronJob).
+	Replicas *int32 `json:"replicas,omitempty"`
+	// HasPodDisruptionBudget is true when a PodDisruptionBudget in the namespace
+	// selects this workload's pods.
+	HasPodDisruptionBudget bool `json:"hasPodDisruptionBudget,omitempty"`
+	// ZoneSpread is true when the pod template requires spread across
+	// topology.kubernetes.io/zone (a DoNotSchedule topologySpreadConstraint or a
+	// required pod anti-affinity term on the zone key).
+	ZoneSpread bool `json:"zoneSpread,omitempty"`
+	// LivenessProbe is true when any app container declares a livenessProbe.
+	LivenessProbe bool `json:"livenessProbe,omitempty"`
+	// ReadinessProbe is true when any app container declares a readinessProbe.
+	ReadinessProbe bool `json:"readinessProbe,omitempty"`
+}
+
+// PostureIdentity captures pod identity/secret-sourcing facts.
+type PostureIdentity struct {
+	// ServiceAccountName is spec.serviceAccountName.
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// AutomountServiceAccountToken is spec.automountServiceAccountToken verbatim
+	// (nil when unset, preserving the tri-state).
+	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
+	// EnvFromSecretRef is true when any container sources env from a Secret
+	// (env.valueFrom.secretKeyRef or envFrom.secretRef).
+	EnvFromSecretRef bool `json:"envFromSecretRef,omitempty"`
+}
+
+// PostureVolumes captures writable-storage facts.
+type PostureVolumes struct {
+	// WritableVolumeMounts lists the container mount paths that are mounted
+	// read-write onto a writable-backed volume (emptyDir/PVC/ephemeral/hostPath),
+	// sorted.
+	WritableVolumeMounts []string `json:"writableVolumeMounts,omitempty"`
+}
+
+// PostureNetworkPolicy captures raw NetworkPolicy facts for the policies that
+// select this workload. CIDRs and IPBlock.except entries are recorded verbatim;
+// no address (e.g. link-local metadata) is interpreted.
+type PostureNetworkPolicy struct {
+	// SelectedByEgressPolicy is true when an Egress-typed NetworkPolicy selects
+	// this workload's pods.
+	SelectedByEgressPolicy bool `json:"selectedByEgressPolicy,omitempty"`
+	// EgressDefaultDeny is true when a selecting Egress policy declares no egress
+	// rules (which denies all egress).
+	EgressDefaultDeny bool `json:"egressDefaultDeny,omitempty"`
+	// EgressAllowedCIDRs are the raw ipBlock.cidr allow-list entries across the
+	// selecting egress rules, sorted and de-duplicated.
+	EgressAllowedCIDRs []string `json:"egressAllowedCidrs,omitempty"`
+	// EgressDeniedByExcept are the raw ipBlock.except entries across the selecting
+	// egress rules, sorted and de-duplicated.
+	EgressDeniedByExcept []string `json:"egressDeniedByExcept,omitempty"`
+	// SelectedByIngressPolicy is true when an Ingress-typed NetworkPolicy selects
+	// this workload's pods.
+	SelectedByIngressPolicy bool `json:"selectedByIngressPolicy,omitempty"`
 }
 
 type ResourceRef struct {
@@ -280,6 +383,9 @@ type ResourceReport struct {
 	Classification *AssetClassification `json:"classification,omitempty"`
 	Findings       []Finding            `json:"findings"`
 	Labels         map[string]string    `json:"labels,omitempty"`
+	// Posture holds neutral Kubernetes security-posture facts observed for this
+	// workload (see WorkloadPosture), captured read-only for a downstream evaluator.
+	Posture *WorkloadPosture `json:"posture,omitempty"`
 }
 
 type Summary struct {
