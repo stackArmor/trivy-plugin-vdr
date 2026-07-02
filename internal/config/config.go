@@ -20,8 +20,9 @@ const (
 	SourceECS      = "ecs"
 	SourceImage    = "image"
 
-	FormatJSON  = "json"
-	FormatTable = "table"
+	FormatJSON      = "json"
+	FormatTable     = "table"
+	FormatCycloneDX = "cyclonedx"
 
 	ViewFindings  = "findings"
 	ViewResources = "resources"
@@ -147,7 +148,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.Var(&namespaces, "namespace", "Kubernetes namespace to scan; may be repeated")
 	fs.BoolVar(&cfg.AllNamespaces, "all-namespaces", cfg.AllNamespaces, "scan all namespaces")
 	fs.BoolVar(&cfg.IncludeZeroDaemonSets, "include-zero-daemonsets", cfg.IncludeZeroDaemonSets, "include DaemonSets with zero desired pods")
-	fs.StringVar(&cfg.Format, "format", cfg.Format, "output format: json or table")
+	fs.StringVar(&cfg.Format, "format", cfg.Format, "output format: json, table, or cyclonedx")
 	fs.StringVar(&cfg.View, "view", cfg.View, "report view: findings or resources")
 	fs.StringVar(&cfg.Output, "output", cfg.Output, "write output to file")
 	fs.StringVar(&cfg.CacheDir, "cache-dir", cfg.CacheDir, "cache directory")
@@ -369,10 +370,10 @@ func Default() Config {
 
 func validateFormat(value string) error {
 	switch value {
-	case FormatJSON, FormatTable:
+	case FormatJSON, FormatTable, FormatCycloneDX:
 		return nil
 	default:
-		return fmt.Errorf("invalid format %q: must be json or table", value)
+		return fmt.Errorf("invalid format %q: must be json, table, or cyclonedx", value)
 	}
 }
 
