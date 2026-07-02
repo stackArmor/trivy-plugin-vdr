@@ -25,14 +25,21 @@ The plugin does not currently expose CWE IDs per finding. Add:
 
 ## 2. Taxonomy artifact
 
-- **Default: vendored, no flag.** Each plugin release embeds a specific taxonomy
-  release; the pairing is what was back-tested and certified. Works air-gapped.
-- **Override: `--taxonomy <ref>`** — a local path or OCI reference (the VEX
-  distribution machinery), for updating rows without a plugin release. Must be a
-  pinned digest/tag, never `latest`; signature-verified for OCI refs; a failed
-  load/parse/verify **disables the credit engine loudly** rather than silently
-  falling back to the vendored copy ("which table scored this" must never be
-  ambiguous).
+The plugin is public; the full taxonomy is private. Vendoring the full table
+into the public binary would publish it (embedded YAML is trivially
+extractable). Two tiers:
+
+- **Vendored default: the PUBLIC SNIPPET only.** The taxonomy repo marks a
+  small set of rows `visibility: public` (the same illustrative rows the white
+  paper shows) and exports them as a snippet bundle; the public plugin embeds
+  that. Public users get a working credit engine, the full method, and sample
+  rows — the same "example, not a standard" posture as the archetype catalog.
+- **`--taxonomy <ref>`: the full private table**, pulled as a pinned, signed
+  OCI artifact from the private registry (authenticated), for stackArmor
+  deployments and customers. Never `latest`; a failed load/parse/verify
+  **disables the credit engine loudly** — no silent fallback to the snippet,
+  because "which table scored this" must never be ambiguous. The report header
+  names the tier (`taxonomy: snippet-v0.6.0` vs `taxonomy: full-v0.6.0`).
 - **Never a ConfigMap.** Same governed-configuration line as the PAIN cut
   points: in-band cluster config is an ungoverned scoring knob, and taxonomy
   rows are editable discounts. Changes flow only through the private repo's
