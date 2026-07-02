@@ -25,9 +25,18 @@ The plugin does not currently expose CWE IDs per finding. Add:
 
 ## 2. Taxonomy artifact
 
-- Consumed as a **pinned release** of vdr-control-credit (vendored at build, or
-  fetched as a signed OCI artifact like the VEX distribution pattern). Never a
-  floating branch.
+- **Default: vendored, no flag.** Each plugin release embeds a specific taxonomy
+  release; the pairing is what was back-tested and certified. Works air-gapped.
+- **Override: `--taxonomy <ref>`** — a local path or OCI reference (the VEX
+  distribution machinery), for updating rows without a plugin release. Must be a
+  pinned digest/tag, never `latest`; signature-verified for OCI refs; a failed
+  load/parse/verify **disables the credit engine loudly** rather than silently
+  falling back to the vendored copy ("which table scored this" must never be
+  ambiguous).
+- **Never a ConfigMap.** Same governed-configuration line as the PAIN cut
+  points: in-band cluster config is an ungoverned scoring knob, and taxonomy
+  rows are editable discounts. Changes flow only through the private repo's
+  review and signed releases.
 - `taxonomyVersion` is recorded in the report header and in **every** credit
   evidence line. A score is reproducible only against a named release.
 - Files consumed: `taxonomy/impact-*.yaml`, `taxonomy/attested-class.yaml`,
