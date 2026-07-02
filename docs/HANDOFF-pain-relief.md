@@ -1,14 +1,14 @@
-# Handoff: Control-Credit + Reachability integration for trivy-plugin-vdr
+# Handoff: PAIN Relief + Reachability integration for trivy-plugin-vdr
 
 Written 2026-07-02. Consolidates the design decisions from the PAIN/reachability
 session so the build can proceed (subagent per task). Read this, the
-[control-credit-spec](control-credit-spec.md), and
+[pain-relief-spec](pain-relief-spec.md), and
 [reachability-v2-spec](reachability-v2-spec.md) before starting.
 
 ## Locked decisions
 
 1. **Exploitability downgrade = graduated adjustedEPSS** (implemented in the
-   taxonomy, vdr-control-credit 0.7.0). LEV stays binary. Controls never edit
+   taxonomy, vdr-pain-relief 0.7.0). LEV stays binary. Controls never edit
    published EPSS; an `epss-residual` likelihood row lowers a local estimate
    `adjustedEPSS = EPSS * strongest-residualFactor`, thresholded at 0.70.
    **KEV frozen** (no factor, clock untouched). **Floor** defeated only binary
@@ -30,12 +30,12 @@ session so the build can proceed (subagent per task). Read this, the
 
 ## Repo/PR state
 
-- **vdr-control-credit** (private): PR #1 open, at 0.7.0 — 31 rows, 9 STIG/CIS
+- **vdr-pain-relief** (private): PR #1 open, at 0.7.0 — 31 rows, 9 STIG/CIS
   adapters, classes.yaml (ACE/CRASH), exploitability model, snippet export tool.
   Merge when reviewed.
 - **trivy-plugin-vdr** (public): on branch `codex/route-protocol-alpn-metadata`
   with UNCOMMITTED README + reachability-v2-spec edits (codex session's, leave
-  them). Committed here this session (unpushed): control-credit-spec.md,
+  them). Committed here this session (unpushed): pain-relief-spec.md,
   HANDOFF (this file). Route-protocol/ALPN metadata work is in-flight.
 - **rfc-fedramp-vdr** (public): reachability companion blog PR #4, Gate 3 PR #5
   open. PAIN paper needs the credit-modifier section (HOLD — do not edit the
@@ -44,7 +44,7 @@ session so the build can proceed (subagent per task). Read this, the
 ## Build tasks (one subagent each)
 
 Branch strategy decision needed first: the plugin repo is mid-flight on the
-codex branch. Recommended: cut `feat/control-credit` from the codex branch base
+codex branch. Recommended: cut `feat/PAIN Relief` from the codex branch base
 (or main once codex merges), implement there, rebase before merge. Do NOT build
 on the dirty codex branch directly.
 

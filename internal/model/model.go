@@ -396,7 +396,7 @@ type Summary struct {
 	Findings   int `json:"findings"`
 	// FindingsWithSpecificCWE is the number of active findings that carry at least
 	// one specific CWE. Paired with Findings it is the data-quality metric that
-	// gates real-world control-credit coverage.
+	// gates real-world PAIN Relief coverage.
 	FindingsWithSpecificCWE int            `json:"findingsWithSpecificCwe"`
 	BySeverity              map[string]int `json:"bySeverity,omitempty"`
 	InternetAccessible      int            `json:"internetAccessible,omitempty"`
