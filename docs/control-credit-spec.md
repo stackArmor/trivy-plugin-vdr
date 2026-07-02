@@ -110,17 +110,50 @@ creditJoin(finding, asset):
   inbound edges (source archetype = broker/persistent).
 - **No stacking (governance 4a):** collapse per metric — any number of firing
   rows on MC still yields one High→Low. Evidence lists every row that fired.
-- **Application:** substitute Modified C/I/A into the existing PAIN arithmetic
-  (the memo's Eq. 1 path already implemented in `internal/scoring`); word,
-  N-level, deadline follow. Never touches reachability, LEV inputs (likelihood
-  rows are a separate, later lane), or KEV/BOD 26-04 dates.
+- **Impact application:** substitute Modified C/I/A into the existing PAIN
+  arithmetic (the memo's Eq. 1 path already implemented in `internal/scoring`);
+  word, N-level, deadline follow. Never touches reachability or KEV/BOD 26-04.
+
+### 4a. Exploitability (likelihood lane) — graduated adjustedEPSS
+
+Exploitability stays binary (LEV/NLEV). Controls never edit the published EPSS;
+they lower a local estimate, the mirror of how impact credits move Modified
+C/I/A without touching the base vector.
+
+```text
+adjustedEPSS = EPSS * min(residualFactor of applicable likelihood rows)  # no-stacking v1
+LEV = KEV OR (adjustedEPSS >= EPSS_THRESHOLD) OR (floor AND NOT floorDefeated)
+  # floorDefeated: a CC-LIKE-EDGEAUTH-FLOOR row verified for the asset
+  # KEV: frozen -- residualFactor never applies; LEV stays true; clock untouched
+```
+
+- `epss-residual` rows carry `residualFactor` (0,1); apply only to non-KEV
+  findings whose CWE the row counters (`*` = all). Take the single lowest factor
+  (strongest reduction) — no multiplicative stacking in v1.
+- `floor-defeated` rows (edge-auth) remove only the floor OR-term; they do not
+  touch adjustedEPSS.
+- Both **EPSS (published) and adjustedEPSS (local, with the row cited)** appear in
+  output; the published value is never mutated.
+- **No taxonomy → adjustedEPSS = EPSS, floor as-is → stock LEV/NLEV.**
 
 Evidence line format:
 
 ```text
-"control-credit: CC-RUN-SELINUX-CONFINE v0.6.0 counters CWE-787 via class:ACE (enforcing; process domain httpd_t, policy query 2026-07-02); MC,MI High->Low"
+"control-credit: CC-RUN-SELINUX-CONFINE v0.7.0 counters CWE-787 via class:ACE (enforcing; process domain httpd_t, policy query 2026-07-02); MC,MI High->Low"
+"control-credit: CC-LIKE-EDR-BLOCK v0.7.0 residualFactor 0.85; EPSS 0.74 -> adjustedEPSS 0.63 -> NLEV (blocking EDR enforcing, policy export 2026-07-02)"
 "control-credit near-miss: CC-HA-RECOVERABLE-CRASH blocked -- missing PodDisruptionBudget (replicas=4, zone spread ok, liveness ok)"
 ```
+
+### 4b. Reachability guidelines are NOT implemented (current decision)
+
+The credit engine consumes whatever reachability verdict the plugin already
+produces — it does **not** implement the reachability paper's hard-line Phase B
+changes (pruning requires enforcement-or-attestation; telemetry silence never
+prunes) or the Gate 3 role/two-login tightening. Rationale: FedRAMP is not
+expected to take that hard a line on internet-reachability. The HA carve-out
+reads the `IRV` bit regardless of how strictly it was computed, so the credit
+engine is agnostic to the reachability model version. Revisit only if FedRAMP
+direction changes.
 
 ## 5. Credit-posture report (the near-miss surface)
 
@@ -151,10 +184,19 @@ type ControlCredit struct {
 }
 // scoring.Input gains ModifiedOverrides (per-dimension High->Low flags) fed by
 // the collapsed credit set; recompute path unchanged.
+
+// exploitability: scoring.Input gains AdjustedEPSS + the row that set it;
+// LEV recompute uses adjustedEPSS, KEV frozen.
+type ExploitabilityAdjustment struct {
+    EPSS         float64 `json:"epss"`          // published, untouched
+    AdjustedEPSS float64 `json:"adjustedEpss"`  // local estimate
+    RowID        string  `json:"rowId,omitempty"`
+    FloorDefeated bool   `json:"floorDefeated,omitempty"`
+}
 ```
 
 CycloneDX: `vdr:controlCredit:<metric>` = comma-joined row ids;
-`vdr:taxonomyVersion`.
+`vdr:adjustedEpss`, `vdr:taxonomyVersion`.
 
 ## 7. Milestones
 
@@ -163,20 +205,24 @@ CycloneDX: `vdr:controlCredit:<metric>` = comma-joined row ids;
 | CC0 | CWE surfacing | S | `cwes` populated (Vulnrichment→NVD), JSON/table/VEX surfaces, data-quality counter in header; golden tests incl. noinfo skip |
 | CC1 | Taxonomy loader | S | pinned-release load, schema check, class expansion (incl. vector-conditioned CRASH), version in header |
 | CC2 | K8s verification collectors | M | podspec/image/ingress predicates for the runtime, web, availability rows; per-control verification records in the evidence bundle |
-| CC3 | Join engine + scoring hook | M | credits computed per (finding, asset); no-stacking collapse; ModifiedOverrides recompute; v1 IRV-fallback conservatism test (HA row requires citation/rate-limit when reachability model is v1) |
-| CC4 | Credit-posture report | S | firing/blocked lists with exact failed predicates and benefiting-finding counts |
+| CC3 | Join engine + scoring hook (impact) | M | credits computed per (finding, asset); no-stacking collapse; ModifiedOverrides recompute; v1 IRV-fallback conservatism test (HA row requires citation/rate-limit when reachability model is v1) |
+| CC3b | Exploitability adjustment | S | adjustedEPSS = EPSS * strongest residualFactor; LEV recompute; KEV frozen test; floor-defeat term; both EPSS values in output; no-taxonomy = stock LEV |
+| CC4 | Credit-posture report | S | firing/blocked lists with exact failed predicates and benefiting-finding counts; PAIN and LEV downgrades each shown with row key |
 | CC5 | STIG results ingestion | M | `--stig-results-file` + adapter resolution (requires_all + supplement semantics; supports never fires alone); freshness window fails closed |
 | CC6 | Cloud-managed flags | M | RDS/Cloud SQL/ALB reads behind optional credentials; managed-db-ha and db-tls rows verifiable |
 
-Order: CC0 → CC1 → CC2 → CC3 → CC4, with CC5/CC6 parallel after CC1. CC0 is
-independently valuable (CWE visibility in reports) and should land first
+Order: CC0 → CC1 → CC2 → CC3 → CC3b → CC4, with CC5/CC6 parallel after CC1. CC0
+is independently valuable (CWE visibility in reports) and should land first
 regardless of the rest.
 
 ## 8. Non-goals
 
 - No credit without a specific CWE (or class member) match — generic CWE-20 and
   noinfo never key.
-- No reachability or KEV interaction; the likelihood lane is out of scope here.
+- No mutation of published EPSS or the CVSS base vector; adjustedEPSS is a
+  separate local field. No KEV interaction (frozen). No reachability
+  determination changes — the reachability hard-line guidelines are not
+  implemented (§4b).
 - No runtime LLM anywhere in the decision path; attested artifacts enter as
   signed inputs like all other evidence.
 - No taxonomy editing from the plugin; rows change only via the private repo's
