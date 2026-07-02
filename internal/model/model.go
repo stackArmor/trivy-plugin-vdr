@@ -146,18 +146,24 @@ type Exposure struct {
 }
 
 type RouteMetadata struct {
-	Kind             string         `json:"kind,omitempty"`
-	Namespace        string         `json:"namespace,omitempty"`
-	Name             string         `json:"name,omitempty"`
-	Hostnames        []string       `json:"hostnames,omitempty"`
-	Paths            []RoutePath    `json:"paths,omitempty"`
-	Headers          []RouteHeader  `json:"headers,omitempty"`
-	Rewrites         []RouteRewrite `json:"rewrites,omitempty"`
-	BackendService   string         `json:"backendService,omitempty"`
-	BackendNamespace string         `json:"backendNamespace,omitempty"`
-	URLMap           string         `json:"urlMap,omitempty"`
-	TargetProxy      string         `json:"targetProxy,omitempty"`
-	LoadBalancerIP   string         `json:"loadBalancerIp,omitempty"`
+	Kind                   string         `json:"kind,omitempty"`
+	Namespace              string         `json:"namespace,omitempty"`
+	Name                   string         `json:"name,omitempty"`
+	Hostnames              []string       `json:"hostnames,omitempty"`
+	Paths                  []RoutePath    `json:"paths,omitempty"`
+	Headers                []RouteHeader  `json:"headers,omitempty"`
+	Rewrites               []RouteRewrite `json:"rewrites,omitempty"`
+	BackendService         string         `json:"backendService,omitempty"`
+	BackendNamespace       string         `json:"backendNamespace,omitempty"`
+	URLMap                 string         `json:"urlMap,omitempty"`
+	TargetProxy            string         `json:"targetProxy,omitempty"`
+	LoadBalancerIP         string         `json:"loadBalancerIp,omitempty"`
+	FrontendProtocol       string         `json:"frontendProtocol,omitempty"`
+	BackendProtocol        string         `json:"backendProtocol,omitempty"`
+	BackendProtocolVersion string         `json:"backendProtocolVersion,omitempty"`
+	BackendTLS             bool           `json:"backendTls,omitempty"`
+	ALPN                   []string       `json:"alpn,omitempty"`
+	ALPNPolicy             string         `json:"alpnPolicy,omitempty"`
 }
 
 type RoutePath struct {
