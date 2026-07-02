@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/controlcredit"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
@@ -35,6 +36,65 @@ type Options struct {
 	TaxonomyLabel string
 	// TaxonomyVersion is the loaded taxonomy release for the header.
 	TaxonomyVersion string
+	// Taxonomy is the loaded control-credit taxonomy driving the join/scoring
+	// engine (CC2/CC3/CC3b). When nil or disabled the credit engine is inert and
+	// scoring is byte-identical to a run with no taxonomy.
+	Taxonomy *controlcredit.Taxonomy
+}
+
+// creditEngine bundles the loaded taxonomy with the per-workload verification
+// facts, so scoreAsset can run the control-credit join for a (finding, asset).
+// A nil/disabled taxonomy makes every method inert.
+type creditEngine struct {
+	tax   *controlcredit.Taxonomy
+	facts map[string]*model.WorkloadFacts // keyed by workloadLabelKey
+}
+
+func (e creditEngine) enabled() bool { return e.tax != nil && e.tax.Enabled }
+
+// assetFacts assembles the verification facts for one asset from its workload's
+// collected WorkloadFacts and its exposure. Cloud Run assets map to the
+// gcp-managed platform, which has no k8s collector, so nothing verifies there.
+func (e creditEngine) assetFacts(ref model.ResourceRef, internetReachable bool) controlcredit.AssetFacts {
+	platform := controlcredit.PlatformKubernetes
+	if ref.Provider == "gcp-cloud-run" {
+		platform = controlcredit.PlatformGCPManaged
+	}
+	facts := controlcredit.AssetFacts{Platform: platform, InternetReachable: internetReachable, Replicas: -1}
+	wf := e.facts[workloadLabelKey(ref)]
+	if wf == nil {
+		return facts
+	}
+	facts.ReadOnlyRootFS = wf.AllReadOnlyRootFS
+	facts.WritableAppVolume = wf.WritableAppVolume
+	facts.EnvSecret = wf.EnvSecret
+	facts.ProjectedTokenTTLSeconds = wf.ProjectedTokenTTLSeconds
+	facts.ShortLivedIdentity = wf.ShortLivedIdentity
+	facts.HasLivenessProbe = wf.HasLivenessProbe
+	facts.ZoneSpread = wf.ZoneSpread
+	facts.HasPodDisruptionBudget = wf.HasPodDisruptionBudget
+	facts.EgressDefaultDeny = wf.EgressDefaultDeny
+	facts.ImdsBlocked = wf.ImdsBlocked
+	if wf.Replicas != nil {
+		facts.Replicas = int(*wf.Replicas)
+	}
+	return facts
+}
+
+// workloadFactsIndex maps each workload identity to its collected WorkloadFacts,
+// so an asset (container-level ref) resolves the facts of the workload that owns
+// it. Empty when no taxonomy is in use.
+func workloadFactsIndex(inventory *model.Inventory) map[string]*model.WorkloadFacts {
+	index := map[string]*model.WorkloadFacts{}
+	if inventory == nil {
+		return index
+	}
+	for i := range inventory.Resources {
+		if inventory.Resources[i].Facts != nil {
+			index[workloadLabelKey(inventory.Resources[i].Resource)] = inventory.Resources[i].Facts
+		}
+	}
+	return index
 }
 
 func Build(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, options Options) model.Report {
@@ -53,6 +113,7 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	if inventory != nil && inventory.Namespaces != nil {
 		nsLabels = inventory.Namespaces
 	}
+	engine := creditEngine{tax: options.Taxonomy, facts: workloadFactsIndex(inventory)}
 
 	class := sc.Defaults.Class
 	if class == "" {
@@ -65,13 +126,13 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 
 	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS, options.SuppressEnrichments)
 	active, suppressed := partitionFindings(filtered)
-	resourceReports := buildResourceReports(inventory, active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly)
+	resourceReports := buildResourceReports(inventory, active, exposures, engine, sc, labelIndex, nsLabels, options.ClassificationOnly)
 	report := model.Report{
 		GeneratedAt:        options.GeneratedAt,
 		ContextName:        contextName,
 		Class:              class,
 		Summary:            buildSummary(inventory, active, resourceReports, options),
-		SuppressedFindings: suppressedWithWouldHaveBeen(suppressed, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly),
+		SuppressedFindings: suppressedWithWouldHaveBeen(suppressed, exposures, engine, sc, labelIndex, nsLabels, options.ClassificationOnly),
 		Warnings:           append([]string(nil), options.Warnings...),
 		ClassificationOnly: options.ClassificationOnly,
 	}
@@ -80,7 +141,7 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		return report
 	}
 
-	report.Findings = findingsWithBestExposure(active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly)
+	report.Findings = findingsWithBestExposure(active, exposures, engine, sc, labelIndex, nsLabels, options.ClassificationOnly)
 	return report
 }
 
@@ -116,9 +177,11 @@ func workloadLabelKey(ref model.ResourceRef) string {
 }
 
 // scoreAsset computes the PAIN and FedRAMP remediation deadline for a finding on
-// a specific resource, given that resource's internet reachability.
-func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, ref model.ResourceRef, finding model.Finding, internetReachable bool) (*model.Pain, *model.Remediation) {
-	res := sc.Score(scoring.Input{
+// a specific resource, given that resource's internet reachability. When a
+// taxonomy is loaded it also runs the control-credit join (impact + exploitability)
+// and returns the applied credits and exploitability adjustment.
+func scoreAsset(eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]map[string]string, ref model.ResourceRef, finding model.Finding, internetReachable bool) (*model.Pain, *model.Remediation, []model.ControlCredit, *model.ExploitabilityAdjustment) {
+	in := scoring.Input{
 		CVSSVector:        finding.CVSSVector,
 		Severity:          finding.Severity,
 		Namespace:         ref.Namespace,
@@ -129,7 +192,28 @@ func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, 
 		EPSS:              epssScore(finding.EPSS),
 		Exploitation:      exploitationOf(finding.Vulnrichment),
 		InternetReachable: internetReachable,
-	})
+	}
+	var credits []model.ControlCredit
+	var exploit *model.ExploitabilityAdjustment
+	if eng.enabled() {
+		verified := eng.tax.VerifyControls(eng.assetFacts(ref, internetReachable))
+		jr := eng.tax.Join(controlcredit.JoinInput{
+			CWEs:              finding.CWEs,
+			CVSSVector:        finding.CVSSVector,
+			EPSS:              epssScore(finding.EPSS),
+			KEV:               isKEV(finding),
+			InternetReachable: internetReachable,
+			Verified:          verified,
+			LEVThreshold:      sc.LEVEPSSThreshold,
+		})
+		in.ModifiedImpact = scoring.ModifiedImpact{MC: jr.MC, MI: jr.MI, MA: jr.MA}
+		lev := jr.LEV
+		in.LEV = &lev
+		credits = jr.Credits
+		adj := jr.Exploitability
+		exploit = &adj
+	}
+	res := sc.Score(in)
 	pain := &model.Pain{
 		Tier:            res.Tier,
 		Word:            res.Word,
@@ -150,7 +234,13 @@ func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, 
 		DeadlineDays: res.DeadlineDays,
 		Deadline:     res.RemediationLabel,
 	}
-	return pain, rem
+	return pain, rem, credits, exploit
+}
+
+// isKEV reports whether a finding is under active exploitation (CISA KEV / BOD
+// 26-04). Frozen: the control-credit likelihood lane never lowers it.
+func isKEV(finding model.Finding) bool {
+	return strings.EqualFold(strings.TrimSpace(exploitationOf(finding.Vulnrichment)), "active")
 }
 
 func namespaceLabelsForRef(nsLabels map[string]map[string]string, ref model.ResourceRef) map[string]string {
@@ -392,7 +482,7 @@ func filterFindings(findings []model.Finding, minSeverity string, minEPSS float6
 	return filtered
 }
 
-func buildResourceReports(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.ResourceReport {
+func buildResourceReports(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.ResourceReport {
 	if inventory == nil {
 		return nil
 	}
@@ -404,7 +494,7 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 			Labels:   copyStringMap(inv.labels),
 		}
 		if classificationOnly {
-			report.Classification = classifyAsset(sc, idx, nsLabels, ref)
+			report.Classification = classifyAsset(eng, sc, idx, nsLabels, ref)
 		}
 		if exposure, ok := exposures[ref]; ok {
 			value := exposure
@@ -422,7 +512,7 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 					report.Exposure = &value
 				}
 				if classificationOnly {
-					report.Classification = classifyAsset(sc, idx, nsLabels, ref)
+					report.Classification = classifyAsset(eng, sc, idx, nsLabels, ref)
 				}
 				reports[ref] = report
 			}
@@ -434,14 +524,18 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 				scoped.Exposure = &value
 				scoped.Affected[0].Exposure = &value
 			}
-			pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(scoped.Exposure))
+			pain, rem, credits, exploit := scoreAsset(eng, sc, idx, nsLabels, ref, finding, internetReachable(scoped.Exposure))
 			if classificationOnly {
 				scoped.Affected[0].Classification = classificationFromScore(pain, rem)
 			} else {
 				scoped.Pain = pain
 				scoped.Remediation = rem
+				scoped.ControlCredits = credits
+				scoped.Exploitability = exploit
 				scoped.Affected[0].Pain = pain
 				scoped.Affected[0].Remediation = rem
+				scoped.Affected[0].ControlCredits = credits
+				scoped.Affected[0].Exploitability = exploit
 			}
 			report.Findings = append(report.Findings, scoped)
 		}
@@ -516,38 +610,46 @@ func buildSummary(inventory *model.Inventory, findings []model.Finding, resource
 	return summary
 }
 
-func findingsWithBestExposure(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Finding {
+func findingsWithBestExposure(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Finding {
 	enriched := make([]model.Finding, len(findings))
 	for i, finding := range findings {
 		enriched[i] = cloneFinding(finding)
-		enriched[i].Affected = affectedDetails(finding, exposures, sc, idx, nsLabels, classificationOnly)
+		enriched[i].Affected = affectedDetails(finding, exposures, eng, sc, idx, nsLabels, classificationOnly)
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
 		if !classificationOnly {
-			pain, rem := worstAsset(enriched[i].Affected)
-			enriched[i].Pain = pain
-			enriched[i].Remediation = rem
+			worst := worstAsset(enriched[i].Affected)
+			if worst != nil {
+				enriched[i].Pain = worst.Pain
+				enriched[i].Remediation = worst.Remediation
+				enriched[i].ControlCredits = worst.ControlCredits
+				enriched[i].Exploitability = worst.Exploitability
+			}
 		}
 	}
 	return enriched
 }
 
-func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Finding {
+func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Finding {
 	enriched := make([]model.Finding, len(findings))
 	for i, finding := range findings {
 		enriched[i] = cloneFinding(finding)
-		enriched[i].Affected = affectedDetails(finding, exposures, sc, idx, nsLabels, classificationOnly)
+		enriched[i].Affected = affectedDetails(finding, exposures, eng, sc, idx, nsLabels, classificationOnly)
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
 		if !classificationOnly {
-			pain, rem := worstAsset(enriched[i].Affected)
-			enriched[i].WouldHaveBeenPain = pain
-			enriched[i].WouldHaveBeenRemediation = rem
+			worst := worstAsset(enriched[i].Affected)
+			if worst != nil {
+				enriched[i].WouldHaveBeenPain = worst.Pain
+				enriched[i].WouldHaveBeenRemediation = worst.Remediation
+			}
 		}
 		enriched[i].Pain = nil
 		enriched[i].Remediation = nil
+		enriched[i].ControlCredits = nil
+		enriched[i].Exploitability = nil
 		for j := range enriched[i].Affected {
 			enriched[i].Affected[j].Pain = nil
 			enriched[i].Affected[j].Remediation = nil
@@ -556,7 +658,7 @@ func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.R
 	return enriched
 }
 
-func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Affected {
+func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]model.Exposure, eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Affected {
 	details := make([]model.Affected, 0, len(finding.AffectedResources))
 	for _, ref := range finding.AffectedResources {
 		detail := model.Affected{Resource: ref}
@@ -564,11 +666,13 @@ func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]mode
 			value := exposure
 			detail.Exposure = &value
 		}
-		pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(detail.Exposure))
+		pain, rem, credits, exploit := scoreAsset(eng, sc, idx, nsLabels, ref, finding, internetReachable(detail.Exposure))
 		if classificationOnly {
 			detail.Classification = classificationFromScore(pain, rem)
 		} else {
 			detail.Pain, detail.Remediation = pain, rem
+			detail.ControlCredits = credits
+			detail.Exploitability = exploit
 		}
 		details = append(details, detail)
 	}
@@ -643,8 +747,8 @@ func formatAffectedArchetypes(affected []model.Affected) string {
 	return strings.Join(values, ",")
 }
 
-func classifyAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, ref model.ResourceRef) *model.AssetClassification {
-	pain, rem := scoreAsset(sc, idx, nsLabels, ref, model.Finding{}, false)
+func classifyAsset(eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]map[string]string, ref model.ResourceRef) *model.AssetClassification {
+	pain, rem, _, _ := scoreAsset(eng, sc, idx, nsLabels, ref, model.Finding{}, false)
 	return classificationFromScore(pain, rem)
 }
 
@@ -654,11 +758,11 @@ func stripEnrichmentFields(finding *model.Finding) {
 	finding.CWEs = nil
 }
 
-// worstAsset returns the PAIN and remediation of the most urgent affected
-// resource: the one with the shortest FedRAMP deadline (a missing deadline ranks
-// last), breaking ties by highest PAIN rank. Pain and remediation are taken from
-// the same affected entry so they stay consistent.
-func worstAsset(affected []model.Affected) (*model.Pain, *model.Remediation) {
+// worstAsset returns a copy of the most urgent affected resource: the one with
+// the shortest FedRAMP deadline (a missing deadline ranks last), breaking ties by
+// highest PAIN rank. The whole entry is returned so PAIN, remediation, control
+// credits, and exploitability all come from the same asset and stay consistent.
+func worstAsset(affected []model.Affected) *model.Affected {
 	worst := -1
 	for i := range affected {
 		if affected[i].Pain == nil {
@@ -669,19 +773,23 @@ func worstAsset(affected []model.Affected) (*model.Pain, *model.Remediation) {
 		}
 	}
 	if worst < 0 {
-		return nil, nil
+		return nil
 	}
-	var pain *model.Pain
+	out := model.Affected{}
 	if affected[worst].Pain != nil {
 		p := *affected[worst].Pain
-		pain = &p
+		out.Pain = &p
 	}
-	var rem *model.Remediation
 	if affected[worst].Remediation != nil {
 		r := *affected[worst].Remediation
-		rem = &r
+		out.Remediation = &r
 	}
-	return pain, rem
+	out.ControlCredits = append([]model.ControlCredit(nil), affected[worst].ControlCredits...)
+	if affected[worst].Exploitability != nil {
+		e := *affected[worst].Exploitability
+		out.Exploitability = &e
+	}
+	return &out
 }
 
 func moreUrgent(a, b model.Affected) bool {
@@ -735,6 +843,11 @@ func cloneFinding(finding model.Finding) model.Finding {
 	clone.CWEs = append([]string(nil), finding.CWEs...)
 	clone.AffectedResources = append([]model.ResourceRef(nil), finding.AffectedResources...)
 	clone.Affected = cloneAffected(finding.Affected)
+	clone.ControlCredits = append([]model.ControlCredit(nil), finding.ControlCredits...)
+	if finding.Exploitability != nil {
+		value := *finding.Exploitability
+		clone.Exploitability = &value
+	}
 	if finding.EPSS != nil {
 		value := *finding.EPSS
 		clone.EPSS = &value
@@ -792,6 +905,11 @@ func cloneAffected(affected []model.Affected) []model.Affected {
 		if item.Remediation != nil {
 			value := *item.Remediation
 			clone[i].Remediation = &value
+		}
+		clone[i].ControlCredits = append([]model.ControlCredit(nil), item.ControlCredits...)
+		if item.Exploitability != nil {
+			value := *item.Exploitability
+			clone[i].Exploitability = &value
 		}
 	}
 	return clone

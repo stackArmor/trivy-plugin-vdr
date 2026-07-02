@@ -31,6 +31,51 @@ type ResourceInventory struct {
 	Labels     map[string]string `json:"labels,omitempty"`
 	Images     []ContainerImage  `json:"images"`
 	Conditions []string          `json:"conditions,omitempty"`
+	// Facts holds the machine-observable workload properties the control-credit
+	// verification collectors evaluate (replicas, probes, env-secrets, writable
+	// mounts, egress posture, HA). Populated best-effort by the k8s collector;
+	// nil when no taxonomy is in use or nothing was observed.
+	Facts *WorkloadFacts `json:"facts,omitempty"`
+}
+
+// WorkloadFacts are the pod-spec- and cluster-object-derived signals the
+// control-credit verifier (CC2) reads to prove a control is enforced on a
+// workload. Every field is fail-closed: an unset/false value means "not
+// observed", so a control that depends on it verifies as not-verified rather
+// than being assumed present.
+type WorkloadFacts struct {
+	// Replicas is the desired replica count (Deployment/StatefulSet). nil when the
+	// workload kind carries no replica count (DaemonSet/Job/Pod).
+	Replicas *int32 `json:"replicas,omitempty"`
+	// HasLivenessProbe is true when at least one container declares a liveness probe.
+	HasLivenessProbe bool `json:"hasLivenessProbe,omitempty"`
+	// AllReadOnlyRootFS is true when every (non-init) container sets
+	// securityContext.readOnlyRootFilesystem=true.
+	AllReadOnlyRootFS bool `json:"allReadOnlyRootFilesystem,omitempty"`
+	// WritableAppVolume is true when a writable volume (emptyDir/PVC/tmpfs) is
+	// mounted read-write into a container, which defeats the read-only-rootfs and
+	// exec-restricted-paths conditions.
+	WritableAppVolume bool `json:"writableAppVolume,omitempty"`
+	// EnvSecret is true when any container sources an environment variable from a
+	// Secret (env.valueFrom.secretKeyRef or envFrom.secretRef).
+	EnvSecret bool `json:"envSecret,omitempty"`
+	// ProjectedTokenTTLSeconds is the smallest projected service-account-token
+	// expirationSeconds observed (0 when none is projected).
+	ProjectedTokenTTLSeconds int64 `json:"projectedTokenTtlSeconds,omitempty"`
+	// ShortLivedIdentity is true when a cloud short-lived-identity annotation is
+	// present (IRSA eks.amazonaws.com/role-arn, GKE iam.gke.io/gcp-service-account).
+	ShortLivedIdentity bool `json:"shortLivedIdentity,omitempty"`
+	// ZoneSpread is true when the pod template requires cross-zone spread
+	// (topologySpreadConstraints on topology.kubernetes.io/zone with
+	// whenUnsatisfiable=DoNotSchedule, or required zone anti-affinity).
+	ZoneSpread bool `json:"zoneSpread,omitempty"`
+	// EgressDefaultDeny is true when a NetworkPolicy with an Egress policyType
+	// selects the workload and its allow-list contains no 0.0.0.0/0 destination.
+	EgressDefaultDeny bool `json:"egressDefaultDeny,omitempty"`
+	// ImdsBlocked is true when a NetworkPolicy denies egress to 169.254.169.254/32.
+	ImdsBlocked bool `json:"imdsBlocked,omitempty"`
+	// HasPodDisruptionBudget is true when a PodDisruptionBudget selects the workload.
+	HasPodDisruptionBudget bool `json:"hasPodDisruptionBudget,omitempty"`
 }
 
 type ResourceRef struct {
@@ -104,6 +149,15 @@ type Finding struct {
 	// findings view it is the worst PAIN across all affected resources; in the
 	// resources view it is the PAIN for the single scoped resource.
 	Pain *Pain `json:"pain,omitempty"`
+	// ControlCredits lists the control-credit taxonomy rows applied to this finding
+	// on the scored asset (the impact lane). In the findings view these are the
+	// credits for the worst-PAIN affected resource. Empty when no taxonomy is loaded
+	// or nothing fired.
+	ControlCredits []ControlCredit `json:"controlCredits,omitempty"`
+	// Exploitability surfaces the control-credit likelihood-lane adjustment
+	// (published EPSS plus the local adjustedEPSS the LEV recompute used). nil when
+	// no taxonomy is loaded.
+	Exploitability *ExploitabilityAdjustment `json:"exploitability,omitempty"`
 	// Remediation is the FedRAMP VDR-TFR-PVR deadline for this finding, paired with
 	// Pain (worst across affected in the findings view; per-resource otherwise).
 	Remediation *Remediation `json:"remediation,omitempty"`
@@ -218,6 +272,36 @@ type Affected struct {
 	Classification *AssetClassification `json:"classification,omitempty"`
 	Pain           *Pain                `json:"pain,omitempty"`
 	Remediation    *Remediation         `json:"remediation,omitempty"`
+	// ControlCredits are the impact-lane taxonomy rows applied to this finding on
+	// this specific asset; Exploitability is the likelihood-lane adjustment.
+	ControlCredits []ControlCredit           `json:"controlCredits,omitempty"`
+	Exploitability *ExploitabilityAdjustment `json:"exploitability,omitempty"`
+}
+
+// ControlCredit records one control-credit taxonomy row applied to a
+// (finding, asset): a machine-verified control that lowered one or more Modified
+// impact metrics (MC|MI|MA) from High to Low. Every applied credit stamps the
+// row id and taxonomy version so a score is reproducible against a named release.
+type ControlCredit struct {
+	RowID           string   `json:"rowId"`
+	TaxonomyVersion string   `json:"taxonomyVersion"`
+	Metrics         []string `json:"metrics"`            // MC|MI|MA
+	ViaClass        string   `json:"viaClass,omitempty"` // e.g. "class:ACE" when matched through a class
+	Evidence        []string `json:"evidence"`
+}
+
+// ExploitabilityAdjustment surfaces the control-credit likelihood-lane result:
+// the published EPSS (never mutated) and the local adjustedEPSS estimate the LEV
+// recompute used, plus the row that set it. adjustedEPSS = max(EPSS *
+// PRODUCT(residualFactors), EPSS * STACKING_FLOOR); KEV findings are frozen
+// (adjustedEpss == epss). FloorDefeated is true when a CC-LIKE-EDGEAUTH-FLOOR row
+// is verified for the asset.
+type ExploitabilityAdjustment struct {
+	EPSS          float64  `json:"epss"`         // published, untouched
+	AdjustedEPSS  float64  `json:"adjustedEpss"` // local estimate
+	RowIDs        []string `json:"rowIds,omitempty"`
+	FloorDefeated bool     `json:"floorDefeated,omitempty"`
+	KEVFrozen     bool     `json:"kevFrozen,omitempty"`
 }
 
 type AssetClassification struct {

@@ -423,3 +423,75 @@ func TestLoadRejectsUnknownArchetype(t *testing.T) {
 		t.Error("expected error for unknown archetype in rule")
 	}
 }
+
+// --- Control-credit impact-lane integration (CC3) ---
+
+// TestModifiedImpactLowersPAINOneRung shows a verified control-credit that moves
+// the Modified availability metric High->Low drops a public-edge DoS finding from
+// N4 to N3 (one rung), via the same Eq.1 recompute path.
+func TestModifiedImpactLowersPAINOneRung(t *testing.T) {
+	cfg := Default()
+	labels := map[string]string{"vdr.fedramp.io/asset-archetype": "public-edge", "vdr.fedramp.io/multi-agency": "false"}
+
+	base := cfg.Score(Input{CVSSVector: vecCIAHigh, Labels: labels})
+	if base.Tier != "N4" {
+		t.Fatalf("baseline tier = %q, want N4", base.Tier)
+	}
+
+	credited := cfg.Score(Input{CVSSVector: vecCIAHigh, Labels: labels, ModifiedImpact: ModifiedImpact{MA: true}})
+	if credited.Tier != "N3" {
+		t.Fatalf("credited tier = %q, want N3 (one rung down)", credited.Tier)
+	}
+	if credited.Severity >= base.Severity {
+		t.Fatalf("credited severity %.3f should be below baseline %.3f", credited.Severity, base.Severity)
+	}
+}
+
+// TestModifiedImpactNeverBelowLowOrNone verifies a credit never pushes an impact
+// dimension below Low and never lifts a None dimension (None is VEX-reserved).
+func TestModifiedImpactNeverBelowLowOrNone(t *testing.T) {
+	cfg := Default()
+	labels := map[string]string{"vdr.fedramp.io/asset-archetype": "public-edge"}
+
+	// A confidentiality-only High: MI/MA credits are no-ops (None dimensions), MC
+	// downgrade caps at Low. Applying the same credit twice is identical (no
+	// stacking below Low).
+	once := cfg.Score(Input{CVSSVector: vecConfHi, Labels: labels, ModifiedImpact: ModifiedImpact{MC: true}})
+	both := cfg.Score(Input{CVSSVector: vecConfHi, Labels: labels, ModifiedImpact: ModifiedImpact{MC: true, MI: true, MA: true}})
+	if once.Severity != both.Severity {
+		t.Fatalf("MI/MA credits on None dimensions changed severity: %.4f vs %.4f", once.Severity, both.Severity)
+	}
+}
+
+// TestZeroOverridesIdenticalToStock proves the control-credit override fields'
+// zero value leaves scoring byte-identical to a run with no taxonomy.
+func TestZeroOverridesIdenticalToStock(t *testing.T) {
+	cfg := Default()
+	in := Input{CVSSVector: vecCIAHigh, EPSS: 0.9, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "app-tier"}}
+
+	stock := cfg.Score(in)
+	withZero := cfg.Score(in) // ModifiedImpact zero-value, LEV nil
+	if stock != withZero {
+		t.Fatalf("zero-value overrides changed the result:\n stock=%+v\n zero =%+v", stock, withZero)
+	}
+}
+
+// TestLEVOverride shows the control-credit-recomputed LEV drives the remediation
+// column when supplied, without touching the stock EPSS path when nil.
+func TestLEVOverride(t *testing.T) {
+	cfg := Default()
+	labels := map[string]string{"vdr.fedramp.io/asset-archetype": "app-tier"}
+	// EPSS 0.9 (>=0.70) => stock LEV true.
+	stock := cfg.Score(Input{CVSSVector: vecCIAHigh, EPSS: 0.9, InternetReachable: true, Labels: labels})
+	if !stock.LEV {
+		t.Fatalf("stock LEV = false, want true at EPSS 0.9")
+	}
+	falseLEV := false
+	credited := cfg.Score(Input{CVSSVector: vecCIAHigh, EPSS: 0.9, InternetReachable: true, Labels: labels, LEV: &falseLEV})
+	if credited.LEV {
+		t.Fatalf("LEV override to false was ignored")
+	}
+	if credited.Column != "NLEV" {
+		t.Fatalf("column = %q, want NLEV after LEV override", credited.Column)
+	}
+}

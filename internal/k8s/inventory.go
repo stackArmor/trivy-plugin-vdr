@@ -25,6 +25,11 @@ type Options struct {
 	// fedramp-vdr-trivy/vdr-fedramp.
 	ClusterConfigMapNamespace string
 	ClusterConfigMapName      string
+	// CollectWorkloadFacts enables control-credit verification-fact collection
+	// (pod-spec signals plus NetworkPolicies and PodDisruptionBudgets). Off by
+	// default; main turns it on only when a taxonomy is loaded, so a run with no
+	// --taxonomy makes no extra API calls and produces identical output.
+	CollectWorkloadFacts bool
 }
 
 const (
@@ -72,8 +77,9 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 	}
 
 	builder := inventoryBuilder{
-		inventory: &model.Inventory{ContextName: c.ContextName},
-		images:    map[string]*model.ImageInventory{},
+		inventory:    &model.Inventory{ContextName: c.ContextName},
+		images:       map[string]*model.ImageInventory{},
+		collectFacts: opts.CollectWorkloadFacts,
 	}
 
 	namespaces, err := namespacesForCollection(opts)
@@ -107,6 +113,15 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 	// absent.
 	c.collectNamespaceMetadata(ctx, opts, &builder)
 	c.collectClusterDefaults(ctx, opts, &builder)
+
+	// Control-credit verification facts drawn from cluster-scoped objects
+	// (NetworkPolicies, PodDisruptionBudgets). Best-effort like the metadata above.
+	if opts.CollectWorkloadFacts {
+		for _, namespace := range namespaces {
+			c.collectNetworkPolicyFacts(ctx, namespace, &builder)
+			c.collectPodDisruptionBudgetFacts(ctx, namespace, &builder)
+		}
+	}
 
 	return builder.finish(), nil
 }
@@ -240,7 +255,7 @@ func (c *Collector) collectDeployments(ctx context.Context, namespace string, bu
 	}
 	for _, deployment := range deployments.Items {
 		ref := workloadRef("apps/v1", "Deployment", deployment.Namespace, deployment.Name)
-		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations, deployment.Labels, deployment.Spec.Template.Labels)
+		builder.addResourceWithReplicas(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations, deployment.Labels, deployment.Spec.Template.Labels, deployment.Spec.Replicas)
 	}
 	return nil
 }
@@ -252,7 +267,7 @@ func (c *Collector) collectStatefulSets(ctx context.Context, namespace string, b
 	}
 	for _, statefulSet := range statefulSets.Items {
 		ref := workloadRef("apps/v1", "StatefulSet", statefulSet.Namespace, statefulSet.Name)
-		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations, statefulSet.Labels, statefulSet.Spec.Template.Labels)
+		builder.addResourceWithReplicas(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations, statefulSet.Labels, statefulSet.Spec.Template.Labels, statefulSet.Spec.Replicas)
 	}
 	return nil
 }
@@ -306,8 +321,9 @@ func workloadRef(apiVersion, kind, namespace, name string) model.ResourceRef {
 }
 
 type inventoryBuilder struct {
-	inventory *model.Inventory
-	images    map[string]*model.ImageInventory
+	inventory    *model.Inventory
+	images       map[string]*model.ImageInventory
+	collectFacts bool
 }
 
 // addResource records a workload. workloadLabels are the labels on the workload
@@ -316,6 +332,10 @@ type inventoryBuilder struct {
 // template winning on conflict, so VDR archetype tags applied at either level
 // (Helm values.labels render to the workload object) are visible to scoring.
 func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string) {
+	b.addResourceWithReplicas(resource, spec, annotations, workloadLabels, templateLabels, nil)
+}
+
+func (b *inventoryBuilder) addResourceWithReplicas(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string, replicas *int32) {
 	resourceInventory := model.ResourceInventory{Resource: resource, Labels: mergeLabels(workloadLabels, templateLabels)}
 	for _, c := range spec.Containers {
 		b.addContainer(&resourceInventory, resource, spec, annotations, c, "container")
@@ -324,6 +344,9 @@ func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.P
 		b.addContainer(&resourceInventory, resource, spec, annotations, c, "initContainer")
 	}
 	if len(resourceInventory.Images) > 0 {
+		if b.collectFacts {
+			resourceInventory.Facts = podSpecFacts(spec, annotations, replicas)
+		}
 		b.inventory.Resources = append(b.inventory.Resources, resourceInventory)
 	}
 }

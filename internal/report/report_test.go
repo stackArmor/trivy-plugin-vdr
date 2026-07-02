@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"context"
+
+	"github.com/stackArmor/trivy-plugin-vdr/internal/controlcredit"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
@@ -494,4 +497,58 @@ func sampleContainerRef() model.ResourceRef {
 
 func fixedTime() time.Time {
 	return time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+}
+
+// TestNoTaxonomyByteIdenticalScoring proves the control-credit engine is inert by
+// default: a report built with no taxonomy is byte-identical to one built with an
+// explicitly disabled taxonomy, and carries no control-credit fields.
+func TestNoTaxonomyByteIdenticalScoring(t *testing.T) {
+	inv := sampleInventory()
+	findings := []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}
+	exposures := map[model.ResourceRef]model.Exposure{sampleContainerRef(): {InternetAccessible: true}}
+
+	none := Build(inv, findings, exposures, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+	disabled := Build(inv, findings, exposures, Options{GeneratedAt: fixedTime(), View: ViewFindings, Taxonomy: controlcredit.Disabled()})
+
+	nb, err := json.Marshal(none)
+	if err != nil {
+		t.Fatalf("marshal none: %v", err)
+	}
+	db, err := json.Marshal(disabled)
+	if err != nil {
+		t.Fatalf("marshal disabled: %v", err)
+	}
+	if !bytes.Equal(nb, db) {
+		t.Fatalf("no-taxonomy vs disabled-taxonomy scoring diverged:\n none=%s\n disabled=%s", nb, db)
+	}
+	if strings.Contains(string(nb), "controlCredits") || strings.Contains(string(nb), "exploitability") {
+		t.Fatalf("no-taxonomy report leaked control-credit fields: %s", nb)
+	}
+}
+
+// TestTaxonomyAttachesExploitability proves the credit engine is wired into the
+// report: with a taxonomy loaded, each finding carries an exploitability
+// adjustment that echoes the published EPSS unchanged.
+func TestTaxonomyAttachesExploitability(t *testing.T) {
+	tax, err := controlcredit.Load(context.Background(), "../controlcredit/testdata/taxonomy")
+	if err != nil || !tax.Enabled {
+		t.Fatalf("load fixture taxonomy: %v (enabled=%v)", err, tax.Enabled)
+	}
+	inv := sampleInventory()
+	f := sampleFinding("CVE-2026-0001", "HIGH", 0.9)
+	f.CWEs = []string{"CWE-94"}
+	f.Vulnrichment = &model.Vulnrichment{Exploitation: "none"}
+	exposures := map[model.ResourceRef]model.Exposure{sampleContainerRef(): {InternetAccessible: true}}
+
+	got := Build(inv, []model.Finding{f}, exposures, Options{GeneratedAt: fixedTime(), View: ViewFindings, Taxonomy: tax})
+	if len(got.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(got.Findings))
+	}
+	adj := got.Findings[0].Exploitability
+	if adj == nil {
+		t.Fatalf("exploitability not attached with a taxonomy loaded")
+	}
+	if adj.EPSS != 0.9 || adj.AdjustedEPSS != 0.9 {
+		t.Fatalf("published EPSS mutated or wrong: %+v", adj)
+	}
 }

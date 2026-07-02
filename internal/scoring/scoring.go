@@ -115,7 +115,29 @@ type Input struct {
 	EPSS              float64 // < 0 means unknown
 	Exploitation      string  // CISA Vulnrichment exploitation: active|poc|none
 	InternetReachable bool
+
+	// ModifiedImpact carries control-credit impact-lane overrides. Each set flag
+	// moves that CVSS impact dimension from High to Low before CR/IR/AR weighting
+	// (never below Low; a None dimension is untouched). Zero value = no credit, so
+	// scoring is identical to a run with no taxonomy loaded.
+	ModifiedImpact ModifiedImpact
+	// LEV, when non-nil, is the control-credit-recomputed Likely-Exploitable verdict
+	// (from adjustedEPSS, KEV-frozen, floor-defeat). nil = use the stock EPSS/active
+	// determination, so a run with no taxonomy is byte-identical to today.
+	LEV *bool
 }
+
+// ModifiedImpact carries per-dimension control-credit impact overrides for one
+// (finding, asset). A set flag downgrades that dimension's CVSS impact from High
+// to Low. The zero value applies no override.
+type ModifiedImpact struct {
+	MC bool // confidentiality
+	MI bool // integrity
+	MA bool // availability
+}
+
+// Any reports whether any dimension is flagged for a High->Low downgrade.
+func (m ModifiedImpact) Any() bool { return m.MC || m.MI || m.MA }
 
 // Result is the computed PAIN and remediation plus the inputs that produced them.
 type Result struct {
@@ -293,6 +315,15 @@ func (c *Config) Score(in Input) Result {
 	}
 
 	cImp, iImp, aImp, sevSource := impact(in.TechnicalImpact, in.CVSSVector, in.Severity)
+	// Control-credit impact lane: a verified control moves the Modified metric from
+	// High to Low. It only lowers, never raises, and never touches a None dimension
+	// (None is VEX-reserved). No credit => no change => stock PAIN.
+	if in.ModifiedImpact.Any() {
+		cImp = modifiedDown(cImp, in.ModifiedImpact.MC)
+		iImp = modifiedDown(iImp, in.ModifiedImpact.MI)
+		aImp = modifiedDown(aImp, in.ModifiedImpact.MA)
+		sevSource += "+controlCredit"
+	}
 	cr, ir, ar := weight(a.CR), weight(a.IR), weight(a.AR)
 	isc := 1 - ((1 - cImp*cr) * (1 - iImp*ir) * (1 - aImp*ar))
 	s := math.Min(isc, 0.915) / 0.915
@@ -304,7 +335,12 @@ func (c *Config) Score(in Input) Result {
 
 	// Remediation: FedRAMP VDR-TFR-PVR matrix[Class][PAIN][column].
 	class := c.resolveClass(in.Labels, in.NamespaceLabels)
+	// LEV: use the control-credit-recomputed verdict when supplied (adjustedEPSS,
+	// KEV-frozen, floor-defeat), otherwise the stock EPSS/active determination.
 	lev := c.isLEV(in)
+	if in.LEV != nil {
+		lev = *in.LEV
+	}
 	irv := in.InternetReachable
 	column := remediationColumn(lev, irv)
 	days, label := remediationDeadline(class, tier, column)
@@ -538,6 +574,17 @@ func impact(technicalImpact, vector, severity string) (cImp, iImp, aImp float64,
 		}
 	}
 	return cImp, iImp, aImp, source
+}
+
+// modifiedDown applies a control-credit High->Low downgrade to one CVSS impact
+// weight. It only affects a High (0.56) dimension, clamping it to Low (0.22); a
+// Low dimension is already at the floor and a None (0) dimension is left
+// untouched because None is reserved for VEX not-affected dispositions.
+func modifiedDown(imp float64, downgrade bool) float64 {
+	if downgrade && imp > 0.22 {
+		return 0.22
+	}
+	return imp
 }
 
 // baseImpact extracts the per-dimension CVSS impact weights (v3.x C/I/A or v4.0

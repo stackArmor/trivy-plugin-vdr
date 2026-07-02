@@ -91,6 +91,9 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		Namespaces:            cfg.Namespaces,
 		AllNamespaces:         cfg.AllNamespaces,
 		IncludeZeroDaemonSets: cfg.IncludeZeroDaemonSets,
+		// Collect control-credit verification facts only when a taxonomy is loaded,
+		// so a run with no --taxonomy makes no extra API calls.
+		CollectWorkloadFacts: taxonomy != nil && taxonomy.Enabled,
 	}
 	logger.Info("collecting Kubernetes inventory from context %q", contextName)
 	inventory, err := collector.Collect(ctx, k8sOptions)
@@ -376,6 +379,7 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 		SuppressEnrichments: cfg.ScanReachabilityOnly,
 		TaxonomyLabel:       taxonomyLabel,
 		TaxonomyVersion:     taxonomyVersion,
+		Taxonomy:            taxonomy,
 	})
 	if err := writePrimaryReport(stdout, cfg.Output, cfg.Format, primary); err != nil {
 		return err
@@ -391,6 +395,7 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 			SuppressEnrichments: cfg.ScanReachabilityOnly,
 			TaxonomyLabel:       taxonomyLabel,
 			TaxonomyVersion:     taxonomyVersion,
+			Taxonomy:            taxonomy,
 		})
 		if err := writeHTMLReport(cfg.HTMLOutput, cfg.HTMLTemplate, htmlReport); err != nil {
 			return err
