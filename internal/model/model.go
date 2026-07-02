@@ -302,12 +302,47 @@ type ExploitabilityAdjustment struct {
 	RowIDs        []string `json:"rowIds,omitempty"`
 	FloorDefeated bool     `json:"floorDefeated,omitempty"`
 	KEVFrozen     bool     `json:"kevFrozen,omitempty"`
+	// LoweredLEV is true when the exploitability adjustment flipped the LEV verdict
+	// from likely-exploitable to not (adjustedEPSS dropped below the threshold). It
+	// is the "LEV -> NLEV moved" signal for the credit-posture report; KEV findings
+	// are frozen so they never lower.
+	LoweredLEV bool `json:"loweredLev,omitempty"`
 }
 
 type AssetClassification struct {
 	Class           string `json:"class,omitempty"`
 	Archetype       string `json:"archetype,omitempty"`
 	ArchetypeSource string `json:"archetypeSource,omitempty"`
+}
+
+// CreditPosture is the per-workload control-credit incentive surface (CC4): the
+// taxonomy rows that fired on the workload's findings and the rows that were one
+// predicate away (near-miss), each with the exact blocker and the count of
+// findings that would benefit. It is deterministic output of facts the join
+// already computes; it is emitted only when a taxonomy is loaded. The
+// inapplicable class (rows keyed by no finding on the workload) is omitted.
+type CreditPosture struct {
+	Resource ResourceRef     `json:"resource"`
+	Firing   []CreditFiring  `json:"firing,omitempty"`
+	Blocked  []CreditBlocked `json:"blocked,omitempty"`
+}
+
+// CreditFiring is one applied credit on a workload with the count of distinct
+// findings it affected.
+type CreditFiring struct {
+	RowID    string   `json:"rowId"`
+	Metrics  []string `json:"metrics,omitempty"` // MC|MI|MA
+	Findings int      `json:"findings"`
+}
+
+// CreditBlocked is one near-miss row on a workload: the control or a condition
+// failed, so the credit did not apply. FailedPredicate is the exact blocker and
+// Findings is how many findings would benefit if it were satisfied ("one X away
+// from credit on N findings").
+type CreditBlocked struct {
+	RowID           string `json:"rowId"`
+	FailedPredicate string `json:"failedPredicate"`
+	Findings        int    `json:"findings"`
 }
 
 // Remediation is the FedRAMP Rev5 VDR-TFR-PVR remediation deadline for a finding
@@ -326,7 +361,12 @@ type Remediation struct {
 // finding on a specific asset. Tier is derived from the CVSS impact vector
 // weighted by the asset archetype's CR/IR/AR requirements and the agency scope.
 type Pain struct {
-	Tier            string  `json:"tier"`                     // N1..N5
+	Tier string `json:"tier"` // N1..N5
+	// UncreditedTier is the PAIN tier this finding would carry WITHOUT the applied
+	// control credit, set only when a credit actually lowered the tier (so the
+	// report can show "N4 -> N3"). Empty when no taxonomy is loaded or no credit
+	// changed the tier.
+	UncreditedTier  string  `json:"uncreditedTier,omitempty"`
 	Word            string  `json:"word"`                     // Minimal|Narrow|Disruptive|Debilitating
 	Severity        float64 `json:"severity"`                 // normalized environmental impact scalar 0..1
 	Archetype       string  `json:"archetype"`                // resolved asset-archetype
@@ -355,6 +395,14 @@ type Report struct {
 	Resources          []ResourceReport `json:"resources,omitempty"`
 	Warnings           []string         `json:"warnings,omitempty"`
 	ClassificationOnly bool             `json:"-"`
+	// CreditPosture is the per-workload control-credit report (CC4): firing and
+	// near-miss rows with benefiting-finding counts. Populated only when a taxonomy
+	// is loaded; nil (omitted) otherwise, so a no-taxonomy report is unchanged.
+	CreditPosture []CreditPosture `json:"creditPosture,omitempty"`
+	// CreditLegend maps every control-credit row id that appears in this report to
+	// its short taxonomy title (reference only; full rationale stays in the credit
+	// evidence lines). Populated only when a taxonomy is loaded.
+	CreditLegend map[string]string `json:"creditLegend,omitempty"`
 }
 
 type ResourceReport struct {

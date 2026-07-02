@@ -19,6 +19,10 @@ type htmlTemplateData struct {
 	Report     model.Report
 	ReportJSON template.JS
 	IsCloudRun bool
+	// CreditEnabled gates every control-credit UI addition. It is true only when a
+	// taxonomy was loaded (its legend was populated). When false the template
+	// renders byte-identical to a run with no taxonomy.
+	CreditEnabled bool
 }
 
 func RenderHTML(w io.Writer, report model.Report, templatePath string) error {
@@ -36,9 +40,10 @@ func RenderHTML(w io.Writer, report model.Report, templatePath string) error {
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, htmlTemplateData{
-		Report:     report,
-		ReportJSON: template.JS(reportJSON),
-		IsCloudRun: strings.HasPrefix(report.ContextName, "cloudrun/"),
+		Report:        report,
+		ReportJSON:    template.JS(reportJSON),
+		IsCloudRun:    strings.HasPrefix(report.ContextName, "cloudrun/"),
+		CreditEnabled: report.CreditLegend != nil,
 	}); err != nil {
 		return err
 	}

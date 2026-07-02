@@ -1,0 +1,47 @@
+# CC4 report fixtures: a firing impact row, a blocked (near-miss) impact row, and
+# a firing likelihood row that lowers adjustedEPSS below the LEV threshold.
+rows:
+  - id: CC-TEST-EGRESS
+    title: Egress lockdown bounds SSRF blast radius
+    control:
+      name: egress-default-deny
+    counters:
+      cweClasses: [CWE-918]
+      rationale: A default-deny egress posture blocks the outbound leg of SSRF.
+    credit:
+      lane: impact
+      metrics: [MC, MI, MA]
+      move: high-to-low
+      conditions: []
+    confidence: high
+    provenance: {version: 1, status: active}
+
+  - id: CC-TEST-NOSHELL
+    title: No shell in image counters command injection
+    control:
+      name: no-shell-image
+    counters:
+      cweClasses: [CWE-78]
+      rationale: An image with no shell cannot run an injected command line.
+    credit:
+      lane: impact
+      metrics: [MC, MI]
+      move: high-to-low
+      conditions: []
+    confidence: high
+    provenance: {version: 1, status: active}
+
+  - id: CC-TEST-EDR
+    title: Blocking EDR lowers exploitation likelihood
+    control:
+      name: egress-default-deny
+    counters:
+      cweClasses: ["*"]
+      rationale: Blocking outbound C2 lowers the local exploitation estimate.
+    credit:
+      lane: likelihood
+      move: epss-residual
+      residualFactor: 0.5
+      conditions: []
+    confidence: medium
+    provenance: {version: 1, status: active}

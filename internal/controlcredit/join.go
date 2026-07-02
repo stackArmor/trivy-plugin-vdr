@@ -126,6 +126,9 @@ func (t *Taxonomy) Join(in JoinInput) JoinResult {
 
 	// Likelihood lane (exploitability).
 	res.Exploitability, res.LEV = t.exploitability(in)
+	// Record whether the adjustment flipped the LEV verdict (LEV -> NLEV), for the
+	// credit-posture report. KEV is frozen (stock LEV stays true), so it never lowers.
+	res.Exploitability.LoweredLEV = stockLEV(in) && !res.LEV
 	return res
 }
 

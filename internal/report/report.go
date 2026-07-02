@@ -138,11 +138,195 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	}
 	if options.View == ViewResources {
 		report.Resources = resourceReports
+		attachCreditPosture(&report, active, exposures, engine, sc, labelIndex, nsLabels, options.ClassificationOnly)
 		return report
 	}
 
 	report.Findings = findingsWithBestExposure(active, exposures, engine, sc, labelIndex, nsLabels, options.ClassificationOnly)
+	attachCreditPosture(&report, active, exposures, engine, sc, labelIndex, nsLabels, options.ClassificationOnly)
 	return report
+}
+
+// attachCreditPosture builds the per-workload credit-posture report (CC4) and the
+// row-id -> title legend, and attaches them to the report. It is a no-op unless a
+// taxonomy is loaded and the report is a scoring report, so a no-taxonomy report
+// is unchanged.
+func attachCreditPosture(report *model.Report, active []model.Finding, exposures map[model.ResourceRef]model.Exposure, eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) {
+	if !eng.enabled() || classificationOnly {
+		return
+	}
+	report.CreditPosture = buildCreditPosture(active, exposures, eng, sc, idx, nsLabels)
+	report.CreditLegend = buildCreditLegend(eng.tax, *report)
+}
+
+// workloadAgg accumulates firing and near-miss rows for one workload across its
+// findings, counting distinct findings per row.
+type workloadAgg struct {
+	resource model.ResourceRef
+	firing   map[string]map[string]struct{} // rowID -> set of finding keys
+	metrics  map[string][]string            // rowID -> credit metrics
+	blocked  map[string]map[string]struct{} // rowID -> set of finding keys
+	reason   map[string]string              // rowID -> exact failed predicate
+}
+
+func newWorkloadAgg(ref model.ResourceRef) *workloadAgg {
+	return &workloadAgg{
+		resource: workloadRef(ref),
+		firing:   map[string]map[string]struct{}{},
+		metrics:  map[string][]string{},
+		blocked:  map[string]map[string]struct{}{},
+		reason:   map[string]string{},
+	}
+}
+
+// buildCreditPosture runs the credit join for every (active finding, affected
+// asset) and aggregates the firing and near-miss rows per owning workload. Rows
+// keyed by no finding on a workload never appear (the inapplicable class is
+// omitted). Findings are counted by identity (CVE + image + package), so a
+// finding affecting several containers of one workload counts once.
+func buildCreditPosture(active []model.Finding, exposures map[model.ResourceRef]model.Exposure, eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]map[string]string) []model.CreditPosture {
+	aggs := map[string]*workloadAgg{}
+	var order []string
+	for _, finding := range active {
+		if len(finding.CWEs) == 0 {
+			continue // fail-open: no CWE, no credit, no near-miss
+		}
+		fkey := findingKey(finding)
+		for _, ref := range finding.AffectedResources {
+			ir := false
+			if exp, ok := exposures[ref]; ok {
+				ir = exp.InternetAccessible
+			}
+			verified := eng.tax.VerifyControls(eng.assetFacts(ref, ir))
+			jr := eng.tax.Join(controlcredit.JoinInput{
+				CWEs:              finding.CWEs,
+				CVSSVector:        finding.CVSSVector,
+				EPSS:              epssScore(finding.EPSS),
+				KEV:               isKEV(finding),
+				InternetReachable: ir,
+				Verified:          verified,
+				LEVThreshold:      sc.LEVEPSSThreshold,
+			})
+			if len(jr.Credits) == 0 && len(jr.NearMisses) == 0 {
+				continue
+			}
+			wk := workloadLabelKey(ref)
+			agg := aggs[wk]
+			if agg == nil {
+				agg = newWorkloadAgg(ref)
+				aggs[wk] = agg
+				order = append(order, wk)
+			}
+			for _, c := range jr.Credits {
+				if agg.firing[c.RowID] == nil {
+					agg.firing[c.RowID] = map[string]struct{}{}
+				}
+				agg.firing[c.RowID][fkey] = struct{}{}
+				agg.metrics[c.RowID] = c.Metrics
+			}
+			for _, nm := range jr.NearMisses {
+				if agg.blocked[nm.RowID] == nil {
+					agg.blocked[nm.RowID] = map[string]struct{}{}
+				}
+				agg.blocked[nm.RowID][fkey] = struct{}{}
+				agg.reason[nm.RowID] = nm.Reason
+			}
+		}
+	}
+	if len(aggs) == 0 {
+		return nil
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return resourceSortKey(aggs[order[i]].resource) < resourceSortKey(aggs[order[j]].resource)
+	})
+	postures := make([]model.CreditPosture, 0, len(order))
+	for _, wk := range order {
+		agg := aggs[wk]
+		posture := model.CreditPosture{Resource: agg.resource}
+		for rowID, keys := range agg.firing {
+			posture.Firing = append(posture.Firing, model.CreditFiring{
+				RowID:    rowID,
+				Metrics:  agg.metrics[rowID],
+				Findings: len(keys),
+			})
+		}
+		sort.Slice(posture.Firing, func(i, j int) bool { return posture.Firing[i].RowID < posture.Firing[j].RowID })
+		for rowID, keys := range agg.blocked {
+			posture.Blocked = append(posture.Blocked, model.CreditBlocked{
+				RowID:           rowID,
+				FailedPredicate: agg.reason[rowID],
+				Findings:        len(keys),
+			})
+		}
+		sort.Slice(posture.Blocked, func(i, j int) bool { return posture.Blocked[i].RowID < posture.Blocked[j].RowID })
+		postures = append(postures, posture)
+	}
+	return postures
+}
+
+// buildCreditLegend maps every control-credit row id appearing in the report
+// (firing, near-miss, and exploitability-lane rows) to its short taxonomy title.
+// It is a reference key only; full rationale stays in the credit evidence lines.
+func buildCreditLegend(tax *controlcredit.Taxonomy, report model.Report) map[string]string {
+	ids := map[string]bool{}
+	for _, p := range report.CreditPosture {
+		for _, f := range p.Firing {
+			ids[f.RowID] = true
+		}
+		for _, b := range p.Blocked {
+			ids[b.RowID] = true
+		}
+	}
+	collect := func(findings []model.Finding) {
+		for _, f := range findings {
+			for _, c := range f.ControlCredits {
+				ids[c.RowID] = true
+			}
+			if f.Exploitability != nil {
+				for _, id := range f.Exploitability.RowIDs {
+					ids[id] = true
+				}
+			}
+			for _, a := range f.Affected {
+				for _, c := range a.ControlCredits {
+					ids[c.RowID] = true
+				}
+				if a.Exploitability != nil {
+					for _, id := range a.Exploitability.RowIDs {
+						ids[id] = true
+					}
+				}
+			}
+		}
+	}
+	collect(report.Findings)
+	for _, r := range report.Resources {
+		collect(r.Findings)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	legend := make(map[string]string, len(ids))
+	for id := range ids {
+		legend[id] = tax.RowTitle(id)
+	}
+	return legend
+}
+
+// workloadRef strips the container-level fields from a resource reference to yield
+// the owning workload's identity (namespace/kind/name), the unit the credit
+// posture is reported at.
+func workloadRef(ref model.ResourceRef) model.ResourceRef {
+	ref.ContainerName = ""
+	ref.ContainerType = ""
+	ref.RestartPolicy = ""
+	return ref
+}
+
+// findingKey is the identity of the underlying finding (CVE + image + package),
+// so the same finding affecting several assets is counted once.
+func findingKey(f model.Finding) string {
+	return strings.Join([]string{f.ID, f.ImageRef, f.PackageName}, "\x00")
 }
 
 func partitionFindings(findings []model.Finding) ([]model.Finding, []model.Finding) {
@@ -225,6 +409,16 @@ func scoreAsset(eng creditEngine, sc *scoring.Config, idx, nsLabels map[string]m
 		IR:              res.IR,
 		AR:              res.AR,
 		MultiAgency:     res.MultiAgency,
+	}
+	// When a control credit lowered a Modified impact metric, record the PAIN tier
+	// the finding would carry without the credit, so the report can show the
+	// downgrade (e.g. "N4 -> N3"). PAIN depends on impact only, not LEV.
+	if eng.enabled() && in.ModifiedImpact.Any() {
+		stockIn := in
+		stockIn.ModifiedImpact = scoring.ModifiedImpact{}
+		if stock := sc.Score(stockIn); stock.Tier != res.Tier {
+			pain.UncreditedTier = stock.Tier
+		}
 	}
 	rem := &model.Remediation{
 		Class:        res.Class,
@@ -310,6 +504,9 @@ func RenderTable(w io.Writer, report model.Report) error {
 		if err := renderSuppressedTable(tw, report.SuppressedFindings); err != nil {
 			return err
 		}
+		if err := renderCreditPosture(tw, report); err != nil {
+			return err
+		}
 		return tw.Flush()
 	}
 	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tPAIN\tREMEDIATION\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tCWE\tIMAGE\tAFFECTED"); err != nil {
@@ -337,7 +534,58 @@ func RenderTable(w io.Writer, report model.Report) error {
 	if err := renderSuppressedTable(tw, report.SuppressedFindings); err != nil {
 		return err
 	}
+	if err := renderCreditPosture(tw, report); err != nil {
+		return err
+	}
 	return tw.Flush()
+}
+
+// renderCreditPosture writes the compact per-workload control-credit posture
+// section (CC4): the rows that fired and the near-miss rows with their exact
+// failed predicate and the count of findings that would benefit. It is written
+// as a separate tabwriter block (a leading no-tab title line closes the prior
+// column block) and is a no-op when no taxonomy is loaded.
+func renderCreditPosture(w io.Writer, report model.Report) error {
+	if len(report.CreditPosture) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "\nCONTROL-CREDIT POSTURE"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "WORKLOAD\tFIRING\tBLOCKED (NEAR-MISS)"); err != nil {
+		return err
+	}
+	for _, p := range report.CreditPosture {
+		firing := make([]string, 0, len(p.Firing))
+		for _, f := range p.Firing {
+			firing = append(firing, fmt.Sprintf("%s (%d)", f.RowID, f.Findings))
+		}
+		blocked := make([]string, 0, len(p.Blocked))
+		for _, b := range p.Blocked {
+			blocked = append(blocked, fmt.Sprintf("%s: %s — %d findings", b.RowID, b.FailedPredicate, b.Findings))
+		}
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\n",
+			workloadPostureLabel(p.Resource),
+			emptyDash(strings.Join(firing, "; ")),
+			emptyDash(strings.Join(blocked, "; ")),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// workloadPostureLabel renders a workload identity for the posture table:
+// "<scope> <Kind>/<Name>".
+func workloadPostureLabel(ref model.ResourceRef) string {
+	return fmt.Sprintf("%s %s/%s", resourceScope(ref), ref.Kind, ref.Name)
+}
+
+func emptyDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }
 
 func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) error {

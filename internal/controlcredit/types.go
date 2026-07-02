@@ -179,6 +179,20 @@ func (t *Taxonomy) ExpandCRASH(availabilityOnly bool) []string {
 	return t.ExpandClass("CRASH", availabilityOnly)
 }
 
+// RowTitle returns the short taxonomy title for a row id (for the report's
+// control-credit legend). Unknown ids return "".
+func (t *Taxonomy) RowTitle(id string) string {
+	if t == nil {
+		return ""
+	}
+	for i := range t.Rows {
+		if t.Rows[i].ID == id {
+			return t.Rows[i].Title
+		}
+	}
+	return ""
+}
+
 // HeaderLabel is the report-header tier/version stamp, e.g. "full-v0.8.0". A
 // deliberately-absent taxonomy returns "" (nothing shown); a load failure
 // returns "disabled (load failed)" so the loud failure is visible.

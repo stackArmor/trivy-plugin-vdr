@@ -1,0 +1,5 @@
+controls:
+  egress-default-deny:
+    kubernetes: Egress default-deny NetworkPolicy selects the workload.
+  no-shell-image:
+    kubernetes: image layer inspection shows no /bin/sh or interpreter.

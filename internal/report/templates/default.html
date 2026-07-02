@@ -70,6 +70,21 @@
     .legend { margin-top: 10px; font-size: 12px; color: var(--muted); }
     .empty { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
   </style>
+  {{ if .CreditEnabled }}
+  <style>
+    .credit { margin-top: 26px; }
+    .credit-h { font-size: 16px; font-weight: 650; margin: 22px 0 6px; }
+    .credit-key { list-style: none; padding: 0; margin: 8px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 4px 16px; font-size: 12px; }
+    .credit-key code { color: var(--accent); font-weight: 650; }
+    .credit-block { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+    .credit-block .wl { font-weight: 650; margin-bottom: 6px; }
+    .credit-block .lane { font-size: 12px; color: var(--muted); margin: 3px 0; }
+    .credit-block .lane code { color: var(--accent); }
+    .credit-block .near { color: var(--warn); }
+    .credit-down { color: var(--accent); font-weight: 650; }
+    #credit-adjustments code, #credit-adjustments-empty code { color: var(--accent); }
+  </style>
+  {{ end }}
 </head>
 <body>
   <header>
@@ -131,6 +146,34 @@
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
     <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset archetype's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.70 or active exploitation and IRV = internet-reachable. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
+    {{ if .CreditEnabled }}
+    <section class="credit" aria-label="Control credit">
+      <h2 class="credit-h">Control-credit adjustments</h2>
+      <p class="legend">How machine-verified controls changed this report. PAIN downgrades show the tier before → after credit; exploitability shows the published EPSS → the local adjustedEPSS estimate (the published EPSS is never changed). Reachability (IRV/NIRV) is shown as computed. The contributing taxonomy row ids are listed in the key below.</p>
+      <table id="credit-adjustments">
+        <thead>
+          <tr>
+            <th>CVE</th>
+            <th>Resource</th>
+            <th>PAIN</th>
+            <th>Exploitability</th>
+            <th>Reachability</th>
+            <th>Contributing rows</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="credit-adjustments-empty" class="empty" hidden>No control credit changed a finding's PAIN or exploitability.</div>
+
+      <h2 class="credit-h">Control-credit posture</h2>
+      <p class="legend">Per workload: the credits that fired and the near-miss rows that are one predicate away. Each near-miss names the exact failed check and how many findings would benefit if it were satisfied — the operator incentive surface.</p>
+      <div id="credit-posture"></div>
+
+      <h2 class="credit-h">Control-credit key</h2>
+      <p class="legend">Taxonomy row ids referenced above, with their short titles (reference only; the full rationale stays in each finding's credit evidence).</p>
+      <ul id="credit-legend" class="credit-key"></ul>
+    </section>
+    {{ end }}
     {{ if .Report.SuppressedFindings }}
     <table class="suppressed-table" id="suppressed-findings">
       <thead>
@@ -743,5 +786,155 @@
     }
     renderSuppressedFindings();
   </script>
+  {{ if .CreditEnabled }}
+  <script>
+    // Control-credit surfacing (CC4). Everything here is gated on a loaded taxonomy
+    // so a no-taxonomy report renders byte-identical. Read straight from the report
+    // JSON; no reachability hard-line semantics are added — only the existing
+    // IRV/NIRV bit is shown.
+    (function () {
+      const report = window.__VDR_REPORT__ || {};
+      const legend = report.creditLegend || {};
+      const posture = report.creditPosture || [];
+
+      function refLabel(ref) {
+        ref = ref || {};
+        return [ref.kind, ref.name, ref.containerName].filter(Boolean).join("/");
+      }
+      function rowRefs(ids) {
+        return (ids || []).join(", ");
+      }
+      // One row per (finding, asset) whose PAIN or exploitability actually moved.
+      const adjustments = [];
+      function consider(finding, ref) {
+        const pain = finding.pain || null;
+        const exploit = finding.exploitability || null;
+        const painDown = !!(pain && pain.uncreditedTier && pain.uncreditedTier !== pain.tier);
+        const epssMoved = !!(exploit && Array.isArray(exploit.rowIds) && exploit.rowIds.length &&
+          typeof exploit.adjustedEpss === "number" && exploit.adjustedEpss < exploit.epss);
+        if (!painDown && !epssMoved) return;
+        adjustments.push({
+          id: finding.id || "",
+          resource: refLabel(ref),
+          painText: pain ? (painDown ? (pain.uncreditedTier + " → " + pain.tier) : pain.tier) : "",
+          painDown: painDown,
+          painRows: (finding.controlCredits || []).map(c => c.rowId),
+          exploit: exploit,
+          epssMoved: epssMoved,
+          leered: !!(exploit && exploit.loweredLev),
+          irv: finding.remediation ? !!finding.remediation.irv : false
+        });
+      }
+      // Prefer per-asset detail (affected[]/resources[].findings) so PAIN and EPSS
+      // reflect the specific asset the credit was verified on.
+      if (report.resources && report.resources.length) {
+        report.resources.forEach(r => (r.findings || []).forEach(f => consider(f, r.resource)));
+      } else {
+        (report.findings || []).forEach(f => {
+          const affected = (f.affected && f.affected.length) ? f.affected : null;
+          if (!affected) { consider(f, null); return; }
+          affected.forEach(a => consider({
+            id: f.id,
+            pain: a.pain || f.pain,
+            exploitability: a.exploitability || f.exploitability,
+            controlCredits: a.controlCredits || f.controlCredits,
+            remediation: a.remediation || f.remediation
+          }, a.resource));
+        });
+      }
+
+      const adjBody = document.querySelector("#credit-adjustments tbody");
+      const adjTable = document.getElementById("credit-adjustments");
+      const adjEmpty = document.getElementById("credit-adjustments-empty");
+      adjustments.sort((a, b) => (a.id + a.resource).localeCompare(b.id + b.resource));
+      adjustments.forEach(a => {
+        const tr = document.createElement("tr");
+        const rows = [];
+        if (a.painDown && a.painRows.length) rows.push("PAIN: " + rowRefs(a.painRows));
+        if (a.epssMoved && a.exploit && a.exploit.rowIds) rows.push("EPSS: " + rowRefs(a.exploit.rowIds));
+        let exploitText = "";
+        if (a.epssMoved && a.exploit) {
+          exploitText = a.exploit.epss.toFixed(3) + " → " + a.exploit.adjustedEpss.toFixed(3);
+          if (a.leered) exploitText += " (LEV → NLEV)";
+        } else if (a.exploit && typeof a.exploit.epss === "number") {
+          exploitText = a.exploit.epss.toFixed(3);
+        }
+        const cells = [
+          { v: a.id },
+          { v: a.resource },
+          { v: a.painText, down: a.painDown },
+          { v: exploitText, down: a.epssMoved },
+          { v: a.irv ? "IRV" : "NIRV" },
+          { v: rows.join("; ") }
+        ];
+        cells.forEach(cell => {
+          const td = document.createElement("td");
+          td.textContent = cell.v;
+          if (cell.down) td.className = "credit-down";
+          tr.appendChild(td);
+        });
+        adjBody.appendChild(tr);
+      });
+      if (adjustments.length === 0) {
+        if (adjTable) adjTable.hidden = true;
+        if (adjEmpty) adjEmpty.hidden = false;
+      }
+
+      // Per-workload posture: firing rows and near-miss ("one X away") rows.
+      const postureHost = document.getElementById("credit-posture");
+      if (postureHost) {
+        if (posture.length === 0) {
+          const p = document.createElement("div");
+          p.className = "empty";
+          p.textContent = "No keyed findings on any workload.";
+          postureHost.appendChild(p);
+        }
+        posture.forEach(wl => {
+          const block = document.createElement("div");
+          block.className = "credit-block";
+          const title = document.createElement("div");
+          title.className = "wl";
+          const res = wl.resource || {};
+          title.textContent = [res.namespace, res.kind, res.name].filter(Boolean).join("/") || refLabel(res);
+          block.appendChild(title);
+          function lane(cls, lead, rowId, tail) {
+            const line = document.createElement("div");
+            line.className = cls;
+            line.appendChild(document.createTextNode(lead + " "));
+            const code = document.createElement("code");
+            code.textContent = rowId;
+            line.appendChild(code);
+            line.appendChild(document.createTextNode(tail));
+            block.appendChild(line);
+          }
+          (wl.firing || []).forEach(f => {
+            const metrics = (f.metrics && f.metrics.length) ? " [" + f.metrics.join(",") + "]" : "";
+            lane("lane", "firing", f.rowId,
+              metrics + " — applied to " + f.findings + " finding" + (f.findings === 1 ? "" : "s"));
+          });
+          (wl.blocked || []).forEach(b => {
+            lane("lane near", "near-miss", b.rowId,
+              " — " + b.failedPredicate + " (one predicate away from credit on " +
+              b.findings + " finding" + (b.findings === 1 ? "" : "s") + ")");
+          });
+          postureHost.appendChild(block);
+        });
+      }
+
+      // Row-id key: id → short title (reference only).
+      const legendHost = document.getElementById("credit-legend");
+      if (legendHost) {
+        Object.keys(legend).sort().forEach(id => {
+          const li = document.createElement("li");
+          const code = document.createElement("code");
+          code.textContent = id;
+          li.appendChild(code);
+          li.appendChild(document.createTextNode(" — " + (legend[id] || "")));
+          legendHost.appendChild(li);
+        });
+      }
+    })();
+  </script>
+  {{ end }}
 </body>
 </html>
