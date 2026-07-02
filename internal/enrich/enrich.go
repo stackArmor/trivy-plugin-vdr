@@ -42,6 +42,7 @@ func EnrichFindings(ctx context.Context, findings []model.Finding, epssStore EPS
 			if ok {
 				value := vulnrichment
 				enriched[i].Vulnrichment = &value
+				enriched[i].CWEs = append([]string(nil), value.CWEs...)
 			}
 		}
 	}

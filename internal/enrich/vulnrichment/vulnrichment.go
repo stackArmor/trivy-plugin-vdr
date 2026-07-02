@@ -141,6 +141,7 @@ func EnrichFindingsContext(ctx context.Context, findings []model.Finding, store 
 		if ok {
 			value := vulnrichment
 			enriched[i].Vulnrichment = &value
+			enriched[i].CWEs = append([]string(nil), value.CWEs...)
 		}
 	}
 	return enriched, nil
@@ -274,51 +275,176 @@ func parse(data []byte) (model.Vulnrichment, bool, error) {
 	if !ok {
 		return model.Vulnrichment{}, false, nil
 	}
-	containers, ok := root["containers"].(map[string]any)
-	if !ok {
-		return model.Vulnrichment{}, false, nil
-	}
-	adp, ok := containers["adp"].([]any)
-	if !ok {
-		return model.Vulnrichment{}, false, nil
-	}
+	containers, _ := root["containers"].(map[string]any)
 
 	var enrichment model.Vulnrichment
-	walk(adp, func(object map[string]any) {
-		other, ok := object["other"].(map[string]any)
-		if !ok || !strings.EqualFold(stringValue(other["type"]), "ssvc") {
-			return
+	if containers != nil {
+		if adp, ok := containers["adp"].([]any); ok {
+			walk(adp, func(object map[string]any) {
+				other, ok := object["other"].(map[string]any)
+				if !ok || !strings.EqualFold(stringValue(other["type"]), "ssvc") {
+					return
+				}
+				content, ok := other["content"].(map[string]any)
+				if !ok {
+					return
+				}
+				options, ok := content["options"].([]any)
+				if !ok {
+					return
+				}
+				for _, option := range options {
+					optionMap, ok := option.(map[string]any)
+					if !ok {
+						continue
+					}
+					for key, value := range optionMap {
+						switch key {
+						case "Exploitation":
+							enrichment.Exploitation = stringValue(value)
+						case "Automatable":
+							enrichment.Automatable = stringValue(value)
+						case "Technical Impact":
+							enrichment.TechnicalImpact = stringValue(value)
+						}
+					}
+				}
+			})
 		}
-		content, ok := other["content"].(map[string]any)
+	}
+
+	enrichment.CWEs = extractCWEs(root)
+
+	if enrichment.Exploitation == "" && enrichment.Automatable == "" && enrichment.TechnicalImpact == "" && len(enrichment.CWEs) == 0 {
+		return model.Vulnrichment{}, false, nil
+	}
+	return enrichment, true, nil
+}
+
+var cweIDPattern = regexp.MustCompile(`(?i)cwe-\d+`)
+
+// normalizeCWE returns the canonical CWE identifier (e.g. "CWE-787") embedded in
+// raw, or "" when none is present. The useless placeholders NVD-CWE-noinfo and
+// NVD-CWE-Other are dropped (they lack a numeric ID, so the pattern rejects them;
+// the explicit guard documents the intent).
+func normalizeCWE(raw string) string {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "NVD-CWE-NOINFO", "NVD-CWE-OTHER":
+		return ""
+	}
+	match := cweIDPattern.FindString(raw)
+	if match == "" {
+		return ""
+	}
+	return strings.ToUpper(match)
+}
+
+// extractCWEs resolves the CWE identifiers for a CVE record following the CC0
+// source precedence: (1) CISA Vulnrichment ADP problemTypes, then (2) NVD
+// CVE-record weaknesses[].description as a fallback. Order is preserved and
+// duplicates removed; an empty slice means "no specific CWE" (fail-open).
+func extractCWEs(root map[string]any) []string {
+	var cwes []string
+	seen := map[string]struct{}{}
+	add := func(ids []string) {
+		for _, id := range ids {
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			cwes = append(cwes, id)
+		}
+	}
+
+	// Tier 1: CISA Vulnrichment ADP CWE assignments.
+	if containers, ok := root["containers"].(map[string]any); ok {
+		if adp, ok := containers["adp"].([]any); ok {
+			add(problemTypeCWEs(adp))
+		}
+	}
+	if len(cwes) > 0 {
+		return cwes
+	}
+
+	// Tier 2 (fallback): NVD CVE-record weaknesses[].description[].value. The
+	// cisagov Vulnrichment feed consumed today does not carry this field, so this
+	// tier stays dormant until an NVD source is wired into the enrich path.
+	add(weaknessCWEs(root))
+	return cwes
+}
+
+// problemTypeCWEs collects CWE ids from any problemTypes[].descriptions[] found
+// under container, reading the structured cweId first and falling back to the
+// free-text description when the entry is typed as a CWE.
+func problemTypeCWEs(container any) []string {
+	var out []string
+	walk(container, func(object map[string]any) {
+		problemTypes, ok := object["problemTypes"].([]any)
 		if !ok {
 			return
 		}
-		options, ok := content["options"].([]any)
-		if !ok {
-			return
-		}
-		for _, option := range options {
-			optionMap, ok := option.(map[string]any)
+		for _, pt := range problemTypes {
+			ptMap, ok := pt.(map[string]any)
 			if !ok {
 				continue
 			}
-			for key, value := range optionMap {
-				switch key {
-				case "Exploitation":
-					enrichment.Exploitation = stringValue(value)
-				case "Automatable":
-					enrichment.Automatable = stringValue(value)
-				case "Technical Impact":
-					enrichment.TechnicalImpact = stringValue(value)
+			descriptions, ok := ptMap["descriptions"].([]any)
+			if !ok {
+				continue
+			}
+			for _, description := range descriptions {
+				descMap, ok := description.(map[string]any)
+				if !ok {
+					continue
+				}
+				if id := normalizeCWE(stringValue(descMap["cweId"])); id != "" {
+					out = append(out, id)
+					continue
+				}
+				if strings.EqualFold(stringValue(descMap["type"]), "CWE") {
+					if id := normalizeCWE(stringValue(descMap["description"])); id != "" {
+						out = append(out, id)
+					}
 				}
 			}
 		}
 	})
+	return out
+}
 
-	if enrichment.Exploitation == "" && enrichment.Automatable == "" && enrichment.TechnicalImpact == "" {
-		return model.Vulnrichment{}, false, nil
-	}
-	return enrichment, true, nil
+// weaknessCWEs collects CWE ids from any NVD-shaped weaknesses[].description[]
+// arrays found under root.
+func weaknessCWEs(root any) []string {
+	var out []string
+	walk(root, func(object map[string]any) {
+		weaknesses, ok := object["weaknesses"].([]any)
+		if !ok {
+			return
+		}
+		for _, weakness := range weaknesses {
+			weaknessMap, ok := weakness.(map[string]any)
+			if !ok {
+				continue
+			}
+			descriptions, ok := weaknessMap["description"].([]any)
+			if !ok {
+				continue
+			}
+			for _, description := range descriptions {
+				descMap, ok := description.(map[string]any)
+				if !ok {
+					continue
+				}
+				if id := normalizeCWE(stringValue(descMap["value"])); id != "" {
+					out = append(out, id)
+				}
+			}
+		}
+	})
+	return out
 }
 
 func walk(value any, visit func(map[string]any)) {

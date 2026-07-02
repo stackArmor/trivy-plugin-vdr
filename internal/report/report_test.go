@@ -309,6 +309,7 @@ func TestRenderJSONWritesSelectedView(t *testing.T) {
 func TestRenderTableIncludesResourceAndEnrichmentColumns(t *testing.T) {
 	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
 	finding.Status = "will_not_fix"
+	finding.CWEs = []string{"CWE-787", "CWE-79"}
 	report := model.Report{Findings: []model.Finding{finding}}
 	var buf bytes.Buffer
 
@@ -317,10 +318,50 @@ func TestRenderTableIncludesResourceAndEnrichmentColumns(t *testing.T) {
 	}
 
 	output := buf.String()
-	for _, want := range []string{"ID", "PACKAGE", "SEVERITY", "STATUS", "EPSS", "AUTOMATABLE", "CVE-2026-0001", "openssl 1.0.0 → no fix", "HIGH", "will_not_fix", "0.700"} {
+	for _, want := range []string{"ID", "PACKAGE", "SEVERITY", "STATUS", "EPSS", "AUTOMATABLE", "CWE", "CVE-2026-0001", "openssl 1.0.0 → no fix", "HIGH", "will_not_fix", "0.700", "CWE-787 (+1)"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("table output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestFormatCWEs(t *testing.T) {
+	tests := []struct {
+		name string
+		cwes []string
+		want string
+	}{
+		{name: "none", cwes: nil, want: ""},
+		{name: "one", cwes: []string{"CWE-787"}, want: "CWE-787"},
+		{name: "many", cwes: []string{"CWE-787", "CWE-79", "CWE-20"}, want: "CWE-787 (+2)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatCWEs(tt.cwes); got != tt.want {
+				t.Fatalf("formatCWEs(%v) = %q, want %q", tt.cwes, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSummaryCountsFindingsWithSpecificCWE(t *testing.T) {
+	inventory := &model.Inventory{
+		ContextName: "ctx",
+		Resources: []model.ResourceInventory{{
+			Resource: sampleContainerRef(),
+			Images:   []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/web:v1"}},
+		}},
+	}
+	withCWE := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	withCWE.CWEs = []string{"CWE-787"}
+	withoutCWE := sampleFinding("CVE-2026-0002", "LOW", 0.1)
+	report := Build(inventory, []model.Finding{withCWE, withoutCWE}, nil, Options{GeneratedAt: fixedTime()})
+
+	if report.Summary.Findings != 2 {
+		t.Fatalf("Summary.Findings = %d, want 2", report.Summary.Findings)
+	}
+	if report.Summary.FindingsWithSpecificCWE != 1 {
+		t.Fatalf("Summary.FindingsWithSpecificCWE = %d, want 1", report.Summary.FindingsWithSpecificCWE)
 	}
 }
 

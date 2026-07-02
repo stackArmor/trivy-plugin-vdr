@@ -86,7 +86,12 @@ type Finding struct {
 	// CVSSVector is the preferred CVSS base vector (v3, else v4) from the scanner.
 	// It feeds the report's automatability fallback when CISA Vulnrichment has no
 	// record for the CVE.
-	CVSSVector   string        `json:"cvssVector,omitempty"`
+	CVSSVector string `json:"cvssVector,omitempty"`
+	// CWEs holds the CWE identifiers assigned to this finding's CVE (e.g.
+	// "CWE-787"), surfaced from the per-CVE enrichment record. It is empty when no
+	// specific CWE is known; the generic placeholders NVD-CWE-noinfo/NVD-CWE-Other
+	// are never included.
+	CWEs         []string      `json:"cwes,omitempty"`
 	EPSS         *EPSS         `json:"epss,omitempty"`
 	Vulnrichment *Vulnrichment `json:"vulnrichment,omitempty"`
 	Exposure     *Exposure     `json:"exposure,omitempty"`
@@ -132,7 +137,11 @@ type Vulnrichment struct {
 	Exploitation    string `json:"exploitation,omitempty"`
 	Automatable     string `json:"automatable,omitempty"`
 	TechnicalImpact string `json:"technicalImpact,omitempty"`
-	SourceURL       string `json:"sourceUrl,omitempty"`
+	// CWEs holds the CWE identifiers resolved for the CVE (source precedence:
+	// CISA Vulnrichment ADP problemTypes, then NVD CVE-record weaknesses),
+	// skipping the useless NVD-CWE-noinfo/NVD-CWE-Other assignments.
+	CWEs      []string `json:"cwes,omitempty"`
+	SourceURL string   `json:"sourceUrl,omitempty"`
 }
 
 type Exposure struct {
@@ -274,11 +283,15 @@ type ResourceReport struct {
 }
 
 type Summary struct {
-	Contexts           int            `json:"contexts,omitempty"`
-	Namespaces         int            `json:"namespaces,omitempty"`
-	Resources          int            `json:"resources"`
-	Images             int            `json:"images"`
-	Findings           int            `json:"findings"`
-	BySeverity         map[string]int `json:"bySeverity,omitempty"`
-	InternetAccessible int            `json:"internetAccessible,omitempty"`
+	Contexts   int `json:"contexts,omitempty"`
+	Namespaces int `json:"namespaces,omitempty"`
+	Resources  int `json:"resources"`
+	Images     int `json:"images"`
+	Findings   int `json:"findings"`
+	// FindingsWithSpecificCWE is the number of active findings that carry at least
+	// one specific CWE. Paired with Findings it is the data-quality metric that
+	// gates real-world control-credit coverage.
+	FindingsWithSpecificCWE int            `json:"findingsWithSpecificCwe"`
+	BySeverity              map[string]int `json:"bySeverity,omitempty"`
+	InternetAccessible      int            `json:"internetAccessible,omitempty"`
 }
