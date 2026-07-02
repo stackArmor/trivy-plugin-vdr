@@ -475,6 +475,146 @@ func TestEnrichFindingsSkipsNonCVEIDs(t *testing.T) {
 	}
 }
 
+func TestLookupExtractsADPCWEsSkippingNoinfoAndOther(t *testing.T) {
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{
+		"containers": {
+			"adp": [{
+				"title": "CISA ADP Vulnrichment",
+				"problemTypes": [{
+					"descriptions": [
+						{"cweId": "CWE-787", "type": "CWE", "description": "CWE-787 Out-of-bounds Write"},
+						{"cweId": "NVD-CWE-noinfo", "type": "CWE", "description": "NVD-CWE-noinfo"},
+						{"cweId": "NVD-CWE-Other", "type": "CWE", "description": "NVD-CWE-Other"},
+						{"type": "CWE", "description": "CWE-79 Cross-site Scripting"}
+					]
+				}]
+			}]
+		}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	enrichment, ok, err := NewStore(cacheDir).Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true (CWE-only record)")
+	}
+	if got, want := enrichment.CWEs, []string{"CWE-787", "CWE-79"}; !equalStrings(got, want) {
+		t.Fatalf("CWEs = %v, want %v (noinfo/Other skipped, free-text description parsed)", got, want)
+	}
+}
+
+func TestLookupCWEPrefersADPOverNVDWeaknesses(t *testing.T) {
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{
+		"containers": {
+			"adp": [{
+				"problemTypes": [{
+					"descriptions": [{"cweId": "CWE-787", "type": "CWE"}]
+				}]
+			}]
+		},
+		"weaknesses": [{
+			"description": [{"lang": "en", "value": "CWE-79"}]
+		}]
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	enrichment, ok, err := NewStore(cacheDir).Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true")
+	}
+	if got, want := enrichment.CWEs, []string{"CWE-787"}; !equalStrings(got, want) {
+		t.Fatalf("CWEs = %v, want %v (ADP takes precedence over NVD weaknesses)", got, want)
+	}
+}
+
+func TestLookupCWEFallsBackToNVDWeaknessesWhenADPAbsent(t *testing.T) {
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{
+		"weaknesses": [{
+			"description": [
+				{"lang": "en", "value": "CWE-79"},
+				{"lang": "en", "value": "NVD-CWE-noinfo"}
+			]
+		}]
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	enrichment, ok, err := NewStore(cacheDir).Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true (weaknesses fallback)")
+	}
+	if got, want := enrichment.CWEs, []string{"CWE-79"}; !equalStrings(got, want) {
+		t.Fatalf("CWEs = %v, want %v (NVD weaknesses fallback, noinfo skipped)", got, want)
+	}
+}
+
+func TestEnrichFindingsCopiesCWEsOntoFinding(t *testing.T) {
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "0xxx", "CVE-2026-0009.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{
+		"containers": {
+			"adp": [{
+				"problemTypes": [{
+					"descriptions": [{"cweId": "CWE-787", "type": "CWE"}]
+				}]
+			}]
+		}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+
+	findings := []model.Finding{{ID: "CVE-2026-0009", ImageRef: "repo/app:1", Severity: "HIGH"}}
+	enriched, err := EnrichFindings(findings, NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client())))
+	if err != nil {
+		t.Fatalf("EnrichFindings returned error: %v", err)
+	}
+	if got, want := enriched[0].CWEs, []string{"CWE-787"}; !equalStrings(got, want) {
+		t.Fatalf("finding CWEs = %v, want %v", got, want)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func vulnrichmentJSON(exploitation string) []byte {
 	return []byte(`{
 		"containers": {

@@ -217,11 +217,11 @@ func RenderTable(w io.Writer, report model.Report) error {
 		}
 		return tw.Flush()
 	}
-	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tPAIN\tREMEDIATION\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tIMAGE\tAFFECTED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tPAIN\tREMEDIATION\tEPSS\tAUTOMATABLE\tEXPLOITATION\tTECHNICAL IMPACT\tCWE\tIMAGE\tAFFECTED"); err != nil {
 		return err
 	}
 	for _, finding := range report.Findings {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			finding.ID,
 			formatPackage(finding),
 			finding.Severity,
@@ -232,6 +232,7 @@ func RenderTable(w io.Writer, report model.Report) error {
 			vulnrichmentValue(finding.Vulnrichment, "automatable"),
 			vulnrichmentValue(finding.Vulnrichment, "exploitation"),
 			vulnrichmentValue(finding.Vulnrichment, "technicalImpact"),
+			formatCWEs(finding.CWEs),
 			finding.ImageRef,
 			formatAffectedResources(finding.AffectedResources),
 		); err != nil {
@@ -396,6 +397,7 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 			Resource: ref,
 			Images:   append([]model.ContainerImage(nil), inv.images...),
 			Labels:   copyStringMap(inv.labels),
+			Posture:  inv.posture,
 		}
 		if classificationOnly {
 			report.Classification = classifyAsset(sc, idx, nsLabels, ref)
@@ -456,8 +458,9 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 }
 
 type containerInventory struct {
-	images []model.ContainerImage
-	labels map[string]string
+	images  []model.ContainerImage
+	labels  map[string]string
+	posture *model.WorkloadPosture
 }
 
 func indexContainerInventory(inventory *model.Inventory) map[model.ResourceRef]containerInventory {
@@ -469,8 +472,9 @@ func indexContainerInventory(inventory *model.Inventory) map[model.ResourceRef]c
 			ref.ContainerType = image.ContainerType
 			ref.RestartPolicy = image.RestartPolicy
 			index[ref] = containerInventory{
-				images: []model.ContainerImage{image},
-				labels: copyStringMap(resource.Labels),
+				images:  []model.ContainerImage{image},
+				labels:  copyStringMap(resource.Labels),
+				posture: resource.Posture,
 			}
 		}
 	}
@@ -496,6 +500,9 @@ func buildSummary(inventory *model.Inventory, findings []model.Finding, resource
 	summary.Findings = len(findings)
 	for _, finding := range findings {
 		summary.BySeverity[finding.Severity]++
+		if len(finding.CWEs) > 0 {
+			summary.FindingsWithSpecificCWE++
+		}
 	}
 	for _, resource := range resources {
 		if resource.Exposure != nil && resource.Exposure.InternetAccessible {
@@ -640,6 +647,7 @@ func classifyAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]strin
 func stripEnrichmentFields(finding *model.Finding) {
 	finding.EPSS = nil
 	finding.Vulnrichment = nil
+	finding.CWEs = nil
 }
 
 // worstAsset returns the PAIN and remediation of the most urgent affected
@@ -720,6 +728,7 @@ func bestExposure(resources []model.ResourceRef, exposures map[model.ResourceRef
 func cloneFinding(finding model.Finding) model.Finding {
 	clone := finding
 	clone.References = append([]string(nil), finding.References...)
+	clone.CWEs = append([]string(nil), finding.CWEs...)
 	clone.AffectedResources = append([]model.ResourceRef(nil), finding.AffectedResources...)
 	clone.Affected = cloneAffected(finding.Affected)
 	if finding.EPSS != nil {
@@ -805,6 +814,19 @@ func severityRank(value string) int {
 		return 1
 	default:
 		return 0
+	}
+}
+
+// formatCWEs renders the finding's CWEs for the table view as the first id plus a
+// "(+N)" overflow marker when more are present.
+func formatCWEs(cwes []string) string {
+	switch len(cwes) {
+	case 0:
+		return ""
+	case 1:
+		return cwes[0]
+	default:
+		return fmt.Sprintf("%s (+%d)", cwes[0], len(cwes)-1)
 	}
 }
 

@@ -100,6 +100,11 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 		if err := c.collectCronJobs(ctx, namespace, &builder); err != nil {
 			return nil, err
 		}
+		// Namespace-scoped posture facts (NetworkPolicy selection, PDBs) are captured
+		// read-only and best-effort: RBAC/API failures leave the fields unset rather
+		// than failing the scan.
+		c.collectNetworkPolicyPosture(ctx, namespace, &builder)
+		c.collectPodDisruptionBudgetPosture(ctx, namespace, &builder)
 	}
 
 	// Namespace-level FedRAMP metadata and cluster-wide defaults are best-effort:
@@ -219,7 +224,7 @@ func (c *Collector) collectPods(ctx context.Context, namespace string, builder *
 			continue
 		}
 		ref := model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
-		builder.addResource(ref, pod.Spec, pod.Annotations, pod.Labels, pod.Labels)
+		builder.addResource(ref, pod.Spec, pod.Annotations, pod.Labels, pod.Labels, nil)
 	}
 	return nil
 }
@@ -240,7 +245,7 @@ func (c *Collector) collectDeployments(ctx context.Context, namespace string, bu
 	}
 	for _, deployment := range deployments.Items {
 		ref := workloadRef("apps/v1", "Deployment", deployment.Namespace, deployment.Name)
-		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations, deployment.Labels, deployment.Spec.Template.Labels)
+		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations, deployment.Labels, deployment.Spec.Template.Labels, deployment.Spec.Replicas)
 	}
 	return nil
 }
@@ -252,7 +257,7 @@ func (c *Collector) collectStatefulSets(ctx context.Context, namespace string, b
 	}
 	for _, statefulSet := range statefulSets.Items {
 		ref := workloadRef("apps/v1", "StatefulSet", statefulSet.Namespace, statefulSet.Name)
-		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations, statefulSet.Labels, statefulSet.Spec.Template.Labels)
+		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations, statefulSet.Labels, statefulSet.Spec.Template.Labels, statefulSet.Spec.Replicas)
 	}
 	return nil
 }
@@ -267,7 +272,7 @@ func (c *Collector) collectDaemonSets(ctx context.Context, namespace string, inc
 			continue
 		}
 		ref := workloadRef("apps/v1", "DaemonSet", daemonSet.Namespace, daemonSet.Name)
-		builder.addResource(ref, daemonSet.Spec.Template.Spec, daemonSet.Spec.Template.Annotations, daemonSet.Labels, daemonSet.Spec.Template.Labels)
+		builder.addResource(ref, daemonSet.Spec.Template.Spec, daemonSet.Spec.Template.Annotations, daemonSet.Labels, daemonSet.Spec.Template.Labels, nil)
 	}
 	return nil
 }
@@ -279,7 +284,7 @@ func (c *Collector) collectJobs(ctx context.Context, namespace string, builder *
 	}
 	for _, job := range jobs.Items {
 		ref := workloadRef("batch/v1", "Job", job.Namespace, job.Name)
-		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations, job.Labels, job.Spec.Template.Labels)
+		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations, job.Labels, job.Spec.Template.Labels, nil)
 	}
 	return nil
 }
@@ -291,7 +296,7 @@ func (c *Collector) collectCronJobs(ctx context.Context, namespace string, build
 	}
 	for _, cronJob := range cronJobs.Items {
 		ref := workloadRef("batch/v1", "CronJob", cronJob.Namespace, cronJob.Name)
-		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec, cronJob.Spec.JobTemplate.Spec.Template.Annotations, cronJob.Labels, cronJob.Spec.JobTemplate.Spec.Template.Labels)
+		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec, cronJob.Spec.JobTemplate.Spec.Template.Annotations, cronJob.Labels, cronJob.Spec.JobTemplate.Spec.Template.Labels, nil)
 	}
 	return nil
 }
@@ -315,8 +320,12 @@ type inventoryBuilder struct {
 // template labels. They are merged into ResourceInventory.Labels with the pod
 // template winning on conflict, so VDR archetype tags applied at either level
 // (Helm values.labels render to the workload object) are visible to scoring.
-func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string) {
-	resourceInventory := model.ResourceInventory{Resource: resource, Labels: mergeLabels(workloadLabels, templateLabels)}
+func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string, replicas *int32) {
+	resourceInventory := model.ResourceInventory{
+		Resource: resource,
+		Labels:   mergeLabels(workloadLabels, templateLabels),
+		Posture:  workloadPosture(spec, replicas),
+	}
 	for _, c := range spec.Containers {
 		b.addContainer(&resourceInventory, resource, spec, annotations, c, "container")
 	}
