@@ -1,6 +1,6 @@
-# Control-Credit: Capture (plugin) and Evaluation (downstream)
+# PAIN Relief: Capture (plugin) and Evaluation (downstream)
 
-> **SCOPE SPLIT (authoritative).** The control-credit work is divided across a
+> **SCOPE SPLIT (authoritative).** The PAIN Relief work is divided across a
 > hard boundary:
 >
 > - **The k8s plugin CAPTURES only.** It emits, per finding, the CWE IDs (§1) and,
@@ -10,7 +10,7 @@
 >   join, NO PAIN/EPSS modification, and NO cloud-semantic interpretation (no
 >   "IMDS", no control names). The plugin's base PAIN/LEV/reachability scoring is
 >   unchanged.
-> - **A DOWNSTREAM evaluator EVALUATES.** It loads the vdr-control-credit
+> - **A DOWNSTREAM evaluator EVALUATES.** It loads the vdr-pain-relief
 >   taxonomy, matches CWE × observed-facts → credits, and applies the
 >   Modified-metric and adjustedEPSS moves. Everything below §CAPTURE (the loader,
 >   join engine, exploitability model, credit-posture report) describes THAT
@@ -23,7 +23,7 @@
 
 Status: **Design spec.** Companion to
 [`reachability-v2-spec.md`](reachability-v2-spec.md). The private
-[vdr-control-credit](https://github.com/stackArmor/vdr-control-credit) taxonomy
+[vdr-pain-relief](https://github.com/stackArmor/vdr-pain-relief) taxonomy
 maps (machine-verified control × CWE class) → deterministic Modified-metric
 credit. The taxonomy holds the causal stories and governance; the downstream
 evaluator applies them to the plugin's captured facts.
@@ -51,7 +51,7 @@ taxonomy's imds-protection control). The plugin never makes that mapping.
 ## DOWNSTREAM EVALUATION (design of record — NOT in the plugin)
 
 Status: **Design spec — not implemented in the plugin.** Consumes the private
-[vdr-control-credit](https://github.com/stackArmor/vdr-control-credit) taxonomy:
+[vdr-pain-relief](https://github.com/stackArmor/vdr-pain-relief) taxonomy:
 (machine-verified control × CWE class) → deterministic Modified-metric credit.
 Describes how a downstream consumer surfaces CWEs, verifies controls, joins, and
 scores.
@@ -190,9 +190,9 @@ LEV = KEV OR (adjustedEPSS >= EPSS_THRESHOLD) OR (floor AND NOT floorDefeated)
 Evidence line format:
 
 ```text
-"control-credit: CC-RUN-SELINUX-CONFINE v0.7.0 counters CWE-787 via class:ACE (enforcing; process domain httpd_t, policy query 2026-07-02); MC,MI High->Low"
-"control-credit: CC-LIKE-EDR-BLOCK v0.7.0 residualFactor 0.85; EPSS 0.74 -> adjustedEPSS 0.63 -> NLEV (blocking EDR enforcing, policy export 2026-07-02)"
-"control-credit near-miss: CC-HA-RECOVERABLE-CRASH blocked -- missing PodDisruptionBudget (replicas=4, zone spread ok, liveness ok)"
+"PAIN Relief: CC-RUN-SELINUX-CONFINE v0.7.0 counters CWE-787 via class:ACE (enforcing; process domain httpd_t, policy query 2026-07-02); MC,MI High->Low"
+"PAIN Relief: CC-LIKE-EDR-BLOCK v0.7.0 residualFactor 0.85; EPSS 0.74 -> adjustedEPSS 0.63 -> NLEV (blocking EDR enforcing, policy export 2026-07-02)"
+"PAIN Relief near-miss: CC-HA-RECOVERABLE-CRASH blocked -- missing PodDisruptionBudget (replicas=4, zone spread ok, liveness ok)"
 ```
 
 ### 4b. Reachability guidelines are NOT implemented (current decision)
