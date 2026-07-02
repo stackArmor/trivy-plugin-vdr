@@ -97,7 +97,7 @@ rules:
     resources: ["ingressclassparams"]
     verbs: ["list"]
   - apiGroups: ["gateway.k8s.aws"]
-    resources: ["loadbalancerconfigurations"]
+    resources: ["loadbalancerconfigurations", "targetgroupconfigurations"]
     verbs: ["list"]
 ```
 
@@ -215,7 +215,7 @@ rules:
     resources: ["ingressclassparams"]
     verbs: ["get", "list"]
   - apiGroups: ["gateway.k8s.aws"]
-    resources: ["loadbalancerconfigurations"]
+    resources: ["loadbalancerconfigurations", "targetgroupconfigurations"]
     verbs: ["get", "list"]
 ```
 
@@ -365,7 +365,7 @@ Exposure analysis is intentionally conservative:
 
 	  > **Use this label only when the load balancer is managed outside Kubernetes** (e.g. a standalone NEG wired to a GCP load balancer provisioned in Terraform). It is a manual, operator-asserted override: the cluster has no way to verify it, so it can drift out of sync with the real edge — if the external LB is added, removed, or re-scoped (internal ↔ external) the label won't follow, and the assessment will be silently wrong. This is inherently brittle. The recommended alternative is to let Kubernetes own the load balancer — a native GKE `Ingress` (`gce`), a GKE `Gateway`, or a `type=LoadBalancer` Service — so reachability (and IAP/BackendConfig protection) is inferred directly from cluster state and stays correct automatically, with no label to maintain.
 
-JSON output also includes optional `exposure.routes` metadata when route details are available. For Kubernetes this can include Ingress/Gateway hostnames, path matches, header matches, rewrite filters, and backend Service references. For Cloud Run load-balancer paths this can include forwarding-rule, URL-map, target-proxy, hostname, path, rewrite, and backend-service metadata. These details are informational; the current table and HTML reports keep the existing high-level internet exposure column.
+JSON output also includes optional `exposure.routes` metadata when route details are available. For Kubernetes this can include Ingress/Gateway hostnames, path matches, header matches, rewrite filters, backend Service references, and provider-derived protocol hints such as frontend protocol, backend protocol, backend protocol version, backend TLS, ALPN, and ALPN policy. AWS ALB Ingress protocol hints come from `alb.ingress.kubernetes.io/backend-protocol` / `backend-protocol-version`; AWS Gateway hints come from `gateway.k8s.aws` `TargetGroupConfiguration`; AWS NLB Service ALPN hints come from `service.beta.kubernetes.io/aws-load-balancer-alpn-policy`; GKE Ingress backend hints come from `cloud.google.com/app-protocols` when present. For Cloud Run load-balancer paths this can include forwarding-rule, URL-map, target-proxy, hostname, path, rewrite, and backend-service metadata. These details are informational; the current table and HTML reports keep the existing high-level internet exposure column.
 
 Normal init containers do not inherit internet exposure. Sidecar-style init containers inherit exposure only when their container restart policy is `Always`.
 

@@ -6,7 +6,7 @@
 
 Cloud Run jobs are never counted as internet-reachable. Cloud Run services are evaluated from service ingress settings, IAM policy, and, for load-balancer-only ingress, public HTTP(S) load balancer metadata.
 
-When load-balancer route details are available, JSON output includes informational `exposure.routes` metadata such as forwarding rule, URL map, target proxy, hostnames, paths, rewrites, and backend service. These fields do not change reachability decisions by themselves.
+When load-balancer route details are available, JSON output includes informational `exposure.routes` metadata such as forwarding rule, URL map, target proxy, hostnames, paths, rewrites, backend service, provider-derived backend protocol, backend protocol version, backend TLS, ALPN, and ALPN policy. These fields do not change reachability decisions by themselves.
 
 ```mermaid
 flowchart TD
@@ -66,7 +66,10 @@ Notes:
 - AWS ALB Ingress and AWS Gateway are public only when their scheme or load balancer configuration is `internet-facing`.
 - AWS `oidc` and `cognito` authentication are recorded as access-protection evidence, but the backend still has an internet-facing route.
 - If an unprovisioned Ingress and a Gateway both target the same Service, the Gateway route can still make the workload internet-reachable.
-- JSON output includes informational `exposure.routes` metadata when available. Ingress metadata can include hostnames and paths. Gateway API metadata can include hostnames, path matches, header matches, URL rewrite filters, request redirects, and backend Service references.
+- JSON output includes informational `exposure.routes` metadata when available. Ingress metadata can include hostnames and paths. Gateway API metadata can include hostnames, path matches, header matches, URL rewrite filters, request redirects, backend Service references, and provider-derived protocol hints.
+- AWS ALB Ingress protocol hints are derived from `alb.ingress.kubernetes.io/backend-protocol` and `alb.ingress.kubernetes.io/backend-protocol-version`; Service annotations take precedence over Ingress annotations when both are present.
+- AWS Gateway protocol hints are derived from `gateway.k8s.aws` `TargetGroupConfiguration.spec.protocol` and `spec.protocolVersion` for the selected backend Service.
+- GKE Ingress backend protocol hints are derived from `cloud.google.com/app-protocols` on the selected backend Service when the referenced Service port can be resolved.
 
 ### Operator-declared classes
 
@@ -99,6 +102,8 @@ cannot infer reachability. An operator can declare it two ways:
 ## Kubernetes Service LoadBalancer
 
 A `Service` of type `LoadBalancer` can expose the pods it selects directly. This catches data-path pods for ingress and gateway controllers such as Traefik, ingress-nginx, and Envoy without relying on controller names.
+
+For AWS NLB Services, `exposure.routes` also records `service.beta.kubernetes.io/aws-load-balancer-alpn-policy` when present and expands known policies into normalized ALPN hints such as `h2` and `http/1.1`.
 
 ```mermaid
 flowchart TD
