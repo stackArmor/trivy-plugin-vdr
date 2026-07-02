@@ -121,15 +121,17 @@ they lower a local estimate, the mirror of how impact credits move Modified
 C/I/A without touching the base vector.
 
 ```text
-adjustedEPSS = EPSS * min(residualFactor of applicable likelihood rows)  # no-stacking v1
+adjustedEPSS = max( EPSS * PRODUCT(residualFactor of applicable rows),
+                    EPSS * STACKING_FLOOR )              # multiplicative, floored
 LEV = KEV OR (adjustedEPSS >= EPSS_THRESHOLD) OR (floor AND NOT floorDefeated)
   # floorDefeated: a CC-LIKE-EDGEAUTH-FLOOR row verified for the asset
   # KEV: frozen -- residualFactor never applies; LEV stays true; clock untouched
+  # STACKING_FLOOR: governed constant (~0.5), caps total stacked reduction
 ```
 
 - `epss-residual` rows carry `residualFactor` (0,1); apply only to non-KEV
-  findings whose CWE the row counters (`*` = all). Take the single lowest factor
-  (strongest reduction) — no multiplicative stacking in v1.
+  findings whose CWE the row counters (`*` = all). Factors **stack
+  multiplicatively** (defense-in-depth), bounded below by `EPSS * STACKING_FLOOR`.
 - `floor-defeated` rows (edge-auth) remove only the floor OR-term; they do not
   touch adjustedEPSS.
 - Both **EPSS (published) and adjustedEPSS (local, with the row cited)** appear in
@@ -206,7 +208,7 @@ CycloneDX: `vdr:controlCredit:<metric>` = comma-joined row ids;
 | CC1 | Taxonomy loader | S | pinned-release load, schema check, class expansion (incl. vector-conditioned CRASH), version in header |
 | CC2 | K8s verification collectors | M | podspec/image/ingress predicates for the runtime, web, availability rows; per-control verification records in the evidence bundle |
 | CC3 | Join engine + scoring hook (impact) | M | credits computed per (finding, asset); no-stacking collapse; ModifiedOverrides recompute; v1 IRV-fallback conservatism test (HA row requires citation/rate-limit when reachability model is v1) |
-| CC3b | Exploitability adjustment | S | adjustedEPSS = EPSS * strongest residualFactor; LEV recompute; KEV frozen test; floor-defeat term; both EPSS values in output; no-taxonomy = stock LEV |
+| CC3b | Exploitability adjustment | S | adjustedEPSS = EPSS * PRODUCT(residualFactors) floored at STACKING_FLOOR; LEV recompute; KEV frozen test; floor-defeat term; both EPSS values in output; no-taxonomy = stock LEV |
 | CC4 | Credit-posture report | S | firing/blocked lists with exact failed predicates and benefiting-finding counts; PAIN and LEV downgrades each shown with row key |
 | CC5 | STIG results ingestion | M | `--stig-results-file` + adapter resolution (requires_all + supplement semantics; supports never fires alone); freshness window fails closed |
 | CC6 | Cloud-managed flags | M | RDS/Cloud SQL/ALB reads behind optional credentials; managed-db-ha and db-tls rows verifiable |
