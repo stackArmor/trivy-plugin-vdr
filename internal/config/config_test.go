@@ -547,3 +547,23 @@ func TestParseRejectsInvalidScanAndCacheFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTaxonomy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cfg, err := Parse([]string{"k8s"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Taxonomy != "" {
+		t.Fatalf("Taxonomy = %q, want empty by default (credit engine disabled)", cfg.Taxonomy)
+	}
+
+	cfg, err = Parse([]string{"k8s", "--taxonomy", "stackArmor/vdr-control-credit@0.8.0"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Taxonomy != "stackArmor/vdr-control-credit@0.8.0" {
+		t.Fatalf("Taxonomy = %q, want the provided ref", cfg.Taxonomy)
+	}
+}

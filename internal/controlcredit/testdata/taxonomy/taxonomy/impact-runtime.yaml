@@ -1,0 +1,47 @@
+# Fixture rows exercising literal CWEs, class:ACE, and class:CRASH.
+rows:
+  - id: CC-RUN-DISTROLESS
+    title: No shell in image counters command injection
+    control:
+      name: no-shell-image
+    counters:
+      cweClasses: [CWE-78, CWE-77]
+      rationale: An image with no shell cannot run an injected command line.
+    credit:
+      lane: impact
+      metrics: [MC, MI]
+      move: high-to-low
+      conditions: []
+    confidence: high
+    provenance: {version: 1, status: active}
+
+  - id: CC-RUN-SELINUX-CONFINE
+    title: SELinux domain confinement bounds RCE blast radius
+    control:
+      name: selinux-confinement
+    counters:
+      cweClasses: ["class:ACE"]
+      rationale: MAC bounds a compromised process to its domain.
+    credit:
+      lane: impact
+      metrics: [MC, MI]
+      move: high-to-low
+      conditions:
+        - SELinux enforcing (not permissive)
+    confidence: medium
+    provenance: {version: 1, status: active}
+
+  - id: CC-HA-RECOVERABLE-CRASH
+    title: HA counters recoverable process crashes
+    control:
+      name: verified-ha
+    counters:
+      cweClasses: ["class:CRASH"]
+      rationale: Replicas plus restart absorb a single process death.
+    credit:
+      lane: impact
+      metrics: [MA]
+      move: high-to-low
+      conditions: []
+    confidence: high
+    provenance: {version: 1, status: active}

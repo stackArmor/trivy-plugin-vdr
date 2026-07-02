@@ -1,0 +1,7 @@
+controls:
+  no-shell-image:
+    kubernetes: image layer inspection shows no /bin/sh or interpreter.
+  selinux-confinement:
+    vm-systemd: getenforce=Enforcing plus per-process confined domain.
+  verified-ha:
+    kubernetes: replicas>=3 across >=2 zones with PDB and liveness probe.

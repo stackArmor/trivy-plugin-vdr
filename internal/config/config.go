@@ -54,6 +54,7 @@ type Config struct {
 	HTMLOutput                   string
 	HTMLTemplate                 string
 	ScoringConfig                string
+	Taxonomy                     string
 	MinSeverity                  string
 	MinEPSS                      float64
 	SkipEnrichment               bool
@@ -160,6 +161,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.HTMLOutput, "html-output", cfg.HTMLOutput, "write optional standalone HTML report to file")
 	fs.StringVar(&cfg.HTMLTemplate, "html-template", cfg.HTMLTemplate, "custom HTML report template path")
 	fs.StringVar(&cfg.ScoringConfig, "scoring-config", cfg.ScoringConfig, "optional FedRAMP PAIN scoring config (YAML or JSON); built-in defaults are used when omitted")
+	fs.StringVar(&cfg.Taxonomy, "taxonomy", cfg.Taxonomy, "optional control-credit taxonomy: a local directory path or a pinned owner/repo@tag (fetched via the gh CLI); omitted = credit engine disabled")
 	fs.StringVar(&cfg.MinSeverity, "min-severity", cfg.MinSeverity, "minimum severity")
 	fs.StringVar(&minEPSS, "min-epss", minEPSS, "minimum EPSS score from 0 to 1")
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudrun"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/controlcredit"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/epss"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/vulnrichment"
@@ -48,19 +49,39 @@ func run(args []string) error {
 		return err
 	}
 	logger := log.New(log.LevelFromFlags(cfg.Quiet, cfg.Debug))
+	ctx := context.Background()
+	taxonomy := loadTaxonomy(ctx, cfg, logger)
 	switch cfg.Source {
 	case config.SourceK8s:
-		return runK8s(context.Background(), cfg, logger, os.Stdout)
+		return runK8s(ctx, cfg, logger, os.Stdout, taxonomy)
 	case config.SourceCloudRun:
-		return runCloudRun(context.Background(), cfg, logger, os.Stdout)
+		return runCloudRun(ctx, cfg, logger, os.Stdout, taxonomy)
 	case config.SourceImage:
-		return runImage(context.Background(), cfg, logger, os.Stdout)
+		return runImage(ctx, cfg, logger, os.Stdout, taxonomy)
 	default:
 		return fmt.Errorf("source %q is not implemented yet", cfg.Source)
 	}
 }
 
-func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+// loadTaxonomy resolves the optional control-credit taxonomy. With no
+// --taxonomy ref the credit engine is inert by design. On any load failure the
+// engine is disabled LOUDLY (logged as an error and stamped in the header); it
+// never falls back to another table, so "which table scored this" is
+// unambiguous.
+func loadTaxonomy(ctx context.Context, cfg config.Config, logger *log.Logger) *controlcredit.Taxonomy {
+	if cfg.Taxonomy == "" {
+		return controlcredit.Disabled()
+	}
+	taxonomy, err := controlcredit.Load(ctx, cfg.Taxonomy)
+	if err != nil {
+		logger.Error("control-credit taxonomy %q failed to load: %v; credit engine DISABLED (no fallback)", cfg.Taxonomy, err)
+		return taxonomy
+	}
+	logger.Info("loaded control-credit taxonomy %s (%d rows) from %s", taxonomy.HeaderLabel(), len(taxonomy.Rows), cfg.Taxonomy)
+	return taxonomy
+}
+
+func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, taxonomy *controlcredit.Taxonomy) error {
 	collector, contextName, err := k8s.NewForCurrentContext()
 	if err != nil {
 		return err
@@ -98,7 +119,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures, taxonomy)
 	}
 
 	var dockerConfigDir string
@@ -132,10 +153,10 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures, taxonomy)
 }
 
-func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, taxonomy *controlcredit.Taxonomy) error {
 	client, err := cloudrun.NewGCPClient(ctx, cloudrun.ClientOptions{ImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount})
 	if err != nil {
 		return err
@@ -176,7 +197,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures, taxonomy)
 	}
 
 	var dockerConfigDir string
@@ -199,10 +220,10 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures, taxonomy)
 }
 
-func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, taxonomy *controlcredit.Taxonomy) error {
 	inventory := imageinventory.Collect(cfg.ImageRefs)
 	logger.Info("inventory: %d standalone images", len(inventory.Images))
 
@@ -227,10 +248,10 @@ func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, nil)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, nil, taxonomy)
 }
 
-func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, warnings []string, dockerConfigDir string, exposures map[model.ResourceRef]model.Exposure) error {
+func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, warnings []string, dockerConfigDir string, exposures map[model.ResourceRef]model.Exposure, taxonomy *controlcredit.Taxonomy) error {
 	trivyRunner := scanner.TrivyRunner{
 		ImageSrc:         cfg.ImageSrc,
 		CacheDir:         cfg.CacheDir,
@@ -304,7 +325,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 
 	warnings = append(warnings, scannerWarnings(scanWarnings)...)
 
-	if err := reportInventory(cfg, logger, stdout, inventory, findings, warnings, exposures); err != nil {
+	if err := reportInventory(cfg, logger, stdout, inventory, findings, warnings, exposures, taxonomy); err != nil {
 		return err
 	}
 
@@ -316,7 +337,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 	return nil
 }
 
-func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, findings []model.Finding, warnings []string, exposures map[model.ResourceRef]model.Exposure) error {
+func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, findings []model.Finding, warnings []string, exposures map[model.ResourceRef]model.Exposure, taxonomy *controlcredit.Taxonomy) error {
 	scoringConfig := scoring.Default()
 	if cfg.ScoringConfig != "" {
 		loaded, scErr := scoring.Load(cfg.ScoringConfig)
@@ -336,6 +357,15 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 		}
 	}
 
+	taxonomyLabel := ""
+	taxonomyVersion := ""
+	if taxonomy != nil {
+		taxonomyLabel = taxonomy.HeaderLabel()
+		if taxonomy.Enabled {
+			taxonomyVersion = taxonomy.Version
+		}
+	}
+
 	primary := report.Build(inventory, findings, exposures, report.Options{
 		View:                cfg.View,
 		MinSeverity:         cfg.MinSeverity,
@@ -344,6 +374,8 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 		Scoring:             scoringConfig,
 		ClassificationOnly:  cfg.ScanReachabilityOnly,
 		SuppressEnrichments: cfg.ScanReachabilityOnly,
+		TaxonomyLabel:       taxonomyLabel,
+		TaxonomyVersion:     taxonomyVersion,
 	})
 	if err := writePrimaryReport(stdout, cfg.Output, cfg.Format, primary); err != nil {
 		return err
@@ -357,6 +389,8 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 			Scoring:             scoringConfig,
 			ClassificationOnly:  cfg.ScanReachabilityOnly,
 			SuppressEnrichments: cfg.ScanReachabilityOnly,
+			TaxonomyLabel:       taxonomyLabel,
+			TaxonomyVersion:     taxonomyVersion,
 		})
 		if err := writeHTMLReport(cfg.HTMLOutput, cfg.HTMLTemplate, htmlReport); err != nil {
 			return err
