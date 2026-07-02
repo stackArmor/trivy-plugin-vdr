@@ -1,11 +1,60 @@
-# Control-Credit Consumption: CWE Surfacing and the Taxonomy Join Engine
+# Control-Credit: Capture (plugin) and Evaluation (downstream)
 
-Status: **Design spec — not implemented.** Companion to
-[`reachability-v2-spec.md`](reachability-v2-spec.md). Consumes the private
+> **SCOPE SPLIT (authoritative).** The control-credit work is divided across a
+> hard boundary:
+>
+> - **The k8s plugin CAPTURES only.** It emits, per finding, the CWE IDs (§1) and,
+>   per workload, a neutral `WorkloadPosture` block of raw Kubernetes-observed
+>   facts (§CAPTURE below) — securityContext booleans, NetworkPolicy CIDRs,
+>   replicas/PDB/topology, serviceaccount, volumes. It contains NO taxonomy, NO
+>   join, NO PAIN/EPSS modification, and NO cloud-semantic interpretation (no
+>   "IMDS", no control names). The plugin's base PAIN/LEV/reachability scoring is
+>   unchanged.
+> - **A DOWNSTREAM evaluator EVALUATES.** It loads the vdr-control-credit
+>   taxonomy, matches CWE × observed-facts → credits, and applies the
+>   Modified-metric and adjustedEPSS moves. Everything below §CAPTURE (the loader,
+>   join engine, exploitability model, credit-posture report) describes THAT
+>   downstream consumer, not the plugin. Retained here as the downstream design of
+>   record; the Go implementations live on the closed branches
+>   feat/cc1-taxonomy-loader, feat/cc-join-scoring, feat/cc4-report-html.
+>
+> Implemented in the plugin today: §1 (CWE surfacing) and §CAPTURE
+> (WorkloadPosture), on PR #11.
+
+Status: **Design spec.** Companion to
+[`reachability-v2-spec.md`](reachability-v2-spec.md). The private
+[vdr-control-credit](https://github.com/stackArmor/vdr-control-credit) taxonomy
+maps (machine-verified control × CWE class) → deterministic Modified-metric
+credit. The taxonomy holds the causal stories and governance; the downstream
+evaluator applies them to the plugin's captured facts.
+
+## CAPTURE — what the plugin emits (implemented)
+
+Per finding: `cwes` (§1). Per workload, `resources[].posture` (`model.WorkloadPosture`),
+all fields raw Kubernetes observations, `omitempty`, read-only, fail-open:
+
+- `securityContext`: readOnlyRootFilesystem, runAsNonRoot, privileged,
+  allowPrivilegeEscalation, droppedCapabilities[], seccompProfileType
+- `workload`: replicas, hasPodDisruptionBudget, zoneSpread, livenessProbe,
+  readinessProbe
+- `identity`: serviceAccountName, automountServiceAccountToken, envFromSecretRef
+- `volumes`: writableVolumeMounts[]
+- `networkPolicy`: selectedByEgressPolicy, egressDefaultDeny, egressAllowedCidrs[],
+  egressDeniedByExcept[], selectedByIngressPolicy
+
+The downstream evaluator maps these raw facts onto taxonomy control predicates
+(e.g. an `egressDeniedByExcept` containing `169.254.169.254/32` satisfies the
+taxonomy's imds-protection control). The plugin never makes that mapping.
+
+---
+
+## DOWNSTREAM EVALUATION (design of record — NOT in the plugin)
+
+Status: **Design spec — not implemented in the plugin.** Consumes the private
 [vdr-control-credit](https://github.com/stackArmor/vdr-control-credit) taxonomy:
 (machine-verified control × CWE class) → deterministic Modified-metric credit.
-The taxonomy holds the causal stories and governance; this spec defines only how
-the plugin surfaces CWEs, verifies controls, joins, and scores.
+Describes how a downstream consumer surfaces CWEs, verifies controls, joins, and
+scores.
 
 ## 1. Phase CC0 — CWE surfacing (prerequisite for everything)
 
