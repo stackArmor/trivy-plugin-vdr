@@ -30,6 +30,11 @@ type Options struct {
 	// Scoring is the FedRAMP PAIN rubric. When nil, the built-in default rubric
 	// (scoring.Default) is used.
 	Scoring *scoring.Config
+	// TaxonomyLabel is the control-credit taxonomy tier/version stamp for the
+	// header (e.g. "full-v0.8.0"), empty when no taxonomy was requested.
+	TaxonomyLabel string
+	// TaxonomyVersion is the loaded taxonomy release for the header.
+	TaxonomyVersion string
 }
 
 func Build(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, options Options) model.Report {
@@ -65,7 +70,7 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		GeneratedAt:        options.GeneratedAt,
 		ContextName:        contextName,
 		Class:              class,
-		Summary:            buildSummary(inventory, active, resourceReports),
+		Summary:            buildSummary(inventory, active, resourceReports, options),
 		SuppressedFindings: suppressedWithWouldHaveBeen(suppressed, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly),
 		Warnings:           append([]string(nil), options.Warnings...),
 		ClassificationOnly: options.ClassificationOnly,
@@ -477,8 +482,10 @@ func indexContainerInventory(inventory *model.Inventory) map[model.ResourceRef]c
 	return index
 }
 
-func buildSummary(inventory *model.Inventory, findings []model.Finding, resources []model.ResourceReport) model.Summary {
+func buildSummary(inventory *model.Inventory, findings []model.Finding, resources []model.ResourceReport, options Options) model.Summary {
 	summary := model.Summary{BySeverity: map[string]int{}}
+	summary.Taxonomy = options.TaxonomyLabel
+	summary.TaxonomyVersion = options.TaxonomyVersion
 	if inventory != nil {
 		summary.Resources = len(inventory.Resources)
 		summary.Images = len(inventory.Images)

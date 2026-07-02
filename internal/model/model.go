@@ -281,4 +281,12 @@ type Summary struct {
 	Findings           int            `json:"findings"`
 	BySeverity         map[string]int `json:"bySeverity,omitempty"`
 	InternetAccessible int            `json:"internetAccessible,omitempty"`
+	// Taxonomy is the control-credit taxonomy tier/version stamp for this run,
+	// e.g. "full-v0.8.0", or "disabled (load failed)" when a taxonomy was
+	// requested but could not be loaded. Empty when no taxonomy was requested
+	// (the credit engine is inert by default).
+	Taxonomy string `json:"taxonomy,omitempty"`
+	// TaxonomyVersion is the loaded taxonomy release, recorded so a score is
+	// reproducible against a named release.
+	TaxonomyVersion string `json:"taxonomyVersion,omitempty"`
 }

@@ -1,0 +1,17 @@
+# Fixture classes: a trimmed ACE and CRASH for loader tests.
+classes:
+  ACE:
+    title: Arbitrary-code-execution-capable weaknesses
+    members:
+      - CWE-78
+      - CWE-94
+      - CWE-502
+      - CWE-787
+  CRASH:
+    title: Process-death outcomes
+    members:
+      - CWE-476
+      - CWE-617
+    membersWhenAvailabilityOnly:
+      - CWE-787
+      - CWE-125
