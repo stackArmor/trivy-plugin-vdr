@@ -464,6 +464,16 @@ func TestParseRejectsInvalidFormat(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsCycloneDXFormat(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--format", "cyclonedx"})
+	if err != nil {
+		t.Fatalf("Parse returned error for cyclonedx format: %v", err)
+	}
+	if cfg.Format != FormatCycloneDX {
+		t.Fatalf("Format = %q, want %q", cfg.Format, FormatCycloneDX)
+	}
+}
+
 func TestParseRejectsInvalidView(t *testing.T) {
 	_, err := Parse([]string{"k8s", "--view", "clusters"})
 	if err == nil {

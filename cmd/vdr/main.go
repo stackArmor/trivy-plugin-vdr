@@ -336,8 +336,17 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 		}
 	}
 
+	// The CycloneDX VEX output is asset-centric: it emits one vulnerability per
+	// (CVE, affected asset) and attaches each asset's WorkloadPosture. The
+	// resources view is what carries per-asset findings and posture, so build the
+	// primary report with that view when CycloneDX is requested. The json and
+	// table paths are unaffected and continue to honor cfg.View.
+	primaryView := cfg.View
+	if cfg.Format == config.FormatCycloneDX {
+		primaryView = report.ViewResources
+	}
 	primary := report.Build(inventory, findings, exposures, report.Options{
-		View:                cfg.View,
+		View:                primaryView,
 		MinSeverity:         cfg.MinSeverity,
 		MinEPSS:             cfg.MinEPSS,
 		Warnings:            warnings,
@@ -383,6 +392,8 @@ func writePrimaryReport(stdout io.Writer, path, format string, scanReport model.
 		return report.RenderJSON(writer, scanReport)
 	case config.FormatTable:
 		return report.RenderTable(writer, scanReport)
+	case config.FormatCycloneDX:
+		return report.RenderCycloneDX(writer, scanReport)
 	default:
 		return fmt.Errorf("unsupported output format %q", format)
 	}
