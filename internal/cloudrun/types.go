@@ -19,15 +19,16 @@ type Container struct {
 }
 
 type Service struct {
-	Project          string
-	Region           string
-	Name             string
-	Ingress          string
-	URI              string
-	RuntimeClassName string
-	Labels           map[string]string
-	Annotations      map[string]string
-	Containers       []Container
+	Project            string
+	Region             string
+	Name               string
+	Ingress            string
+	URI                string
+	RuntimeClassName   string
+	InvokerIAMDisabled bool
+	Labels             map[string]string
+	Annotations        map[string]string
+	Containers         []Container
 }
 
 type Job struct {

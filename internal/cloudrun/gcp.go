@@ -586,14 +586,15 @@ func (c *GCPClient) routesForBackend(ctx context.Context, project string, rule *
 
 func serviceFromPB(project, region string, service *runpb.Service) Service {
 	return Service{
-		Project:     project,
-		Region:      region,
-		Name:        path.Base(service.GetName()),
-		Ingress:     ingressFromPB(service.GetIngress()),
-		URI:         service.GetUri(),
-		Labels:      copyStringMap(service.GetLabels()),
-		Annotations: copyStringMap(service.GetAnnotations()),
-		Containers:  containersFromPB(service.GetTemplate().GetContainers()),
+		Project:            project,
+		Region:             region,
+		Name:               path.Base(service.GetName()),
+		Ingress:            ingressFromPB(service.GetIngress()),
+		URI:                service.GetUri(),
+		InvokerIAMDisabled: service.GetInvokerIamDisabled(),
+		Labels:             copyStringMap(service.GetLabels()),
+		Annotations:        copyStringMap(service.GetAnnotations()),
+		Containers:         containersFromPB(service.GetTemplate().GetContainers()),
 	}
 }
 
@@ -614,15 +615,16 @@ func serviceFromV1(project, region string, service *runv1.Service) Service {
 		templateSpec = service.Spec.Template.Spec
 	}
 	return Service{
-		Project:          project,
-		Region:           region,
-		Name:             path.Base(name),
-		Ingress:          ingressFromAnnotation(annotations["run.googleapis.com/ingress"]),
-		URI:              serviceURLV1(service),
-		RuntimeClassName: runtimeClassNameV1(templateSpec),
-		Labels:           copyStringMap(labels),
-		Annotations:      copyStringMap(annotations),
-		Containers:       containersFromV1(templateSpec),
+		Project:            project,
+		Region:             region,
+		Name:               path.Base(name),
+		Ingress:            ingressFromAnnotation(annotations["run.googleapis.com/ingress"]),
+		URI:                serviceURLV1(service),
+		RuntimeClassName:   runtimeClassNameV1(templateSpec),
+		InvokerIAMDisabled: parseBoolAnnotation(annotations["run.googleapis.com/invoker-iam-disabled"]),
+		Labels:             copyStringMap(labels),
+		Annotations:        copyStringMap(annotations),
+		Containers:         containersFromV1(templateSpec),
 	}
 }
 
@@ -691,12 +693,16 @@ func ingressFromPB(ingress runpb.IngressTraffic) string {
 
 func ingressFromAnnotation(ingress string) string {
 	if ingress == "" {
-		return ""
+		return "all"
 	}
 	if ingress == "internal-and-cloud-load-balancing" {
 		return ingress
 	}
 	return strings.ToLower(strings.ReplaceAll(strings.TrimPrefix(ingress, "INGRESS_TRAFFIC_"), "_", "-"))
+}
+
+func parseBoolAnnotation(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "true")
 }
 
 func backendServiceURLsFromURLMap(urlMap *computepb.UrlMap) []string {
@@ -764,6 +770,74 @@ func routeMetadataByBackendURLFromURLMap(urlMap *computepb.UrlMap) map[string]Lo
 			}
 			add(rule.GetService(), metadata)
 		}
+		for _, rule := range matcher.GetRouteRules() {
+			metadata := base
+			metadata.Paths = append(metadata.Paths, routeRulePaths(rule)...)
+			metadata.Headers = append(metadata.Headers, routeRuleHeaders(rule)...)
+			if rewrite := routeActionRewrite(rule.GetRouteAction()); len(rewrite) > 0 {
+				metadata.PathRedirects = append(metadata.PathRedirects, rewrite...)
+			}
+			add(rule.GetService(), metadata)
+			if action := rule.GetRouteAction(); action != nil {
+				for _, weighted := range action.GetWeightedBackendServices() {
+					add(weighted.GetBackendService(), metadata)
+				}
+			}
+		}
+	}
+	return result
+}
+
+func routeRulePaths(rule *computepb.HttpRouteRule) []RoutePath {
+	var paths []RoutePath
+	for _, match := range rule.GetMatchRules() {
+		switch {
+		case match.GetPrefixMatch() != "":
+			paths = append(paths, RoutePath{Type: "PrefixMatch", Value: match.GetPrefixMatch()})
+		case match.GetFullPathMatch() != "":
+			paths = append(paths, RoutePath{Type: "FullPathMatch", Value: match.GetFullPathMatch()})
+		case match.GetRegexMatch() != "":
+			paths = append(paths, RoutePath{Type: "RegexMatch", Value: match.GetRegexMatch()})
+		case match.GetPathTemplateMatch() != "":
+			paths = append(paths, RoutePath{Type: "PathTemplateMatch", Value: match.GetPathTemplateMatch()})
+		}
+	}
+	return paths
+}
+
+func routeRuleHeaders(rule *computepb.HttpRouteRule) []RouteHeader {
+	var headers []RouteHeader
+	for _, match := range rule.GetMatchRules() {
+		for _, header := range match.GetHeaderMatches() {
+			if header.GetHeaderName() == "" {
+				continue
+			}
+			headers = append(headers, routeHeaderMatch(header))
+		}
+	}
+	return headers
+}
+
+func routeHeaderMatch(header *computepb.HttpHeaderMatch) RouteHeader {
+	result := RouteHeader{Name: header.GetHeaderName()}
+	switch {
+	case header.GetExactMatch() != "":
+		result.Type = "ExactMatch"
+		result.Value = header.GetExactMatch()
+	case header.GetPrefixMatch() != "":
+		result.Type = "PrefixMatch"
+		result.Value = header.GetPrefixMatch()
+	case header.GetSuffixMatch() != "":
+		result.Type = "SuffixMatch"
+		result.Value = header.GetSuffixMatch()
+	case header.GetRegexMatch() != "":
+		result.Type = "RegexMatch"
+		result.Value = header.GetRegexMatch()
+	case header.GetPresentMatch():
+		result.Type = "PresentMatch"
+	}
+	if header.GetInvertMatch() {
+		result.Type = "Not" + result.Type
 	}
 	return result
 }

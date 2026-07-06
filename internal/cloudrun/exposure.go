@@ -78,6 +78,11 @@ func analyzeServiceExposure(ctx context.Context, service Service, routes []LoadB
 
 	switch service.Ingress {
 	case "all":
+		if service.InvokerIAMDisabled {
+			exposure.InternetAccessible = true
+			exposure.Evidence = append(exposure.Evidence, fmt.Sprintf("Cloud Run Service %s/%s Invoker IAM check is disabled", service.Region, service.Name))
+			return exposure, nil
+		}
 		policy, err := client.GetServicePolicy(ctx, service.Project, service.Region, service.Name)
 		if err != nil {
 			return exposure, []string{fmt.Sprintf("cloudrun exposure skipped IAM policy for service %s/%s: %v", service.Region, service.Name, err)}
@@ -219,6 +224,14 @@ func applyExposure(result map[model.ResourceRef]model.Exposure, refs []model.Res
 func containerRefsByResource(inventory *model.Inventory) map[string][]model.ResourceRef {
 	refs := map[string][]model.ResourceRef{}
 	if inventory == nil {
+		return refs
+	}
+	for _, image := range inventory.Images {
+		for _, ref := range image.Resources {
+			refs[resourceKey(ref)] = append(refs[resourceKey(ref)], ref)
+		}
+	}
+	if len(refs) > 0 {
 		return refs
 	}
 	for _, resource := range inventory.Resources {

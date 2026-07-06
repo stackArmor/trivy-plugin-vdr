@@ -144,6 +144,9 @@ type ResourceRef struct {
 	Region        string `json:"region,omitempty"`
 	Namespace     string `json:"namespace,omitempty"`
 	Name          string `json:"name"`
+	UID           string `json:"uid,omitempty"`
+	CanonicalID   string `json:"canonicalId,omitempty"`
+	DisplayID     string `json:"displayId,omitempty"`
 	ContainerName string `json:"containerName,omitempty"`
 	ContainerType string `json:"containerType,omitempty"`
 	RestartPolicy string `json:"restartPolicy,omitempty"`

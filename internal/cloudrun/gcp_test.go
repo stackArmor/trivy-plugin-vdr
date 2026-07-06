@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"cloud.google.com/go/compute/apiv1/computepb"
+	"cloud.google.com/go/run/apiv2/runpb"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/impersonate"
 	"google.golang.org/api/option"
+	runv1 "google.golang.org/api/run/v1"
 )
 
 func TestServerlessNEGParsesCloudRunService(t *testing.T) {
@@ -89,6 +91,39 @@ func TestBackendSecurityPolicyReadsCloudArmorPolicy(t *testing.T) {
 	}
 }
 
+func TestServiceFromPBReadsInvokerIAMDisabled(t *testing.T) {
+	service := serviceFromPB("p", "us-east4", &runpb.Service{
+		Name:               "projects/p/locations/us-east4/services/api",
+		Ingress:            runpb.IngressTraffic_INGRESS_TRAFFIC_ALL,
+		InvokerIamDisabled: true,
+	})
+
+	if service.Ingress != "all" {
+		t.Fatalf("Ingress = %q, want all", service.Ingress)
+	}
+	if !service.InvokerIAMDisabled {
+		t.Fatalf("InvokerIAMDisabled = false, want true")
+	}
+}
+
+func TestServiceFromV1DefaultsMissingIngressToAllAndReadsInvokerIAMDisabledAnnotation(t *testing.T) {
+	service := serviceFromV1("p", "us-east4", &runv1.Service{
+		Metadata: &runv1.ObjectMeta{
+			Name: "api",
+			Annotations: map[string]string{
+				"run.googleapis.com/invoker-iam-disabled": "true",
+			},
+		},
+	})
+
+	if service.Ingress != "all" {
+		t.Fatalf("Ingress = %q, want all when v1 annotation is absent", service.Ingress)
+	}
+	if !service.InvokerIAMDisabled {
+		t.Fatalf("InvokerIAMDisabled = false, want true")
+	}
+}
+
 func TestURLMapBackendServicesIncludesRouteRulesAndDeduplicates(t *testing.T) {
 	urlMap := &computepb.UrlMap{
 		DefaultService: ptrString("https://www.googleapis.com/compute/v1/projects/proj/global/backendServices/default"),
@@ -109,6 +144,48 @@ func TestURLMapBackendServicesIncludesRouteRulesAndDeduplicates(t *testing.T) {
 	}
 	if got[1] != "https://www.googleapis.com/compute/v1/projects/proj/global/backendServices/path" {
 		t.Fatalf("got[1] = %q", got[1])
+	}
+}
+
+func TestURLMapRouteMetadataIncludesRouteRuleMatchesAndRewrites(t *testing.T) {
+	urlMap := &computepb.UrlMap{
+		HostRules: []*computepb.HostRule{{
+			Hosts:       []string{"api.example.com"},
+			PathMatcher: ptrString("api-matcher"),
+		}},
+		PathMatchers: []*computepb.PathMatcher{{
+			Name: ptrString("api-matcher"),
+			RouteRules: []*computepb.HttpRouteRule{{
+				Service: ptrString("https://www.googleapis.com/compute/v1/projects/proj/global/backendServices/api-backend"),
+				MatchRules: []*computepb.HttpRouteRuleMatch{{
+					PrefixMatch: ptrString("/api"),
+					HeaderMatches: []*computepb.HttpHeaderMatch{{
+						HeaderName: ptrString("x-env"),
+						ExactMatch: ptrString("prod"),
+					}},
+				}},
+				RouteAction: &computepb.HttpRouteAction{UrlRewrite: &computepb.UrlRewrite{
+					HostRewrite:       ptrString("backend.example.internal"),
+					PathPrefixRewrite: ptrString("/"),
+				}},
+			}},
+		}},
+	}
+
+	got := routeMetadataByBackendURLFromURLMap(urlMap)
+
+	metadata := got["https://www.googleapis.com/compute/v1/projects/proj/global/backendServices/api-backend"]
+	if len(metadata.Hostnames) != 1 || metadata.Hostnames[0] != "api.example.com" {
+		t.Fatalf("Hostnames = %#v, want api.example.com", metadata.Hostnames)
+	}
+	if len(metadata.Paths) != 1 || metadata.Paths[0].Type != "PrefixMatch" || metadata.Paths[0].Value != "/api" {
+		t.Fatalf("Paths = %#v, want PrefixMatch /api", metadata.Paths)
+	}
+	if len(metadata.Headers) != 1 || metadata.Headers[0].Type != "ExactMatch" || metadata.Headers[0].Name != "x-env" || metadata.Headers[0].Value != "prod" {
+		t.Fatalf("Headers = %#v, want exact x-env=prod", metadata.Headers)
+	}
+	if len(metadata.PathRedirects) != 1 || metadata.PathRedirects[0].HostnameReplace != "backend.example.internal" || metadata.PathRedirects[0].PathReplacePrefixMatch != "/" {
+		t.Fatalf("PathRedirects = %#v, want host and prefix rewrite", metadata.PathRedirects)
 	}
 }
 

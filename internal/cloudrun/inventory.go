@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -80,14 +81,18 @@ type inventoryBuilder struct {
 }
 
 func (b *inventoryBuilder) addService(service Service) {
+	kind := serviceKind(service)
 	ref := model.ResourceRef{
 		APIVersion: "run.googleapis.com/v1",
-		Kind:       serviceKind(service),
+		Kind:       kind,
 		Provider:   Provider,
 		Project:    service.Project,
 		Region:     service.Region,
 		Name:       service.Name,
+		UID:        cloudRunUID(service.Project, service.Region, kind, service.Name),
 	}
+	ref.CanonicalID = cloudRunBaseCanonicalID(ref)
+	ref.DisplayID = ref.CanonicalID
 	b.addResource(ref, service.Labels, service.Containers, skipDirsForRuntime(service.RuntimeClassName))
 }
 
@@ -100,20 +105,24 @@ func (b *inventoryBuilder) addJob(job Job) {
 		Region:     job.Region,
 		Name:       job.Name,
 	}
+	ref.UID = cloudRunUID(job.Project, job.Region, ref.Kind, job.Name)
+	ref.CanonicalID = cloudRunBaseCanonicalID(ref)
+	ref.DisplayID = ref.CanonicalID
 	b.addResource(ref, job.Labels, job.Containers, nil)
 }
 
 func (b *inventoryBuilder) addResource(resource model.ResourceRef, labels map[string]string, containers []Container, skipDirs []string) {
 	resourceInventory := model.ResourceInventory{Resource: resource, Labels: copyStringMap(labels)}
+	singleContainer := len(containers) == 1
 	for _, container := range containers {
-		b.addContainer(&resourceInventory, resource, container, skipDirs)
+		b.addContainer(&resourceInventory, resource, container, skipDirs, singleContainer)
 	}
 	if len(resourceInventory.Images) > 0 {
 		b.inventory.Resources = append(b.inventory.Resources, resourceInventory)
 	}
 }
 
-func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, container Container, skipDirs []string) {
+func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, container Container, skipDirs []string, singleContainer bool) {
 	if container.Image == "" {
 		return
 	}
@@ -132,6 +141,11 @@ func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInvento
 	ref := resource
 	ref.ContainerName = name
 	ref.ContainerType = "container"
+	ref.CanonicalID = cloudRunContainerCanonicalID(resource, name)
+	ref.DisplayID = ref.CanonicalID
+	if resource.Kind == "Function" && singleContainer {
+		ref.DisplayID = resource.DisplayID
+	}
 	image := b.images[container.Image]
 	if image == nil {
 		image = &model.ImageInventory{
@@ -169,6 +183,27 @@ func resourceLess(a, b model.ResourceRef) bool {
 		}
 	}
 	return false
+}
+
+func cloudRunUID(project, region, kind, name string) string {
+	resource := "services"
+	if kind == "Job" {
+		resource = "jobs"
+	}
+	return fmt.Sprintf("projects/%s/locations/%s/%s/%s", project, region, resource, name)
+}
+
+func cloudRunBaseCanonicalID(ref model.ResourceRef) string {
+	return fmt.Sprintf("gcp-cloud-run://%s/%s/%s/%s",
+		url.PathEscape(ref.Project),
+		url.PathEscape(ref.Region),
+		strings.ToLower(ref.Kind),
+		url.PathEscape(ref.Name),
+	)
+}
+
+func cloudRunContainerCanonicalID(ref model.ResourceRef, containerName string) string {
+	return cloudRunBaseCanonicalID(ref) + "/container/" + url.PathEscape(containerName)
 }
 
 func normalizeImage(image string) string {

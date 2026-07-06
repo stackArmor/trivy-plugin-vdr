@@ -84,6 +84,52 @@ func TestCollectDeduplicatesSharedImages(t *testing.T) {
 	}
 }
 
+func TestCollectAddsCloudRunCanonicalIDs(t *testing.T) {
+	client := &fakeInventoryClient{
+		services: map[string][]Service{
+			"us-east4": {{
+				Project: "p",
+				Region:  "us-east4",
+				Name:    "api",
+				Containers: []Container{
+					{Name: "gateway", Image: "example.com/gateway:1"},
+					{Name: "worker", Image: "example.com/worker:1"},
+				},
+			}},
+		},
+	}
+
+	got, err := (Collector{Client: client}).Collect(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}})
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+
+	resource := got.Resources[0].Resource
+	if resource.UID != "projects/p/locations/us-east4/services/api" {
+		t.Fatalf("resource UID = %q", resource.UID)
+	}
+	if resource.CanonicalID != "gcp-cloud-run://p/us-east4/service/api" {
+		t.Fatalf("resource CanonicalID = %q", resource.CanonicalID)
+	}
+	if resource.DisplayID != "gcp-cloud-run://p/us-east4/service/api" {
+		t.Fatalf("resource DisplayID = %q", resource.DisplayID)
+	}
+
+	for _, image := range got.Images {
+		if len(image.Resources) != 1 {
+			t.Fatalf("image resources = %#v, want one", image.Resources)
+		}
+		ref := image.Resources[0]
+		wantCanonical := "gcp-cloud-run://p/us-east4/service/api/container/" + ref.ContainerName
+		if ref.CanonicalID != wantCanonical {
+			t.Fatalf("container %s CanonicalID = %q, want %q", ref.ContainerName, ref.CanonicalID, wantCanonical)
+		}
+		if ref.DisplayID != wantCanonical {
+			t.Fatalf("container %s DisplayID = %q, want %q", ref.ContainerName, ref.DisplayID, wantCanonical)
+		}
+	}
+}
+
 func TestCollectStoresProjectLabelsForScoringFallback(t *testing.T) {
 	client := &fakeInventoryClient{
 		projectLabels: map[string]string{
@@ -134,6 +180,16 @@ func TestCollectAddsGoogleBaseImageUpdateSkipDirs(t *testing.T) {
 	}
 	if got.Resources[0].Resource.Kind != "Function" {
 		t.Fatalf("resource kind = %q, want Function", got.Resources[0].Resource.Kind)
+	}
+	ref := got.Images[0].Resources[0]
+	if ref.UID != "projects/p/locations/us-east4/services/fn" {
+		t.Fatalf("function UID = %q", ref.UID)
+	}
+	if ref.CanonicalID != "gcp-cloud-run://p/us-east4/function/fn/container/app" {
+		t.Fatalf("function CanonicalID = %q", ref.CanonicalID)
+	}
+	if ref.DisplayID != "gcp-cloud-run://p/us-east4/function/fn" {
+		t.Fatalf("function DisplayID = %q", ref.DisplayID)
 	}
 	want := []string{"/cnb", "layers/sbom"}
 	if !reflect.DeepEqual(got.Images[0].SkipDirs, want) {

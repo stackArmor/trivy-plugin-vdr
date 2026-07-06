@@ -56,6 +56,28 @@ func TestAnalyzeExposureMarksAllIngressInvokerServicePublic(t *testing.T) {
 	requireEvidence(t, ex, "allUsers has roles/run.invoker")
 }
 
+func TestAnalyzeExposureMarksAllIngressInvokerIAMDisabledServicePublic(t *testing.T) {
+	service := Service{
+		Project:            "p",
+		Region:             "us-east4",
+		Name:               "api",
+		Ingress:            "all",
+		InvokerIAMDisabled: true,
+		Containers:         []Container{{Name: "app", Image: "example.com/api:1"}},
+	}
+	inventory := inventoryForExposure(t, []Service{service}, nil)
+
+	got, _, err := AnalyzeExposure(context.Background(), inventory, []Service{service}, nil, &fakeExposureClient{})
+	if err != nil {
+		t.Fatalf("AnalyzeExposure returned error: %v", err)
+	}
+	ex := got[cloudRunRef("Service", "p", "us-east4", "api", "app")]
+	if !ex.InternetAccessible {
+		t.Fatalf("service exposure = %#v, want public when invoker IAM check is disabled", ex)
+	}
+	requireEvidence(t, ex, "Invoker IAM check is disabled")
+}
+
 func TestAnalyzeExposureDoesNotMarkAllIngressWithoutAllUsers(t *testing.T) {
 	service := Service{
 		Project:    "p",
@@ -266,16 +288,20 @@ func inventoryForExposure(t *testing.T, services []Service, jobs []Job) *model.I
 }
 
 func cloudRunRef(kind, project, region, name, container string) model.ResourceRef {
-	return model.ResourceRef{
+	ref := model.ResourceRef{
 		APIVersion:    "run.googleapis.com/v1",
 		Kind:          kind,
 		Provider:      Provider,
 		Project:       project,
 		Region:        region,
 		Name:          name,
+		UID:           cloudRunUID(project, region, kind, name),
 		ContainerName: container,
 		ContainerType: "container",
 	}
+	ref.CanonicalID = cloudRunContainerCanonicalID(ref, container)
+	ref.DisplayID = ref.CanonicalID
+	return ref
 }
 
 type fakeExposureClient struct {
