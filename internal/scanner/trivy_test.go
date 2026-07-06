@@ -79,6 +79,27 @@ func TestTrivyRunnerAddsOCIVEXForAllowedRegistry(t *testing.T) {
 	}
 }
 
+func TestTrivyRunnerAddsOCIVEXWhenIncluded(t *testing.T) {
+	fake := &fakeCommandRunner{
+		stdout: []byte(`{"Results":[]}`),
+	}
+	runner := TrivyRunner{
+		Binary:         "trivy-test",
+		OCIVEXIncluded: true,
+		CommandRunner:  fake,
+	}
+
+	_, err := runner.ScanImage(context.Background(), "docker.io/library/alpine:3.20", 45*time.Second)
+	if err != nil {
+		t.Fatalf("ScanImage returned error: %v", err)
+	}
+
+	wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--vex", "oci", "--show-suppressed", "--timeout", "45s", "docker.io/library/alpine:3.20"}
+	if !reflect.DeepEqual(fake.args, wantArgs) {
+		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
+	}
+}
+
 func TestTrivyRunnerDoesNotAddOCIVEXForUnmatchedRegistry(t *testing.T) {
 	fake := &fakeCommandRunner{
 		stdout: []byte(`{"Results":[]}`),

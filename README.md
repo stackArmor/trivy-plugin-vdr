@@ -28,6 +28,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 trivy vdr --help
 trivy vdr k8s --help
 trivy vdr k8s --namespace default --format json
+trivy vdr k8s -n default --format table
 trivy vdr k8s --all-namespaces --min-severity HIGH --min-epss 0.5
 trivy vdr k8s --view resources --output vdr-k8s.json
 trivy vdr k8s --image-src remote --parallel-scans 5
@@ -37,6 +38,8 @@ trivy vdr k8s --scan-reachability-only --output vdr-k8s-scan-reachability.json
 trivy vdr k8s --refresh-enrichment
 trivy vdr k8s --skip-registry-auth
 trivy vdr k8s --no-gcloud-auth --no-ecr-auth
+trivy vdr k8s --oci-vex-included
+trivy vdr k8s -O
 trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
 trivy vdr k8s --quiet
 trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.html
@@ -234,13 +237,15 @@ Cloud Run jobs are treated as not internet reachable and do not need load balanc
 
 ## VEX attestations
 
-`vdr` can opt into Trivy's experimental OCI VEX attestation discovery for trusted registries:
+`vdr` can opt into Trivy's experimental OCI VEX attestation discovery:
 
 ```sh
+trivy vdr k8s --oci-vex-included
+trivy vdr k8s -O
 trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
 ```
 
-The allowlist accepts registry hosts (`registry.example.com`) or repository prefixes (`ghcr.io/acme`). Matching images are scanned with `trivy image --vex oci --show-suppressed`; other images are scanned without OCI VEX. Suppressed VEX findings are not silently dropped: reports keep them in `suppressedFindings` with the VEX status, justification, source, and informational `wouldHaveBeenPain` / `wouldHaveBeenRemediation` values. They are excluded from the active finding count and remediation queue.
+By default, OCI VEX attestation lookup is off. `--oci-vex-included` / `-O` enables registry VEX lookup for every scanned image. `--vex-oci-registries` is the narrower form: it accepts registry hosts (`registry.example.com`) or repository prefixes (`ghcr.io/acme`), and only matching images are scanned with `trivy image --vex oci --show-suppressed`. Other images are scanned without OCI VEX. Suppressed VEX findings are not silently dropped: reports keep them in `suppressedFindings` with the VEX status, justification, source, and informational `wouldHaveBeenPain` / `wouldHaveBeenRemediation` values. They are excluded from the active finding count and remediation queue.
 
 > **Important — sign attestations with cosign v2.** Trivy discovers the classic cosign
 > attestation (`.att` tag) layout. cosign **v3** publishes attestations as OCI 1.1

@@ -86,7 +86,7 @@ func Analyze(inventory *model.Inventory, objects Objects) map[model.ResourceRef]
 
 	serviceExposures := make([]serviceExposure, 0)
 	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, ingressClassOverrides, backendConfigs)...)
-	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, gateways, awsGatewayPublic, awsTargetGroups, gcpBackendPolicies, referenceGrants)...)
+	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, serviceIndex, gateways, awsGatewayPublic, awsTargetGroups, gcpBackendPolicies, referenceGrants)...)
 	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services)...)
 
 	result := map[model.ResourceRef]model.Exposure{}
@@ -444,6 +444,7 @@ func gcpBackendPolicyCloudArmorPolicy(object unstructured.Unstructured) string {
 
 func analyzeGatewayRoutes(
 	objects []unstructured.Unstructured,
+	services map[serviceKey]corev1.Service,
 	gateways map[serviceKey]gatewayInfo,
 	awsGatewayPublic map[serviceKey]string,
 	awsTargetGroups map[serviceKey]routeProtocolInfo,
@@ -488,6 +489,9 @@ func analyzeGatewayRoutes(
 				routeMetadata := backend.metadata
 				routeMetadata.BackendNamespace = serviceNamespace
 				routeMetadata.BackendService = backend.ref.name
+				if service, ok := services[key]; ok {
+					applyServicePortMetadata(&routeMetadata, service, "", backend.portNumber)
+				}
 				applyRouteProtocol(&routeMetadata, gatewayRouteProtocol(routeKind))
 				if gateway.provider == "aws" {
 					applyRouteProtocol(&routeMetadata, awsTargetGroups[key])
@@ -752,12 +756,13 @@ func routeBackendRefs(route unstructured.Unstructured) []objectRef {
 }
 
 type routeBackendInfo struct {
-	ref      objectRef
-	metadata model.RouteMetadata
+	ref        objectRef
+	portNumber int32
+	metadata   model.RouteMetadata
 }
 
 func routeBackendRoutes(route unstructured.Unstructured) []routeBackendInfo {
-	seen := map[objectRef]struct{}{}
+	seen := map[string]struct{}{}
 	var result []routeBackendInfo
 	hostnames := stringSlice(route.Object, "spec", "hostnames")
 	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
@@ -786,13 +791,16 @@ func routeBackendRoutes(route unstructured.Unstructured) []routeBackendInfo {
 			}
 			namespace, _ := backend["namespace"].(string)
 			ref := objectRef{namespace: namespace, name: name, group: group, kind: kind}
-			if _, ok := seen[ref]; ok {
+			portNumber := int32Field(backend, "port")
+			seenKey := strings.Join([]string{namespace, name, fmt.Sprint(portNumber)}, "\x00")
+			if _, ok := seen[seenKey]; ok {
 				continue
 			}
-			seen[ref] = struct{}{}
+			seen[seenKey] = struct{}{}
 			result = append(result, routeBackendInfo{
-				ref:      ref,
-				metadata: gatewayRouteMetadata(route, rule, hostnames),
+				ref:        ref,
+				portNumber: portNumber,
+				metadata:   gatewayRouteMetadata(route, rule, hostnames),
 			})
 		}
 	}
@@ -813,6 +821,7 @@ func ingressRouteMetadata(ingress networkingv1.Ingress, service corev1.Service, 
 		BackendNamespace: ingress.Namespace,
 		BackendService:   ref.name,
 	}
+	applyServicePortMetadata(&metadata, service, ref.portName, ref.portNumber)
 	switch provider {
 	case "aws":
 		applyRouteProtocol(&metadata, awsALBIngressProtocol(ingress, service))
@@ -936,25 +945,94 @@ func gatewayRouteProtocol(kind string) routeProtocolInfo {
 	}
 }
 
-func serviceRouteMetadata(svc corev1.Service) model.RouteMetadata {
-	metadata := model.RouteMetadata{
-		Kind:           "Service/LoadBalancer",
-		Namespace:      svc.Namespace,
-		Name:           svc.Name,
-		LoadBalancerIP: serviceLBAddress(svc),
+func serviceRouteMetadata(svc corev1.Service, kind string) []model.RouteMetadata {
+	if len(svc.Spec.Ports) == 0 {
+		return []model.RouteMetadata{{
+			Kind:           kind,
+			Namespace:      svc.Namespace,
+			Name:           svc.Name,
+			LoadBalancerIP: serviceLBAddress(svc),
+		}}
+	}
+	routes := make([]model.RouteMetadata, 0, len(svc.Spec.Ports))
+	for _, port := range svc.Spec.Ports {
+		metadata := model.RouteMetadata{
+			Kind:           kind,
+			Namespace:      svc.Namespace,
+			Name:           svc.Name,
+			LoadBalancerIP: serviceLBAddress(svc),
+		}
+		applyBackendServicePort(&metadata, port)
+		routes = append(routes, metadata)
 	}
 	backendProtocol := strings.TrimSpace(svc.Annotations["service.beta.kubernetes.io/aws-load-balancer-backend-protocol"])
-	if backendProtocol != "" {
-		applyRouteProtocol(&metadata, protocolInfo("", backendProtocol, ""))
-	}
 	alpnPolicy := strings.TrimSpace(svc.Annotations["service.beta.kubernetes.io/aws-load-balancer-alpn-policy"])
-	if alpnPolicy != "" {
-		applyRouteProtocol(&metadata, routeProtocolInfo{
-			ALPNPolicy: alpnPolicy,
-			ALPN:       alpnForPolicy(alpnPolicy),
-		})
+	for i := range routes {
+		if backendProtocol != "" {
+			applyRouteProtocol(&routes[i], protocolInfo("", backendProtocol, ""))
+		}
+		if alpnPolicy != "" {
+			applyRouteProtocol(&routes[i], routeProtocolInfo{
+				ALPNPolicy: alpnPolicy,
+				ALPN:       alpnForPolicy(alpnPolicy),
+			})
+		}
 	}
-	return metadata
+	return routes
+}
+
+func applyServicePortMetadata(metadata *model.RouteMetadata, service corev1.Service, portName string, portNumber int32) {
+	port, ok := servicePortForBackendRef(service, portName, portNumber)
+	if !ok {
+		return
+	}
+	applyBackendServicePort(metadata, port)
+}
+
+func servicePortForBackendRef(service corev1.Service, portName string, portNumber int32) (corev1.ServicePort, bool) {
+	if portName != "" {
+		for _, port := range service.Spec.Ports {
+			if port.Name == portName {
+				return port, true
+			}
+		}
+		return corev1.ServicePort{}, false
+	}
+	if portNumber != 0 {
+		for _, port := range service.Spec.Ports {
+			if port.Port == portNumber {
+				return port, true
+			}
+		}
+		return corev1.ServicePort{}, false
+	}
+	if len(service.Spec.Ports) == 1 {
+		return service.Spec.Ports[0], true
+	}
+	return corev1.ServicePort{}, false
+}
+
+func applyBackendServicePort(metadata *model.RouteMetadata, port corev1.ServicePort) {
+	metadata.BackendServicePort = port.Port
+	metadata.BackendServicePortName = port.Name
+	metadata.BackendServicePortProtocol = string(port.Protocol)
+	if metadata.BackendServicePortProtocol == "" {
+		metadata.BackendServicePortProtocol = string(corev1.ProtocolTCP)
+	}
+	metadata.BackendTargetPort = serviceTargetPort(port)
+	if port.AppProtocol != nil {
+		metadata.BackendAppProtocol = strings.TrimSpace(*port.AppProtocol)
+	}
+}
+
+func serviceTargetPort(port corev1.ServicePort) string {
+	if port.TargetPort.StrVal != "" || port.TargetPort.IntVal != 0 {
+		return port.TargetPort.String()
+	}
+	if port.Port != 0 {
+		return fmt.Sprint(port.Port)
+	}
+	return ""
 }
 
 func protocolInfo(frontend, backend, version string) routeProtocolInfo {
@@ -1224,7 +1302,7 @@ func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
 					Provider:           lbProvider(svc),
 					RouteKind:          "Service/LoadBalancer",
 					RouteName:          svc.Name,
-					Routes:             []model.RouteMetadata{serviceRouteMetadata(svc)},
+					Routes:             serviceRouteMetadata(svc, "Service/LoadBalancer"),
 					Evidence: []string{fmt.Sprintf(
 						"Service %s/%s is type=LoadBalancer with a provisioned external address (%s); the pods it selects are directly internet-reachable",
 						svc.Namespace, svc.Name, serviceLBAddress(svc))},
@@ -1346,7 +1424,7 @@ func serviceLabelExposure(svc corev1.Service) (serviceExposure, bool) {
 	if !set {
 		return serviceExposure{}, false
 	}
-	ex := model.Exposure{InternetAccessible: reachable, RouteKind: "Service", RouteName: svc.Name}
+	ex := model.Exposure{InternetAccessible: reachable, RouteKind: "Service", RouteName: svc.Name, Routes: serviceRouteMetadata(svc, "Service")}
 	if reachable {
 		ex.Evidence = []string{fmt.Sprintf(
 			"Service %s/%s explicitly marked internet-reachable by label %s=true.",
@@ -1361,7 +1439,7 @@ func serviceLabelExposure(svc corev1.Service) (serviceExposure, bool) {
 
 func nodePortExposure(svc corev1.Service) serviceExposure {
 	ports := nodePortList(svc)
-	ex := model.Exposure{RouteKind: "Service/NodePort", RouteName: svc.Name}
+	ex := model.Exposure{RouteKind: "Service/NodePort", RouteName: svc.Name, Routes: serviceRouteMetadata(svc, "Service/NodePort")}
 	if val, ok := svc.Labels[nodePortReachableLabel]; ok {
 		if b, err := strconv.ParseBool(strings.TrimSpace(val)); err == nil {
 			ex.InternetAccessible = b

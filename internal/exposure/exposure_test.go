@@ -9,6 +9,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func TestAnalyzeGKEGatewayPublicAndInternalClasses(t *testing.T) {
@@ -168,11 +169,12 @@ func TestAnalyzeGKEIngressGCEAndInternalClasses(t *testing.T) {
 }
 
 func TestAnalyzeGKEIngressIncludesAppProtocolMetadata(t *testing.T) {
+	appProtocol := "kubernetes.io/h2c"
 	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
 	objects := Objects{
 		Services: []corev1.Service{serviceWithPortsAndAnnotations("default", "web-svc", map[string]string{"app": "web"}, map[string]string{
 			"cloud.google.com/app-protocols": `{"public":"HTTP2"}`,
-		}, servicePort("public", 80))},
+		}, corev1.ServicePort{Name: "public", Port: 80, TargetPort: intstrFromInt(8080), Protocol: corev1.ProtocolTCP, AppProtocol: &appProtocol})},
 		Ingresses: []networkingv1.Ingress{ingressWithServicePortName("default", "public-ing", "gce", "web-svc", "public", nil)},
 	}
 
@@ -188,6 +190,12 @@ func TestAnalyzeGKEIngressIncludesAppProtocolMetadata(t *testing.T) {
 	}
 	if len(metadata.ALPN) != 1 || metadata.ALPN[0] != "h2" {
 		t.Fatalf("ALPN = %#v, want h2", metadata.ALPN)
+	}
+	if metadata.BackendServicePortName != "public" || metadata.BackendServicePort != 80 || metadata.BackendTargetPort != "8080" {
+		t.Fatalf("service port metadata = %#v, want public/80 target 8080", metadata)
+	}
+	if metadata.BackendServicePortProtocol != "TCP" || metadata.BackendAppProtocol != "kubernetes.io/h2c" {
+		t.Fatalf("service protocol metadata = %#v, want TCP appProtocol kubernetes.io/h2c", metadata)
 	}
 }
 
@@ -513,9 +521,13 @@ func TestAnalyzeAWSGatewayLoadBalancerConfigurationInternetFacing(t *testing.T) 
 }
 
 func TestAnalyzeAWSGatewayIncludesTargetGroupProtocolMetadata(t *testing.T) {
+	appProtocol := "redis"
 	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
 	objects := Objects{
-		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		Services: []corev1.Service{serviceWithPortsAndAnnotations("default", "api-svc", map[string]string{"app": "api"}, nil,
+			corev1.ServicePort{Name: "grpc", Port: 50051, TargetPort: intstrFromString("grpc"), Protocol: corev1.ProtocolTCP},
+			corev1.ServicePort{Name: "redis", Port: 6379, TargetPort: intstrFromString("redis"), Protocol: corev1.ProtocolTCP, AppProtocol: &appProtocol},
+		)},
 		Unstructured: []unstructured.Unstructured{
 			gateway("default", "aws-gw", "amazon-vpc-lattice"),
 			routeWithBackendRef("GRPCRoute", "default", "aws-route", "aws-gw", map[string]any{"name": "api-svc", "port": int64(50051)}),
@@ -539,6 +551,12 @@ func TestAnalyzeAWSGatewayIncludesTargetGroupProtocolMetadata(t *testing.T) {
 	}
 	if len(metadata.ALPN) != 1 || metadata.ALPN[0] != "h2" {
 		t.Fatalf("ALPN = %#v, want h2", metadata.ALPN)
+	}
+	if metadata.BackendServicePortName != "grpc" || metadata.BackendServicePort != 50051 || metadata.BackendTargetPort != "grpc" {
+		t.Fatalf("service port metadata = %#v, want grpc/50051 target grpc", metadata)
+	}
+	if metadata.BackendServicePortProtocol != "TCP" || metadata.BackendAppProtocol != "" {
+		t.Fatalf("service protocol metadata = %#v, want TCP and no appProtocol for selected grpc port", metadata)
 	}
 }
 
@@ -755,19 +773,25 @@ func TestAnalyzeLoadBalancerServiceExposesControllerPods(t *testing.T) {
 }
 
 func TestAnalyzeAWSLoadBalancerServiceIncludesALPNPolicyMetadata(t *testing.T) {
+	httpAppProtocol := "kubernetes.io/h2c"
+	redisAppProtocol := "redis"
 	svc := serviceWithAnnotations("default", "nlb", map[string]string{"app": "api"}, map[string]string{
 		"service.beta.kubernetes.io/aws-load-balancer-scheme":      "internet-facing",
 		"service.beta.kubernetes.io/aws-load-balancer-alpn-policy": "HTTP2Preferred",
 	})
 	svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+	svc.Spec.Ports = []corev1.ServicePort{
+		{Name: "http", Port: 80, TargetPort: intstrFromInt(8080), Protocol: corev1.ProtocolTCP, AppProtocol: &httpAppProtocol},
+		{Name: "redis", Port: 6379, TargetPort: intstrFromString("redis"), Protocol: corev1.ProtocolTCP, AppProtocol: &redisAppProtocol},
+	}
 	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{Hostname: "nlb.example.com"}}
 	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
 
 	got := Analyze(inv, Objects{Services: []corev1.Service{svc}})
 
 	exposure := got[resourceRef("default", "api", "api", "container", "")]
-	if len(exposure.Routes) != 1 {
-		t.Fatalf("Routes = %#v, want one Service route metadata entry", exposure.Routes)
+	if len(exposure.Routes) != 2 {
+		t.Fatalf("Routes = %#v, want one Service route metadata entry per exposed Service port", exposure.Routes)
 	}
 	metadata := exposure.Routes[0]
 	if metadata.Kind != "Service/LoadBalancer" || metadata.ALPNPolicy != "HTTP2Preferred" {
@@ -775,6 +799,13 @@ func TestAnalyzeAWSLoadBalancerServiceIncludesALPNPolicyMetadata(t *testing.T) {
 	}
 	if len(metadata.ALPN) != 2 || metadata.ALPN[0] != "h2" || metadata.ALPN[1] != "http/1.1" {
 		t.Fatalf("ALPN = %#v, want h2 and http/1.1", metadata.ALPN)
+	}
+	if metadata.BackendServicePortName != "http" || metadata.BackendServicePort != 80 || metadata.BackendTargetPort != "8080" || metadata.BackendAppProtocol != "kubernetes.io/h2c" {
+		t.Fatalf("first route service port metadata = %#v, want http/80 target 8080 appProtocol h2c", metadata)
+	}
+	redis := exposure.Routes[1]
+	if redis.BackendServicePortName != "redis" || redis.BackendServicePort != 6379 || redis.BackendTargetPort != "redis" || redis.BackendAppProtocol != "redis" {
+		t.Fatalf("second route service port metadata = %#v, want redis/6379 target redis appProtocol redis", redis)
 	}
 }
 
@@ -1119,6 +1150,14 @@ func serviceWithPortsAndAnnotations(namespace, name string, selector, annotation
 
 func servicePort(name string, port int32) corev1.ServicePort {
 	return corev1.ServicePort{Name: name, Port: port}
+}
+
+func intstrFromInt(value int) intstr.IntOrString {
+	return intstr.FromInt(value)
+}
+
+func intstrFromString(value string) intstr.IntOrString {
+	return intstr.FromString(value)
 }
 
 func ingress(namespace, name, className, serviceName string, annotations map[string]string) networkingv1.Ingress {
