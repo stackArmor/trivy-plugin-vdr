@@ -565,6 +565,8 @@ func classifyGatewayClass(className string) (string, bool) {
 
 func indexAWSGatewayLoadBalancers(objects []unstructured.Unstructured) map[serviceKey]string {
 	index := map[serviceKey]string{}
+	internetFacingConfigs := map[serviceKey]struct{}{}
+
 	for _, object := range objects {
 		if !hasGroupKind(object, "gateway.k8s.aws", "LoadBalancerConfiguration") {
 			continue
@@ -573,6 +575,8 @@ func indexAWSGatewayLoadBalancers(objects []unstructured.Unstructured) map[servi
 		if !strings.EqualFold(scheme, "internet-facing") {
 			continue
 		}
+		configKey := serviceKey{namespace: object.GetNamespace(), name: object.GetName()}
+		internetFacingConfigs[configKey] = struct{}{}
 		gatewayName, _, _ := unstructured.NestedString(object.Object, "spec", "targetRef", "name")
 		if gatewayName == "" {
 			gatewayName = object.GetName()
@@ -580,6 +584,29 @@ func indexAWSGatewayLoadBalancers(objects []unstructured.Unstructured) map[servi
 		evidence := fmt.Sprintf("AWS Gateway %s/%s LoadBalancerConfiguration scheme is internet-facing", object.GetNamespace(), gatewayName)
 		index[serviceKey{namespace: object.GetNamespace(), name: gatewayName}] = evidence
 	}
+
+	for _, object := range objects {
+		if !hasGroupKind(object, "gateway.networking.k8s.io", "Gateway") {
+			continue
+		}
+		group, _, _ := unstructured.NestedString(object.Object, "spec", "infrastructure", "parametersRef", "group")
+		kind, _, _ := unstructured.NestedString(object.Object, "spec", "infrastructure", "parametersRef", "kind")
+		configName, _, _ := unstructured.NestedString(object.Object, "spec", "infrastructure", "parametersRef", "name")
+		if group != "gateway.k8s.aws" || kind != "LoadBalancerConfiguration" || configName == "" {
+			continue
+		}
+		configNamespace, _, _ := unstructured.NestedString(object.Object, "spec", "infrastructure", "parametersRef", "namespace")
+		if configNamespace == "" {
+			configNamespace = object.GetNamespace()
+		}
+		configKey := serviceKey{namespace: configNamespace, name: configName}
+		if _, ok := internetFacingConfigs[configKey]; !ok {
+			continue
+		}
+		evidence := fmt.Sprintf("AWS Gateway %s/%s references LoadBalancerConfiguration %s/%s with scheme internet-facing", object.GetNamespace(), object.GetName(), configNamespace, configName)
+		index[serviceKey{namespace: object.GetNamespace(), name: object.GetName()}] = evidence
+	}
+
 	return index
 }
 

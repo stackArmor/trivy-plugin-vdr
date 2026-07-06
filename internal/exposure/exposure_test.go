@@ -520,6 +520,29 @@ func TestAnalyzeAWSGatewayLoadBalancerConfigurationInternetFacing(t *testing.T) 
 	requireEvidence(t, exposure, "AWS Gateway default/aws-gw LoadBalancerConfiguration scheme is internet-facing")
 }
 
+func TestAnalyzeAWSGatewayLoadBalancerConfigurationViaInfrastructureParametersRef(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		Unstructured: []unstructured.Unstructured{
+			gatewayWithInfrastructureParametersRef("default", "aws-gw", "aws-alb", "internet-facing-lbc"),
+			httpRoute("default", "aws-route", "aws-gw", "api-svc"),
+			loadBalancerConfiguration("default", "internet-facing-lbc", "internet-facing"),
+		},
+	}
+
+	got := Analyze(inv, objects)
+
+	exposure := got[resourceRef("default", "api", "api", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want true: %#v", exposure)
+	}
+	if exposure.Provider != "aws" || exposure.RouteKind != "HTTPRoute" || exposure.RouteName != "aws-route" {
+		t.Fatalf("unexpected exposure metadata: %#v", exposure)
+	}
+	requireEvidence(t, exposure, "AWS Gateway default/aws-gw references LoadBalancerConfiguration default/internet-facing-lbc with scheme internet-facing")
+}
+
 func TestAnalyzeAWSGatewayIncludesTargetGroupProtocolMetadata(t *testing.T) {
 	appProtocol := "redis"
 	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
@@ -1225,6 +1248,18 @@ func gateway(namespace, name, className string) unstructured.Unstructured {
 		},
 		"spec": map[string]any{"gatewayClassName": className},
 	}}
+}
+
+func gatewayWithInfrastructureParametersRef(namespace, name, className, loadBalancerConfigName string) unstructured.Unstructured {
+	gateway := gateway(namespace, name, className)
+	gateway.Object["spec"].(map[string]any)["infrastructure"] = map[string]any{
+		"parametersRef": map[string]any{
+			"group": "gateway.k8s.aws",
+			"kind":  "LoadBalancerConfiguration",
+			"name":  loadBalancerConfigName,
+		},
+	}
+	return gateway
 }
 
 func httpRoute(namespace, name, gatewayName, serviceName string) unstructured.Unstructured {
