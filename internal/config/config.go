@@ -67,6 +67,7 @@ type Config struct {
 	NoECRAuth                    bool
 	GCPImpersonateServiceAccount string
 	AWSRoleARN                   string
+	OCIVEXIncluded               bool
 	VEXOCIRegistries             []string
 	Quiet                        bool
 	Debug                        bool
@@ -79,16 +80,19 @@ func (n *namespaceList) String() string {
 }
 
 func (n *namespaceList) Set(value string) error {
-	if value == "" {
+	values := splitCommaValues(value)
+	if len(values) == 0 {
 		return errors.New("namespace cannot be empty")
 	}
-	if len(value) > 63 {
-		return fmt.Errorf("invalid namespace %q: must be 63 characters or fewer", value)
+	for _, namespace := range values {
+		if len(namespace) > 63 {
+			return fmt.Errorf("invalid namespace %q: must be 63 characters or fewer", namespace)
+		}
+		if !namespacePattern.MatchString(namespace) {
+			return fmt.Errorf("invalid namespace %q", namespace)
+		}
+		*n = append(*n, namespace)
 	}
-	if !namespacePattern.MatchString(value) {
-		return fmt.Errorf("invalid namespace %q", value)
-	}
-	*n = append(*n, value)
 	return nil
 }
 
@@ -99,11 +103,11 @@ func (r *regionList) String() string {
 }
 
 func (r *regionList) Set(value string) error {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	values := splitCommaValues(value)
+	if len(values) == 0 {
 		return errors.New("region cannot be empty")
 	}
-	*r = append(*r, value)
+	*r = append(*r, values...)
 	return nil
 }
 
@@ -114,6 +118,11 @@ func (c *commaList) String() string {
 }
 
 func (c *commaList) Set(value string) error {
+	*c = splitCommaValues(value)
+	return nil
+}
+
+func splitCommaValues(value string) []string {
 	var values []string
 	for _, part := range strings.Split(value, ",") {
 		part = strings.TrimSpace(part)
@@ -122,8 +131,7 @@ func (c *commaList) Set(value string) error {
 		}
 		values = append(values, part)
 	}
-	*c = values
-	return nil
+	return values
 }
 
 func Parse(args []string) (Config, error) {
@@ -140,19 +148,23 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs := flag.NewFlagSet("vdr", flag.ContinueOnError)
 	fs.SetOutput(output)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n       vdr image [flags] IMAGE...\n\nSources:\n  k8s\n  cloudrun\n  ecs (not implemented yet)\n  image\n\nFlags:\n")
+		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n       vdr image [flags] IMAGE...\n\nSources:\n  k8s\n  cloudrun\n  ecs (not implemented yet)\n  image\n\nCommon aliases:\n  -n, --namespace\n  -o, --output\n  -f, --format\n  -q, --quiet\n  -t, --timeout\n  -O, --oci-vex-included\n\nExamples:\n  vdr k8s -n default -f table\n  vdr k8s --namespace prod,dev --output vdr-k8s.json\n  vdr cloudrun --project my-gcp-project --region us-east4\n  vdr image -O nginx:1.25\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	fs.StringVar(&cfg.Project, "project", cfg.Project, "Google Cloud project for cloudrun source")
 	fs.Var(&regions, "region", "Google Cloud region for cloudrun source; may be repeated")
 	fs.Var(&namespaces, "namespace", "Kubernetes namespace to scan; may be repeated")
+	fs.Var(&namespaces, "n", "alias for --namespace")
 	fs.BoolVar(&cfg.AllNamespaces, "all-namespaces", cfg.AllNamespaces, "scan all namespaces")
 	fs.BoolVar(&cfg.IncludeZeroDaemonSets, "include-zero-daemonsets", cfg.IncludeZeroDaemonSets, "include DaemonSets with zero desired pods")
 	fs.StringVar(&cfg.Format, "format", cfg.Format, "output format: json, table, or cyclonedx")
+	fs.StringVar(&cfg.Format, "f", cfg.Format, "alias for --format")
 	fs.StringVar(&cfg.View, "view", cfg.View, "report view: findings or resources")
 	fs.StringVar(&cfg.Output, "output", cfg.Output, "write output to file")
+	fs.StringVar(&cfg.Output, "o", cfg.Output, "alias for --output")
 	fs.StringVar(&cfg.CacheDir, "cache-dir", cfg.CacheDir, "cache directory")
 	fs.StringVar(&timeout, "timeout", timeout, "scan timeout")
+	fs.StringVar(&timeout, "t", timeout, "alias for --timeout")
 	fs.StringVar(&cfg.ImageSrc, "image-src", cfg.ImageSrc, "Trivy image source")
 	fs.IntVar(&cfg.ParallelScans, "parallel-scans", cfg.ParallelScans, "maximum concurrent image scans")
 	fs.StringVar(&cfg.CacheCleanup, "cache-cleanup", cfg.CacheCleanup, "Trivy scan cache cleanup policy: auto, always, or never")
@@ -173,12 +185,15 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.NoECRAuth, "no-ecr-auth", cfg.NoECRAuth, "skip aws CLI authentication for ECR images")
 	fs.StringVar(&cfg.GCPImpersonateServiceAccount, "gcp-impersonate-service-account", cfg.GCPImpersonateServiceAccount, "Google service account email to impersonate for Cloud Run metadata and GAR/GCR auth")
 	fs.StringVar(&cfg.AWSRoleARN, "aws-role-arn", cfg.AWSRoleARN, "AWS role ARN to assume for ECR auth")
+	fs.BoolVar(&cfg.OCIVEXIncluded, "oci-vex-included", cfg.OCIVEXIncluded, "include OCI VEX attestations from image registries")
+	fs.BoolVar(&cfg.OCIVEXIncluded, "O", cfg.OCIVEXIncluded, "alias for --oci-vex-included")
 	fs.Var((*commaList)(&cfg.VEXOCIRegistries), "vex-oci-registries", "comma-separated registry hosts or repository prefixes that may use OCI VEX attestations")
 	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "suppress progress logging (warnings and errors only)")
+	fs.BoolVar(&cfg.Quiet, "q", cfg.Quiet, "alias for --quiet")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
 
 	if err := fs.Parse(args); err != nil {
-		return Config{}, err
+		return Config{}, suggestFlagError(err)
 	}
 	source := fs.Arg(0)
 	cfg.Source = source
@@ -194,7 +209,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 
 	flagArgs := fs.Args()[1:]
 	if err := fs.Parse(flagArgs); err != nil {
-		return Config{}, err
+		return Config{}, suggestFlagError(err)
 	}
 	if cfg.Source == SourceImage {
 		cfg.ImageRefs = append([]string(nil), fs.Args()...)
@@ -213,7 +228,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		switch f.Name {
 		case "all-namespaces":
 			allNamespacesSet = true
-		case "namespace":
+		case "namespace", "n":
 			namespaceSet = true
 		case "include-zero-daemonsets":
 			includeZeroDaemonSetsSet = true
@@ -249,6 +264,10 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	cfg.MinEPSS = parsedEPSS
 	cfg.Namespaces = []string(namespaces)
 	cfg.Regions = []string(regions)
+	cfg.Format = strings.ToLower(strings.TrimSpace(cfg.Format))
+	cfg.View = strings.ToLower(strings.TrimSpace(cfg.View))
+	cfg.CacheCleanup = strings.ToLower(strings.TrimSpace(cfg.CacheCleanup))
+	cfg.MinSeverity = strings.ToUpper(strings.TrimSpace(cfg.MinSeverity))
 	if cfg.ReachabilityOnly {
 		if cfg.ScanReachabilityOnly {
 			return Config{}, errors.New("--reachability-only cannot be used with --scan-reachability-only")
@@ -402,4 +421,34 @@ func validateCacheCleanup(value string) error {
 	default:
 		return fmt.Errorf("invalid cache-cleanup %q: must be auto, always, or never", value)
 	}
+}
+
+func suggestFlagError(err error) error {
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return err
+	}
+	const prefix = "flag provided but not defined: -"
+	msg := err.Error()
+	idx := strings.Index(msg, prefix)
+	if idx == -1 {
+		return err
+	}
+	name := strings.TrimSpace(msg[idx+len(prefix):])
+	if name == "" {
+		return err
+	}
+	name = strings.TrimLeft(name, "-")
+	suggestions := map[string]string{
+		"namespaces":      "--namespace",
+		"ns":              "--namespace",
+		"regions":         "--region",
+		"projects":        "--project",
+		"outputs":         "--output",
+		"formats":         "--format",
+		"oci-vex-include": "--oci-vex-included",
+	}
+	if suggestion, ok := suggestions[name]; ok {
+		return fmt.Errorf("%w (unknown flag --%s); did you mean %s?", err, name, suggestion)
+	}
+	return err
 }

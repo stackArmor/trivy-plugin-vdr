@@ -46,7 +46,7 @@ go build -o "$repo_root/vdr" ./cmd/vdr
 # selector. Reports are written to $out_dir.
 args=("k8s" "--output" "$json_out" "--html-output" "$html_out")
 case " $* " in
-  *" --namespace "*|*" --all-namespaces "*) ;;        # caller chose a scope
+  *" --namespace "*|*" -n "*|*" --all-namespaces "*) ;;        # caller chose a scope
   *) args+=("--all-namespaces") ;;
 esac
 

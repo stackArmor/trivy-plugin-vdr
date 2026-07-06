@@ -48,8 +48,8 @@
     select, input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px; background: var(--field-bg); color: var(--ink); font: inherit; }
     button { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; background: var(--field-bg); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
     button:hover { border-color: var(--accent); }
-    table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-    th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
+    table { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; overflow: hidden; }
     th { color: var(--muted); font-size: 12px; background: var(--th-bg); }
     th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
     th.sortable:hover { color: var(--ink); }
@@ -67,6 +67,10 @@
     .suppressed-table { margin-top: 18px; }
     td.derived { font-style: italic; }
     .pkg-line { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+    .image-column { width: 22%; }
+    .image-cell { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .resource-column { width: 13%; }
+    .compact-column { width: 7%; }
     .legend { margin-top: 10px; font-size: 12px; color: var(--muted); }
     .empty { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
   </style>
@@ -118,8 +122,8 @@
           {{ if not .IsCloudRun }}
           <th>Namespace</th>
           {{ end }}
-          <th>Resource</th>
-          <th>Image</th>
+          <th class="resource-column">Resource</th>
+          <th class="image-column">Image</th>
           <th>Internet exposure</th>
           <th>Automatable</th>
           <th>Exploitation</th>
@@ -141,7 +145,7 @@
           <th>Justification</th>
           <th>Would-have-been PAIN</th>
           <th>Would-have-been remediation</th>
-          <th>Image</th>
+          <th class="image-column">Image</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -682,6 +686,9 @@
           } else if (cell.key === "resource") {
             const tip = resourceTooltip(row);
             if (tip) td.title = tip;
+          } else if (cell.key === "image") {
+            td.className = "image-cell";
+            td.title = String(value || "");
           } else if (cell.key === "exposed" && row.exposureKind === "Service/NodePort") {
             td.title = row.exposureEvidence.join("\n") ||
               "NodePort service; node-IP reachability unverified. Set vdr.fedramp.io/internet-reachable-nodePort: true|false on the Service.";
@@ -735,6 +742,10 @@
           if (index === 5) {
             td.className = remediationClass(rem.deadlineDays);
             td.title = remediationTooltip(rem);
+          }
+          if (index === 6) {
+            td.className = "image-cell";
+            td.title = String(value || "");
           }
           tr.appendChild(td);
         });

@@ -38,6 +38,8 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"test-context",        // kubectx in the header
 		"Certification Class", // class chip/subtitle in the header
 		"privileged",          // security posture moved into the resource-name tooltip
+		"image-cell",          // long image references are constrained in the table
+		"text-overflow: ellipsis",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("HTML output missing %q", want)

@@ -235,6 +235,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 		ImageSrc:         cfg.ImageSrc,
 		CacheDir:         cfg.CacheDir,
 		DockerConfigDir:  dockerConfigDir,
+		OCIVEXIncluded:   cfg.OCIVEXIncluded,
 		VEXOCIRegistries: cfg.VEXOCIRegistries,
 		Logger:           logger,
 	}

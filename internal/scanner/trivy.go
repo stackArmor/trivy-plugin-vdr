@@ -44,6 +44,8 @@ type TrivyRunner struct {
 	ImageSrc        string
 	CacheDir        string
 	DockerConfigDir string
+	// OCIVEXIncluded enables --vex oci for every scanned image.
+	OCIVEXIncluded bool
 	// VEXOCIRegistries enables --vex oci for images whose registry/repository
 	// matches one of these allowlist entries. Host-only entries match the registry
 	// host; host/path entries match that repository prefix.
@@ -181,6 +183,9 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 }
 
 func (r TrivyRunner) useOCIVEX(image string) bool {
+	if r.OCIVEXIncluded {
+		return true
+	}
 	if len(r.VEXOCIRegistries) == 0 {
 		return false
 	}

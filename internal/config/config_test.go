@@ -97,6 +97,31 @@ func TestParseRegistryAuthAndLogFlags(t *testing.T) {
 	}
 }
 
+func TestParseShortAliases(t *testing.T) {
+	cfg, err := Parse([]string{
+		"k8s",
+		"-f", "table",
+		"-o", "report.json",
+		"-q",
+		"-t", "45s",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Format != FormatTable {
+		t.Fatalf("Format = %q, want %q", cfg.Format, FormatTable)
+	}
+	if cfg.Output != "report.json" {
+		t.Fatalf("Output = %q, want report.json", cfg.Output)
+	}
+	if !cfg.Quiet {
+		t.Fatal("Quiet = false, want true")
+	}
+	if cfg.Timeout != 45*time.Second {
+		t.Fatalf("Timeout = %v, want 45s", cfg.Timeout)
+	}
+}
+
 func TestParseVEXOCIRegistries(t *testing.T) {
 	cfg, err := Parse([]string{
 		"k8s",
@@ -108,6 +133,28 @@ func TestParseVEXOCIRegistries(t *testing.T) {
 	want := []string{"registry.example.com", "ghcr.io/acme"}
 	if !reflect.DeepEqual(cfg.VEXOCIRegistries, want) {
 		t.Fatalf("VEXOCIRegistries = %#v, want %#v", cfg.VEXOCIRegistries, want)
+	}
+}
+
+func TestParseOCIVEXIncludedAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "long", args: []string{"k8s", "--oci-vex-included"}},
+		{name: "short", args: []string{"k8s", "-O"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Parse(tt.args)
+			if err != nil {
+				t.Fatalf("Parse returned error: %v", err)
+			}
+			if !cfg.OCIVEXIncluded {
+				t.Fatal("OCIVEXIncluded = false, want true")
+			}
+		})
 	}
 }
 
@@ -178,6 +225,34 @@ func TestParseNamespaceFlags(t *testing.T) {
 	}
 }
 
+func TestParseNamespaceShortAlias(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "-n", "prod", "-n", "dev"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if cfg.AllNamespaces {
+		t.Fatal("AllNamespaces = true, want false")
+	}
+	if !reflect.DeepEqual(cfg.Namespaces, []string{"prod", "dev"}) {
+		t.Fatalf("Namespaces = %#v, want prod/dev", cfg.Namespaces)
+	}
+}
+
+func TestParseNamespaceAcceptsCommaSeparatedValues(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--namespace", "prod, dev", "-n", "stage"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if cfg.AllNamespaces {
+		t.Fatal("AllNamespaces = true, want false")
+	}
+	if !reflect.DeepEqual(cfg.Namespaces, []string{"prod", "dev", "stage"}) {
+		t.Fatalf("Namespaces = %#v, want prod/dev/stage", cfg.Namespaces)
+	}
+}
+
 func TestParseCloudRunSourceRequiresProjectAndRegion(t *testing.T) {
 	_, err := Parse([]string{"cloudrun"})
 	if err == nil || !strings.Contains(err.Error(), "--project") {
@@ -212,6 +287,21 @@ func TestParseCloudRunSource(t *testing.T) {
 	}
 	if cfg.View != "resources" {
 		t.Fatalf("View = %q", cfg.View)
+	}
+}
+
+func TestParseRegionAcceptsCommaSeparatedValues(t *testing.T) {
+	cfg, err := Parse([]string{
+		"cloudrun",
+		"--project", "armory-gss-prod",
+		"--region", "us-east4, us-central1",
+		"--region", "us-west1",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !reflect.DeepEqual(cfg.Regions, []string{"us-east4", "us-central1", "us-west1"}) {
+		t.Fatalf("Regions = %#v", cfg.Regions)
 	}
 }
 
@@ -279,6 +369,18 @@ func TestParseUnknownRootFlagReportsFlagError(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), `unknown source "value"`) {
 		t.Fatalf("error = %q, want flag error instead of source misclassification", err.Error())
+	}
+}
+
+func TestParseUnknownFlagSuggestsKnownFlag(t *testing.T) {
+	_, err := Parse([]string{"k8s", "--namespaces", "default"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want unknown flag error")
+	}
+	if !strings.Contains(err.Error(), "flag provided but not defined") ||
+		!strings.Contains(err.Error(), "--namespaces") ||
+		!strings.Contains(err.Error(), "did you mean --namespace") {
+		t.Fatalf("error = %q, want unknown flag with namespace suggestion", err.Error())
 	}
 }
 
@@ -464,6 +566,31 @@ func TestParseRejectsInvalidFormat(t *testing.T) {
 	}
 }
 
+func TestParseNormalizesCaseInsensitiveEnums(t *testing.T) {
+	cfg, err := Parse([]string{
+		"k8s",
+		"--format", "TABLE",
+		"--view", "RESOURCES",
+		"--cache-cleanup", "ALWAYS",
+		"--min-severity", "critical",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Format != FormatTable {
+		t.Fatalf("Format = %q, want %q", cfg.Format, FormatTable)
+	}
+	if cfg.View != ViewResources {
+		t.Fatalf("View = %q, want %q", cfg.View, ViewResources)
+	}
+	if cfg.CacheCleanup != CacheCleanupAlways {
+		t.Fatalf("CacheCleanup = %q, want %q", cfg.CacheCleanup, CacheCleanupAlways)
+	}
+	if cfg.MinSeverity != "CRITICAL" {
+		t.Fatalf("MinSeverity = %q, want CRITICAL", cfg.MinSeverity)
+	}
+}
+
 func TestParseAcceptsCycloneDXFormat(t *testing.T) {
 	cfg, err := Parse([]string{"k8s", "--format", "cyclonedx"})
 	if err != nil {
@@ -555,5 +682,31 @@ func TestParseRejectsInvalidScanAndCacheFlags(t *testing.T) {
 				t.Fatalf("error = %q, want %q context", err.Error(), tt.want)
 			}
 		})
+	}
+}
+
+func TestParseHelpIncludesExamplesAndAliasSummary(t *testing.T) {
+	var out strings.Builder
+	_, err := ParseWithOutput([]string{"--help"}, &out)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("Parse error = %v, want flag.ErrHelp", err)
+	}
+	help := out.String()
+	for _, want := range []string{
+		"Common aliases:",
+		"-n, --namespace",
+		"-o, --output",
+		"-f, --format",
+		"-q, --quiet",
+		"-t, --timeout",
+		"-O, --oci-vex-included",
+		"Examples:",
+		"vdr k8s -n default -f table",
+		"vdr cloudrun --project my-gcp-project --region us-east4",
+		"vdr image -O nginx:1.25",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help output missing %q:\n%s", want, help)
+		}
 	}
 }
