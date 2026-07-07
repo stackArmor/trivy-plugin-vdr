@@ -148,11 +148,11 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs := flag.NewFlagSet("vdr", flag.ContinueOnError)
 	fs.SetOutput(output)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n       vdr image [flags] IMAGE...\n\nSources:\n  k8s\n  cloudrun\n  ecs (not implemented yet)\n  image\n\nCommon aliases:\n  -n, --namespace\n  -o, --output\n  -f, --format\n  -q, --quiet\n  -t, --timeout\n  -O, --oci-vex-included\n\nExamples:\n  vdr k8s -n default -f table\n  vdr k8s --namespace prod,dev --output vdr-k8s.json\n  vdr cloudrun --project my-gcp-project --region us-east4\n  vdr image -O nginx:1.25\n\nFlags:\n")
+		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n       vdr image [flags] IMAGE...\n\nSources:\n  k8s\n  cloudrun\n  ecs\n  image\n\nCommon aliases:\n  -n, --namespace\n  -o, --output\n  -f, --format\n  -q, --quiet\n  -t, --timeout\n  -O, --oci-vex-included\n\nExamples:\n  vdr k8s -n default -f table\n  vdr k8s --namespace prod,dev --output vdr-k8s.json\n  vdr cloudrun --project my-gcp-project --region us-east4\n  vdr ecs --region us-gov-west-1\n  vdr image -O nginx:1.25\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	fs.StringVar(&cfg.Project, "project", cfg.Project, "Google Cloud project for cloudrun source")
-	fs.Var(&regions, "region", "Google Cloud region for cloudrun source; may be repeated")
+	fs.Var(&regions, "region", "cloud region for cloudrun or ecs source; may be repeated")
 	fs.Var(&namespaces, "namespace", "Kubernetes namespace to scan; may be repeated")
 	fs.Var(&namespaces, "n", "alias for --namespace")
 	fs.BoolVar(&cfg.AllNamespaces, "all-namespaces", cfg.AllNamespaces, "scan all namespaces")
@@ -200,10 +200,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	if source == "" {
 		return Config{}, errors.New("source is required; expected one of: k8s, cloudrun, ecs, image")
 	}
-	if source == SourceECS {
-		return Config{}, fmt.Errorf("source %q is not implemented yet", source)
-	}
-	if source != SourceK8s && source != SourceCloudRun && source != SourceImage {
+	if source != SourceK8s && source != SourceCloudRun && source != SourceECS && source != SourceImage {
 		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, cloudrun, ecs, image", source)
 	}
 
@@ -276,7 +273,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			return Config{}, errors.New("--reachability-only cannot be used with --skip-exposure")
 		}
 		if cfg.Source == SourceImage {
-			return Config{}, errors.New("--reachability-only is only valid for sources k8s and cloudrun, not image")
+			return Config{}, errors.New("--reachability-only is only valid for sources k8s, cloudrun, and ecs, not image")
 		}
 		cfg.View = ViewResources
 	}
@@ -285,7 +282,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			return Config{}, errors.New("--scan-reachability-only cannot be used with --skip-exposure")
 		}
 		if cfg.Source == SourceImage {
-			return Config{}, errors.New("--scan-reachability-only is only valid for sources k8s and cloudrun, not image")
+			return Config{}, errors.New("--scan-reachability-only is only valid for sources k8s, cloudrun, and ecs, not image")
 		}
 		if htmlOutputSet || cfg.HTMLOutput != "" {
 			return Config{}, errors.New("--scan-reachability-only cannot be used with --html-output")
@@ -314,6 +311,23 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			return Config{}, errors.New("--region is required for source cloudrun")
 		}
 	}
+	if cfg.Source == SourceECS {
+		if namespaceSet {
+			return Config{}, errors.New("--namespace is only valid for source k8s")
+		}
+		if allNamespacesSet {
+			return Config{}, errors.New("--all-namespaces is only valid for source k8s")
+		}
+		if includeZeroDaemonSetsSet {
+			return Config{}, errors.New("--include-zero-daemonsets is only valid for source k8s")
+		}
+		if projectSet || strings.TrimSpace(cfg.Project) != "" {
+			return Config{}, errors.New("--project is only valid for source cloudrun")
+		}
+		if len(cfg.Regions) == 0 {
+			return Config{}, errors.New("--region is required for source ecs")
+		}
+	}
 	if cfg.Source == SourceImage {
 		if namespaceSet {
 			return Config{}, errors.New("--namespace is only valid for source k8s")
@@ -328,7 +342,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			return Config{}, errors.New("--project is only valid for source cloudrun")
 		}
 		if regionSet || len(cfg.Regions) > 0 {
-			return Config{}, errors.New("--region is only valid for source cloudrun")
+			return Config{}, errors.New("--region is only valid for sources cloudrun and ecs")
 		}
 		if len(cfg.ImageRefs) == 0 {
 			return Config{}, errors.New("at least one image reference is required for source image")

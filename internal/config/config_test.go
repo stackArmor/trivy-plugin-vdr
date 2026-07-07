@@ -312,6 +312,56 @@ func TestParseCloudRunRejectsKubernetesNamespaceFlags(t *testing.T) {
 	}
 }
 
+func TestParseECSSourceRequiresRegion(t *testing.T) {
+	_, err := Parse([]string{"ecs"})
+	if err == nil || !strings.Contains(err.Error(), "--region") {
+		t.Fatalf("error = %v, want missing region", err)
+	}
+}
+
+func TestParseECSSource(t *testing.T) {
+	cfg, err := Parse([]string{
+		"ecs",
+		"--region", "us-gov-west-1",
+		"--region", "us-east-1",
+		"--view", "resources",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Source != SourceECS {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceECS)
+	}
+	if !reflect.DeepEqual(cfg.Regions, []string{"us-gov-west-1", "us-east-1"}) {
+		t.Fatalf("Regions = %#v", cfg.Regions)
+	}
+	if cfg.View != "resources" {
+		t.Fatalf("View = %q", cfg.View)
+	}
+}
+
+func TestParseECSRejectsKubernetesAndCloudRunFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "namespace", args: []string{"ecs", "--region", "us-east-1", "--namespace", "default"}, want: "--namespace"},
+		{name: "all namespaces", args: []string{"ecs", "--region", "us-east-1", "--all-namespaces"}, want: "--all-namespaces"},
+		{name: "include zero daemonsets", args: []string{"ecs", "--region", "us-east-1", "--include-zero-daemonsets"}, want: "--include-zero-daemonsets"},
+		{name: "project", args: []string{"ecs", "--region", "us-east-1", "--project", "p"}, want: "--project"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.args)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %s rejection", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseAllowsGlobalFlagsBeforeAndAfterK8sSource(t *testing.T) {
 	cfg, err := Parse([]string{"--format", "table", "k8s", "--view", "resources", "--timeout", "45s"})
 	if err != nil {
@@ -381,20 +431,6 @@ func TestParseUnknownFlagSuggestsKnownFlag(t *testing.T) {
 		!strings.Contains(err.Error(), "--namespaces") ||
 		!strings.Contains(err.Error(), "did you mean --namespace") {
 		t.Fatalf("error = %q, want unknown flag with namespace suggestion", err.Error())
-	}
-}
-
-func TestParseReservedSourcesReturnNotImplemented(t *testing.T) {
-	for _, source := range []string{"ecs"} {
-		t.Run(source, func(t *testing.T) {
-			_, err := Parse([]string{source})
-			if err == nil {
-				t.Fatal("Parse returned nil error, want not implemented error")
-			}
-			if !strings.Contains(err.Error(), `source "`+source+`" is not implemented yet`) {
-				t.Fatalf("error = %q, want not implemented source context", err.Error())
-			}
-		})
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudrun"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/ecs"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/epss"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/vulnrichment"
@@ -53,6 +54,8 @@ func run(args []string) error {
 		return runK8s(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceCloudRun:
 		return runCloudRun(context.Background(), cfg, logger, os.Stdout)
+	case config.SourceECS:
+		return runECS(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceImage:
 		return runImage(context.Background(), cfg, logger, os.Stdout)
 	default:
@@ -109,7 +112,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 		warnings = append(warnings, secretWarnings...)
 
-		res, err := registry.Build(ctx, inventoryImageRefs(inventory), secretAuths, registry.Options{
+		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
 			EnableGcloud:                 !cfg.NoGcloudAuth,
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
@@ -182,6 +185,81 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 	var dockerConfigDir string
 	if !cfg.SkipRegistryAuth {
 		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
+			EnableGcloud:                 !cfg.NoGcloudAuth,
+			EnableECR:                    !cfg.NoECRAuth,
+			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
+			AWSRoleARN:                   cfg.AWSRoleARN,
+		}, logger)
+		if err != nil {
+			return err
+		}
+		defer res.Cleanup()
+		dockerConfigDir = res.Dir
+		for _, w := range res.Warnings {
+			warnings = append(warnings, "registry auth: "+w)
+			logger.Warn("registry auth: %s", w)
+		}
+		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
+	}
+
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+}
+
+func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+	client, err := ecs.NewAWSClient(ctx, ecs.ClientOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := client.Close(); closeErr != nil {
+			logger.Warn("closing AWS clients: %v", closeErr)
+		}
+	}()
+
+	options := ecs.Options{Regions: cfg.Regions}
+	collector := ecs.Collector{Client: client}
+	logger.Info("collecting ECS inventory from regions %v", cfg.Regions)
+	inventory, taskDefinitions, err := collector.CollectResources(ctx, options)
+	if err != nil {
+		return err
+	}
+	var warnings []string
+	for _, w := range inventory.Warnings {
+		logger.Warn("%s", w)
+	}
+	warnings = append(warnings, inventory.Warnings...)
+
+	runtimeSignals, runtimeWarnings := client.CollectRuntimeSignals(ctx, cfg.Regions)
+	for _, w := range runtimeWarnings {
+		warnings = append(warnings, w)
+		logger.Warn("%s", w)
+	}
+	runtimeMetadata := ecs.AnalyzeRuntime(taskDefinitions, runtimeSignals)
+	ecs.AttachRuntimeMetadata(inventory, runtimeMetadata)
+	logger.Info("inventory: %d ECS resources, %d unique images", len(inventory.Resources), len(inventory.Images))
+
+	exposures := map[model.ResourceRef]model.Exposure{}
+	if !cfg.SkipExposure {
+		exposureGraph, exposureWarnings := client.CollectExposureGraph(ctx, cfg.Regions, taskDefinitions)
+		for _, w := range exposureWarnings {
+			warnings = append(warnings, w)
+			logger.Warn("%s", w)
+		}
+		exposures = ecs.AnalyzeExposureFromGraph(inventory, runtimeMetadata, exposureGraph)
+	}
+	if cfg.ReachabilityOnly {
+		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
+		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+	}
+
+	var dockerConfigDir string
+	if !cfg.SkipRegistryAuth {
+		secretAuths, secretWarnings := ecs.RepositoryCredentialAuths(ctx, taskDefinitions, client)
+		for _, w := range secretWarnings {
+			warnings = append(warnings, "registry auth: "+w)
+			logger.Warn("registry auth: %s", w)
+		}
+		res, err := registry.Build(ctx, inventoryImageRefs(inventory), secretAuths, registry.Options{
 			EnableGcloud:                 !cfg.NoGcloudAuth,
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,

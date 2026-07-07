@@ -524,7 +524,7 @@
     if (headerByKey.exposed) {
       headerByKey.exposed.title = [
         "Whether the affected resource is reachable from the public internet.",
-        "Derived from Kubernetes or Cloud Run routing, conservatively:",
+        "Derived from Kubernetes, Cloud Run, or ECS routing, conservatively:",
         "",
         "  yes - a Service in front of the container is fronted by a public load",
         "        balancer: an external GKE Gateway class, a 'gce' GKE Ingress, or",

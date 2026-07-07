@@ -27,6 +27,30 @@ flowchart TD
     iap -->|no| crYesLb[Internet-reachable]
 ```
 
+## AWS ECS
+
+The ECS source inventories active task-definition revisions and attaches runtime metadata to each resource. Runtime status values are:
+
+- `observed_running`: at least one current running task uses the task definition.
+- `service_desired`: an ECS service desires tasks for the task definition, even if none are running at collection time.
+- `scheduled`: an EventBridge Scheduler or EventBridge Rule target can run the task definition. The status is modeled for schedule evidence, but AWS EventBridge schedule collection is not yet implemented.
+- `standalone_recent`: a recently observed one-off task uses the task definition.
+- `defined_only`: the task definition exists, but no service, schedule, or running task evidence was collected.
+
+`defined_only` task definitions are not counted as internet-reachable by default. ECS reachability is counted only when runtime evidence can be tied to a public path, such as an internet-facing ALB/NLB service path or a running awsvpc task ENI with a public IP and a security group allowing internet ingress to a mapped container port.
+
+```mermaid
+flowchart TD
+    td[ECS task definition] --> runtime{Runtime status}
+    runtime -->|defined_only| noRuntime[Not internet-reachable]
+    runtime -->|observed_running / service_desired / scheduled / standalone_recent| path{Public path found?}
+    path -->|Internet-facing ALB/NLB targets service| yesLb[Internet-reachable]
+    path -->|Public task ENI + open security group to container port| yesEni[Internet-reachable]
+    path -->|No supported public path| noPath[Not internet-reachable]
+```
+
+ECS task-definition `repositoryCredentials` Secrets Manager values are used only for scan-time registry authentication. Reports include secret counts/source types, not secret values.
+
 ## Kubernetes Ingress And Gateway
 
 Kubernetes route evaluation starts from Ingress and Gateway API objects, resolves their backend Services, then maps those Services to selected workload pods and containers. Provider-specific public/private class and scheme metadata decides whether the route represents a public path.

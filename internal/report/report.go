@@ -394,10 +394,12 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 	reports := map[model.ResourceRef]*model.ResourceReport{}
 	for ref, inv := range indexContainerInventory(inventory) {
 		report := &model.ResourceReport{
-			Resource: ref,
-			Images:   append([]model.ContainerImage(nil), inv.images...),
-			Labels:   copyStringMap(inv.labels),
-			Posture:  inv.posture,
+			Resource:         ref,
+			Images:           append([]model.ContainerImage(nil), inv.images...),
+			Labels:           copyStringMap(inv.labels),
+			ProviderMetadata: copyStringMap(inv.providerMetadata),
+			Runtime:          cloneRuntimeMetadata(inv.runtime),
+			Posture:          inv.posture,
 		}
 		if classificationOnly {
 			report.Classification = classifyAsset(sc, idx, nsLabels, ref)
@@ -458,9 +460,11 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 }
 
 type containerInventory struct {
-	images  []model.ContainerImage
-	labels  map[string]string
-	posture *model.WorkloadPosture
+	images           []model.ContainerImage
+	labels           map[string]string
+	providerMetadata map[string]string
+	runtime          *model.RuntimeMetadata
+	posture          *model.WorkloadPosture
 }
 
 func indexContainerInventory(inventory *model.Inventory) map[model.ResourceRef]containerInventory {
@@ -472,13 +476,24 @@ func indexContainerInventory(inventory *model.Inventory) map[model.ResourceRef]c
 			ref.ContainerType = image.ContainerType
 			ref.RestartPolicy = image.RestartPolicy
 			index[ref] = containerInventory{
-				images:  []model.ContainerImage{image},
-				labels:  copyStringMap(resource.Labels),
-				posture: resource.Posture,
+				images:           []model.ContainerImage{image},
+				labels:           copyStringMap(resource.Labels),
+				providerMetadata: copyStringMap(resource.ProviderMetadata),
+				runtime:          cloneRuntimeMetadata(resource.Runtime),
+				posture:          resource.Posture,
 			}
 		}
 	}
 	return index
+}
+
+func cloneRuntimeMetadata(in *model.RuntimeMetadata) *model.RuntimeMetadata {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Evidence = append([]string(nil), in.Evidence...)
+	return &out
 }
 
 func buildSummary(inventory *model.Inventory, findings []model.Finding, resources []model.ResourceReport) model.Summary {

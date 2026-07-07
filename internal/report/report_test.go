@@ -124,6 +124,46 @@ func TestBuildResourcesViewPreservesCloudRunIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildResourcesViewPreservesRuntimeAndProviderMetadata(t *testing.T) {
+	ref := model.ResourceRef{
+		APIVersion: "ecs.amazonaws.com/v1",
+		Kind:       "TaskDefinition",
+		Provider:   "aws-ecs",
+		Region:     "us-east-1",
+		Name:       "api:7",
+	}
+	inventory := &model.Inventory{
+		ContextName: "ecs",
+		Resources: []model.ResourceInventory{{
+			Resource: ref,
+			ProviderMetadata: map[string]string{
+				"ecs.networkMode": "awsvpc",
+			},
+			Runtime: &model.RuntimeMetadata{
+				Status:   "defined_only",
+				Evidence: []string{"task definition api:7 is defined_only"},
+			},
+			Images: []model.ContainerImage{{
+				Name:          "api",
+				ContainerType: "container",
+				ImageRef:      "example.com/api:1",
+			}},
+		}},
+	}
+
+	got := Build(inventory, nil, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
+
+	if len(got.Resources) != 1 {
+		t.Fatalf("resources = %d, want 1", len(got.Resources))
+	}
+	if got.Resources[0].Runtime == nil || got.Resources[0].Runtime.Status != "defined_only" {
+		t.Fatalf("Runtime = %#v", got.Resources[0].Runtime)
+	}
+	if got.Resources[0].ProviderMetadata["ecs.networkMode"] != "awsvpc" {
+		t.Fatalf("ProviderMetadata = %#v", got.Resources[0].ProviderMetadata)
+	}
+}
+
 func TestBuildResourceViewIncludesCleanInventoryResources(t *testing.T) {
 	inv := sampleInventory()
 	inv.Resources = append(inv.Resources, model.ResourceInventory{

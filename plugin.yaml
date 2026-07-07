@@ -1,27 +1,27 @@
 name: vdr
-version: 1.6.7
+version: 1.7.0
 repository: github.com/stackArmor/trivy-plugin-vdr
 maintainer: stackArmor
 summary: Vulnerability detection and response reporting
-description: Inventory source images, scan them with Trivy, and report resource-level vulnerability context. Kubernetes is available with the k8s source.
+description: Inventory source images, scan them with Trivy, and report resource-level vulnerability context. Kubernetes, Cloud Run, ECS, and direct image sources are available.
 platforms:
   - selector:
       os: darwin
       arch: amd64
-    uri: https://github.com/stackArmor/trivy-plugin-vdr/releases/download/v1.6.7/vdr_darwin_amd64.tar.gz
+    uri: https://github.com/stackArmor/trivy-plugin-vdr/releases/download/v1.7.0/vdr_darwin_amd64.tar.gz
     bin: ./vdr
   - selector:
       os: darwin
       arch: arm64
-    uri: https://github.com/stackArmor/trivy-plugin-vdr/releases/download/v1.6.7/vdr_darwin_arm64.tar.gz
+    uri: https://github.com/stackArmor/trivy-plugin-vdr/releases/download/v1.7.0/vdr_darwin_arm64.tar.gz
     bin: ./vdr
   - selector:
       os: linux
       arch: amd64
-    uri: https://github.com/stackArmor/trivy-plugin-vdr/releases/download/v1.6.7/vdr_linux_amd64.tar.gz
+    uri: https://github.com/stackArmor/trivy-plugin-vdr/releases/download/v1.7.0/vdr_linux_amd64.tar.gz
     bin: ./vdr
   - selector:
       os: linux
       arch: arm64
-    uri: https://github.com/stackArmor/trivy-plugin-vdr/releases/download/v1.6.7/vdr_linux_arm64.tar.gz
+    uri: https://github.com/stackArmor/trivy-plugin-vdr/releases/download/v1.7.0/vdr_linux_arm64.tar.gz
     bin: ./vdr
