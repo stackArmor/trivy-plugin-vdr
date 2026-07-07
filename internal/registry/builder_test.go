@@ -210,6 +210,8 @@ func TestBuildMergesAmbientDockerConfigWithGeneratedCredentials(t *testing.T) {
 }
 
 func TestBuildGcloudFailureWarnsNoToken(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+
 	runner := &fakeRunner{errs: map[string]error{"gcloud": errors.New("exec: \"gcloud\": executable file not found in $PATH")}}
 	res, err := Build(context.Background(), []string{"gcr.io/p/a:1"}, nil, Options{EnableGcloud: true, Runner: runner}, nil)
 	if err != nil {
@@ -248,6 +250,8 @@ func TestBuildSecretPrecedenceOverCloud(t *testing.T) {
 }
 
 func TestBuildEmptyNoDir(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+
 	res, err := Build(context.Background(), []string{"nginx:1.25"}, nil, Options{EnableGcloud: true, EnableECR: true, Runner: &fakeRunner{}}, nil)
 	if err != nil {
 		t.Fatalf("Build error: %v", err)
