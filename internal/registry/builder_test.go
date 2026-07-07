@@ -163,6 +163,52 @@ func TestBuildGcloudUsesImpersonatedServiceAccount(t *testing.T) {
 	}
 }
 
+func TestBuildMergesAmbientDockerConfigWithGeneratedCredentials(t *testing.T) {
+	ambientDir := t.TempDir()
+	ambientAuth := newAuth("hub-user", "hub-pass")
+	data, err := json.Marshal(map[string]any{
+		"auths": map[string]DockerAuth{
+			"https://index.docker.io/v1/": ambientAuth,
+		},
+		"credsStore": "desktop",
+	})
+	if err != nil {
+		t.Fatalf("marshal ambient docker config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ambientDir, "config.json"), data, 0o600); err != nil {
+		t.Fatalf("write ambient docker config: %v", err)
+	}
+	t.Setenv("DOCKER_CONFIG", ambientDir)
+
+	runner := &fakeRunner{outputs: map[string]string{"gcloud": "gar-token"}}
+	res, err := Build(context.Background(),
+		[]string{"gcr.io/p/a:1", "ripcord/private:1"},
+		nil,
+		Options{EnableGcloud: true, Runner: runner},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	defer res.Cleanup()
+
+	auths := readAuths(t, res.Dir)
+	if auths["gcr.io"].Password != "gar-token" {
+		t.Fatalf("missing generated GAR auth: %+v", auths["gcr.io"])
+	}
+	hub, ok := auths["docker.io"]
+	if !ok {
+		t.Fatalf("missing ambient Docker Hub auth, got keys %v", keys(auths))
+	}
+	if hub.Username != "hub-user" || hub.Password != "hub-pass" {
+		t.Fatalf("unexpected Docker Hub auth: %+v", hub)
+	}
+	raw := readRawDockerConfig(t, res.Dir)
+	if string(raw["credsStore"]) != `"desktop"` {
+		t.Fatalf("credsStore = %s, want desktop", raw["credsStore"])
+	}
+}
+
 func TestBuildGcloudFailureWarnsNoToken(t *testing.T) {
 	runner := &fakeRunner{errs: map[string]error{"gcloud": errors.New("exec: \"gcloud\": executable file not found in $PATH")}}
 	res, err := Build(context.Background(), []string{"gcr.io/p/a:1"}, nil, Options{EnableGcloud: true, Runner: runner}, nil)
@@ -250,4 +296,17 @@ func readAuths(t *testing.T, dir string) map[string]DockerAuth {
 		t.Fatalf("unmarshal config.json: %v", err)
 	}
 	return cfg.Auths
+}
+
+func readRawDockerConfig(t *testing.T, dir string) map[string]json.RawMessage {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw config.json: %v", err)
+	}
+	return raw
 }

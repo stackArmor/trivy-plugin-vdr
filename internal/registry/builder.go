@@ -52,9 +52,21 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 		runner = execRunner{}
 	}
 
-	auths := make(map[string]DockerAuth, len(secretAuths))
-	for host, auth := range secretAuths {
+	var warnings []string
+	ambientAuths, ambientRaw, err := readAmbientDockerConfig()
+	if err != nil {
+		warnings = append(warnings, "ambient Docker config ignored: "+err.Error())
+	}
+
+	auths := make(map[string]DockerAuth, len(ambientAuths)+len(secretAuths))
+	for host, auth := range ambientAuths {
 		auths[host] = auth
+	}
+	secretHosts := make(map[string]struct{}, len(secretAuths))
+	for host, auth := range secretAuths {
+		host = normalizeHost(host)
+		auths[host] = normalizeAuth(auth)
+		secretHosts[host] = struct{}{}
 	}
 
 	needGAR := false
@@ -75,8 +87,6 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 		}
 	}
 
-	var warnings []string
-
 	if needGAR && opts.EnableGcloud {
 		args := []string{"auth", "print-access-token"}
 		if opts.GCPImpersonateServiceAccount != "" {
@@ -87,7 +97,7 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 			warnings = append(warnings, "Google Artifact Registry auth unavailable: "+cliError("gcloud", err))
 		} else {
 			for host := range garHosts {
-				if _, exists := auths[host]; exists {
+				if _, exists := secretHosts[host]; exists {
 					continue // explicit cluster secret wins
 				}
 				auths[host] = newAuth("oauth2accesstoken", token)
@@ -102,7 +112,7 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 			warnings = append(warnings, "AWS role assumption unavailable: "+cliError("aws", err))
 		}
 		for _, host := range sortedKeys(ecrHosts) {
-			if _, exists := auths[host]; exists {
+			if _, exists := secretHosts[host]; exists {
 				continue
 			}
 			region := ecrHosts[host]
@@ -129,7 +139,7 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 		os.RemoveAll(dir)
 		return result, err
 	}
-	data, err := json.MarshalIndent(DockerConfig{Auths: auths}, "", "  ")
+	data, err := marshalDockerConfig(ambientRaw, auths)
 	if err != nil {
 		os.RemoveAll(dir)
 		return result, err
@@ -142,6 +152,56 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 	result.Dir = dir
 	result.Cleanup = func() { os.RemoveAll(dir) }
 	return result, nil
+}
+
+func readAmbientDockerConfig() (map[string]DockerAuth, map[string]json.RawMessage, error) {
+	path, ok := ambientDockerConfigPath()
+	if !ok {
+		return nil, nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, nil, err
+	}
+	var cfg DockerConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, nil, err
+	}
+	return normalizeAuths(cfg.Auths), raw, nil
+}
+
+func ambientDockerConfigPath() (string, bool) {
+	if dir := strings.TrimSpace(os.Getenv("DOCKER_CONFIG")); dir != "" {
+		return filepath.Join(dir, "config.json"), true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", false
+	}
+	return filepath.Join(home, ".docker", "config.json"), true
+}
+
+func marshalDockerConfig(base map[string]json.RawMessage, auths map[string]DockerAuth) ([]byte, error) {
+	if len(base) == 0 {
+		return json.MarshalIndent(DockerConfig{Auths: auths}, "", "  ")
+	}
+	out := make(map[string]json.RawMessage, len(base)+1)
+	for key, value := range base {
+		out[key] = value
+	}
+	authData, err := json.Marshal(auths)
+	if err != nil {
+		return nil, err
+	}
+	out["auths"] = authData
+	return json.MarshalIndent(out, "", "  ")
 }
 
 // runToken runs a command expected to print a credential token to stdout and
