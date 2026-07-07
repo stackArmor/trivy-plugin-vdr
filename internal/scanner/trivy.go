@@ -130,6 +130,15 @@ func (r TrivyRunner) ScanImageWithOptions(ctx context.Context, image string, tim
 	}
 
 	findings, err := r.scanOnce(ctx, cacheDir, image, timeout, options)
+	if err != nil && r.useOCIVEX(image) && looksLikeOCIVEXRetrievalFailure(err) {
+		if r.Logger != nil {
+			r.Logger.Warn("OCI VEX lookup failed for %s; retrying vulnerability scan without OCI VEX: %v", image, err)
+		}
+		retry := r
+		retry.OCIVEXIncluded = false
+		retry.VEXOCIRegistries = nil
+		findings, err = retry.scanOnce(ctx, cacheDir, image, timeout, options)
+	}
 	if err == nil || r.healOnce == nil || !looksLikeCacheCorruption(err) {
 		return findings, err
 	}
@@ -215,6 +224,18 @@ func (r TrivyRunner) useOCIVEX(image string) bool {
 		}
 	}
 	return false
+}
+
+func looksLikeOCIVEXRetrievalFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "vex oci") &&
+		(strings.Contains(msg, "failed to retrieve vex attestation") ||
+			strings.Contains(msg, "fetching attestations") ||
+			strings.Contains(msg, "blob_unknown") ||
+			strings.Contains(msg, "unknown blob"))
 }
 
 // workerCachePool hands out isolated Trivy cache directories so concurrent scans

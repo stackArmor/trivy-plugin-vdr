@@ -112,7 +112,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 		warnings = append(warnings, secretWarnings...)
 
-		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
+		res, err := registry.Build(ctx, inventoryImageRefs(inventory), secretAuths, registry.Options{
 			EnableGcloud:                 !cfg.NoGcloudAuth,
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,

@@ -100,6 +100,42 @@ func TestTrivyRunnerAddsOCIVEXWhenIncluded(t *testing.T) {
 	}
 }
 
+func TestTrivyRunnerRetriesWithoutOCIVEXWhenAttestationFetchFails(t *testing.T) {
+	fake := &sequenceCommandRunner{
+		results: []commandResult{
+			{
+				stderr: []byte("FATAL Fatal error run error: filter error: filtering error: VEX error: VEX OCI error: failed to retrieve VEX attestation: fetching payload: GET https://us-east4-docker.pkg.dev/v2/k8s-artifacts-prod/images/ingress-nginx/kube-webhook-certgen/blobs/sha256:fed643: BLOB_UNKNOWN: Unknown blob"),
+				err:    errors.New("exit status 1"),
+			},
+			{
+				stdout: []byte(`{"Results":[{"Target":"app","Vulnerabilities":[{"VulnerabilityID":"CVE-2026-0001","PkgName":"openssl","InstalledVersion":"1.0","Severity":"HIGH","Status":"fixed"}]}]}`),
+			},
+		},
+	}
+	runner := TrivyRunner{
+		Binary:         "trivy-test",
+		OCIVEXIncluded: true,
+		CommandRunner:  fake,
+	}
+
+	findings, err := runner.ScanImage(context.Background(), "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.2", 45*time.Second)
+	if err != nil {
+		t.Fatalf("ScanImage returned error: %v", err)
+	}
+	if len(findings) != 1 || findings[0].ID != "CVE-2026-0001" {
+		t.Fatalf("findings = %#v, want retry findings", findings)
+	}
+	if len(fake.callArgs) != 2 {
+		t.Fatalf("calls = %d, want initial VEX scan plus retry", len(fake.callArgs))
+	}
+	if !containsArg(fake.callArgs[0], "--vex") {
+		t.Fatalf("first call args = %#v, want VEX enabled", fake.callArgs[0])
+	}
+	if containsArg(fake.callArgs[1], "--vex") || containsArg(fake.callArgs[1], "--show-suppressed") {
+		t.Fatalf("retry args = %#v, want no VEX flags", fake.callArgs[1])
+	}
+}
+
 func TestTrivyRunnerDoesNotAddOCIVEXForUnmatchedRegistry(t *testing.T) {
 	fake := &fakeCommandRunner{
 		stdout: []byte(`{"Results":[]}`),
@@ -889,6 +925,36 @@ func (f *fakeCommandRunner) Run(ctx context.Context, name string, args ...string
 	f.args = append([]string(nil), args...)
 	f.callArgs = append(f.callArgs, append([]string(nil), args...))
 	return f.stdout, f.stderr, f.err
+}
+
+type commandResult struct {
+	stdout []byte
+	stderr []byte
+	err    error
+}
+
+type sequenceCommandRunner struct {
+	callArgs [][]string
+	results  []commandResult
+}
+
+func (f *sequenceCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+	f.callArgs = append(f.callArgs, append([]string(nil), args...))
+	if len(f.results) == 0 {
+		return nil, nil, errors.New("unexpected command call")
+	}
+	result := f.results[0]
+	f.results = f.results[1:]
+	return result.stdout, result.stderr, result.err
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeImageRunner struct {
