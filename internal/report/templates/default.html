@@ -352,9 +352,8 @@
     }
     if (resources.length) {
       resources.forEach(resource => {
-        const resourceFindings = resource.findings || [];
-        if (resourceFindings.length === 0) {
-          addFinding({}, resource.resource, resource.exposure, resource);
+        const resourceFindings = resource.findings;
+        if (!resourceFindings || resourceFindings.length === 0) {
           return;
         }
         resourceFindings.forEach(finding => addFinding(finding, resource.resource, resource.exposure || finding.exposure, resource));

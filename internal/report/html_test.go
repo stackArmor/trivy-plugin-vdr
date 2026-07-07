@@ -139,6 +139,39 @@ func TestRenderHTMLCloudRunOmitsNamespaceAndIncludesResourceTypeFilter(t *testin
 	}
 }
 
+func TestRenderHTMLSkipsResourcesWithoutFindingsInFindingsTable(t *testing.T) {
+	scanReport := model.Report{
+		ContextName: "cloudrun/p",
+		Resources: []model.ResourceReport{{
+			Resource: model.ResourceRef{
+				APIVersion: "run.googleapis.com/v1",
+				Kind:       "Job",
+				Provider:   "gcp-cloud-run",
+				Project:    "p",
+				Region:     "us-east4",
+				Name:       "migrate",
+			},
+			Findings: nil,
+		}},
+	}
+	var buf bytes.Buffer
+
+	if err := RenderHTML(&buf, scanReport, ""); err != nil {
+		t.Fatalf("RenderHTML returned error: %v", err)
+	}
+
+	output := buf.String()
+	if strings.Contains(output, "addFinding({}, resource.resource, resource.exposure, resource)") {
+		t.Fatalf("HTML template still renders placeholder finding rows for resources with no findings")
+	}
+	if !strings.Contains(output, "const resourceFindings = resource.findings;") {
+		t.Fatalf("HTML template should preserve null/undefined findings so parent metadata resources can be skipped")
+	}
+	if !strings.Contains(output, "if (!resourceFindings || resourceFindings.length === 0)") {
+		t.Fatalf("HTML template should skip resources with null or empty findings")
+	}
+}
+
 func TestRenderHTMLUsesCustomTemplate(t *testing.T) {
 	templatePath := filepath.Join(t.TempDir(), "custom.html")
 	if err := os.WriteFile(templatePath, []byte(`<html><body>{{ .Report.Summary.Findings }} {{ .ReportJSON }}</body></html>`), 0o644); err != nil {
