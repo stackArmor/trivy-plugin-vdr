@@ -23,6 +23,8 @@ import (
 const defaultTrivyBinary = "trivy"
 const defaultParallelScans = 5
 
+var defaultImageScanRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
+
 type Runner interface {
 	ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error)
 }
@@ -374,6 +376,7 @@ type ScanOptions struct {
 	CacheMinFreePercent int
 	CacheCleaner        CacheCleaner
 	Logger              *log.Logger
+	RetryDelays         []time.Duration
 }
 
 func ScanInventory(ctx context.Context, inventory *model.Inventory, runner Runner, timeout time.Duration) ([]model.Finding, error) {
@@ -424,6 +427,10 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	if parallelScans <= 0 {
 		parallelScans = defaultParallelScans
 	}
+	retryDelays := options.RetryDelays
+	if retryDelays == nil {
+		retryDelays = defaultImageScanRetryDelays
+	}
 
 	jobs := make(chan int)
 	results := make([]scanResult, len(images))
@@ -437,7 +444,7 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	scanIndex := func(index int) {
 		image := images[index]
 		options.Logger.Info("scanning %s", image.ImageRef)
-		findings, err := scanInventoryImage(ctx, runner, image, options.Timeout)
+		findings, err := scanInventoryImageWithRetry(ctx, runner, image, options.Timeout, retryDelays, options.Logger)
 		result := scanResult{findings: findings, err: err, completed: err == nil}
 		if err == nil {
 			for i := range result.findings {
@@ -591,6 +598,71 @@ func scanInventoryImage(ctx context.Context, runner Runner, image inventoryImage
 		})
 	}
 	return runner.ScanImage(ctx, image.ImageRef, timeout)
+}
+
+func scanInventoryImageWithRetry(ctx context.Context, runner Runner, image inventoryImage, timeout time.Duration, retryDelays []time.Duration, logger *log.Logger) ([]model.Finding, error) {
+	totalAttempts := len(retryDelays) + 1
+	for attempt := 1; ; attempt++ {
+		findings, err := scanInventoryImage(ctx, runner, image, timeout)
+		if err == nil {
+			return findings, nil
+		}
+		if attempt >= totalAttempts || !looksLikeTransientImageScanFailure(err) || isContextError(err) {
+			return nil, err
+		}
+		delay := retryDelays[attempt-1]
+		logger.Warn("%s scan attempt %d/%d failed; retrying in %s: %v", image.ImageRef, attempt, totalAttempts, delay, err)
+		if waitErr := waitRetryDelay(ctx, delay); waitErr != nil {
+			return nil, waitErr
+		}
+	}
+}
+
+func looksLikeTransientImageScanFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sig := range []string{
+		"unexpected eof",
+		"connection reset",
+		"connection refused",
+		"i/o timeout",
+		"tls handshake timeout",
+		"timeout awaiting response headers",
+		"temporary failure",
+		"temporarily unavailable",
+		"too many requests",
+		"429",
+		"500 internal server",
+		"502 bad gateway",
+		"503 service unavailable",
+		"504 gateway timeout",
+	} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+func waitRetryDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func mergeStrings(existing, added []string) []string {

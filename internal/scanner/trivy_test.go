@@ -835,6 +835,70 @@ func TestScanInventoryWithOptionsConvertsImageErrorToWarningAndContinues(t *test
 	}
 }
 
+func TestScanInventoryWithOptionsRetriesTransientImageFailureTwice(t *testing.T) {
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{{
+			ImageRef: "registry.example.com/app:v1",
+		}},
+	}
+	runner := &flakyImageRunner{
+		failuresBeforeSuccess: 2,
+		err:                   errors.New("failed to copy: unexpected EOF"),
+		findings:              []model.Finding{{ID: "CVE-RETRY"}},
+	}
+
+	findings, warnings, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+		Timeout:       time.Minute,
+		ParallelScans: 1,
+		CacheCleanup:  CleanupNever,
+		RetryDelays:   []time.Duration{0, 0},
+	})
+	if err != nil {
+		t.Fatalf("ScanInventoryWithOptions returned error: %v", err)
+	}
+	if got := runner.callCount("registry.example.com/app:v1"); got != 3 {
+		t.Fatalf("scan attempts = %d, want 3", got)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none after retry success", warnings)
+	}
+	if len(findings) != 1 || findings[0].ID != "CVE-RETRY" {
+		t.Fatalf("findings = %#v, want retry scan finding", findings)
+	}
+}
+
+func TestScanInventoryWithOptionsDoesNotRetryAuthFailures(t *testing.T) {
+	inventory := &model.Inventory{
+		Images: []model.ImageInventory{{
+			ImageRef: "registry.example.com/app:v1",
+		}},
+	}
+	runner := &flakyImageRunner{
+		failuresBeforeSuccess: 2,
+		err:                   errors.New("UNAUTHORIZED: authentication required"),
+		findings:              []model.Finding{{ID: "CVE-RETRY"}},
+	}
+
+	findings, warnings, err := ScanInventoryWithOptions(context.Background(), inventory, runner, ScanOptions{
+		Timeout:       time.Minute,
+		ParallelScans: 1,
+		CacheCleanup:  CleanupNever,
+		RetryDelays:   []time.Duration{0, 0},
+	})
+	if err != nil {
+		t.Fatalf("ScanInventoryWithOptions returned error: %v", err)
+	}
+	if got := runner.callCount("registry.example.com/app:v1"); got != 1 {
+		t.Fatalf("scan attempts = %d, want 1", got)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("findings = %#v, want none", findings)
+	}
+	if len(warnings) != 1 || warnings[0].ImageRef != "registry.example.com/app:v1" || !strings.Contains(warnings[0].Message, "UNAUTHORIZED") {
+		t.Fatalf("warnings = %#v, want auth failure warning", warnings)
+	}
+}
+
 func TestScanInventoryWithOptionsReturnsParentCancellationDuringCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	inventory := &model.Inventory{
@@ -1058,6 +1122,33 @@ func (r *errImageRunner) ScanImage(ctx context.Context, image string, timeout ti
 		return nil, err
 	}
 	return r.findings[image], nil
+}
+
+type flakyImageRunner struct {
+	mu                    sync.Mutex
+	calls                 map[string]int
+	failuresBeforeSuccess int
+	err                   error
+	findings              []model.Finding
+}
+
+func (r *flakyImageRunner) ScanImage(ctx context.Context, image string, timeout time.Duration) ([]model.Finding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.calls == nil {
+		r.calls = map[string]int{}
+	}
+	r.calls[image]++
+	if r.calls[image] <= r.failuresBeforeSuccess {
+		return nil, r.err
+	}
+	return append([]model.Finding(nil), r.findings...), nil
+}
+
+func (r *flakyImageRunner) callCount(image string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls[image]
 }
 
 type parentCancelingImageRunner struct {
