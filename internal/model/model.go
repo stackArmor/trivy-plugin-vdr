@@ -364,8 +364,8 @@ type Pain struct {
 	Tier            string  `json:"tier"`                     // N1..N5
 	Word            string  `json:"word"`                     // Minimal|Narrow|Disruptive|Debilitating
 	Severity        float64 `json:"severity"`                 // normalized environmental impact scalar 0..1
-	Archetype       string  `json:"archetype"`                // resolved asset-archetype
-	ArchetypeSource string  `json:"archetypeSource"`          // label|namespaceLabel|nameRule|namespaceRule|default|failsafe
+	Archetype       string  `json:"archetype"`                // resolved asset-archetype or asset-value-* fallback
+	ArchetypeSource string  `json:"archetypeSource"`          // label|namespaceLabel|nameRule|namespaceRule|assetValue*|default|failsafe
 	SeveritySource  string  `json:"severitySource,omitempty"` // technicalImpact|cvss|severity
 	CR              string  `json:"cr"`                       // confidentiality requirement (L|M|H)
 	IR              string  `json:"ir"`                       // integrity requirement (L|M|H)

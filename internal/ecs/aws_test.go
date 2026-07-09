@@ -48,6 +48,10 @@ func TestAWSClientInventoryListsAndDescribesActiveTaskDefinitions(t *testing.T) 
 						}},
 					}},
 				},
+				Tags: []types.Tag{{
+					Key:   stringPtr("vdr.fedramp.io/asset-value"),
+					Value: stringPtr("High"),
+				}},
 			},
 			"arn:aws:ecs:us-east-1:123:task-definition/worker:2": {
 				TaskDefinition: &types.TaskDefinition{
@@ -72,12 +76,18 @@ func TestAWSClientInventoryListsAndDescribesActiveTaskDefinitions(t *testing.T) 
 	if len(got) != 2 {
 		t.Fatalf("task definitions = %d, want 2: %#v", len(got), got)
 	}
+	for _, input := range api.describeInputs {
+		if !reflect.DeepEqual(input.Include, []types.TaskDefinitionField{types.TaskDefinitionFieldTags}) {
+			t.Fatalf("DescribeTaskDefinition Include = %#v, want TAGS", input.Include)
+		}
+	}
 	wantFirst := TaskDefinition{
 		Region:                  "us-east-1",
 		Arn:                     "arn:aws:ecs:us-east-1:123:task-definition/api:7",
 		Family:                  "api",
 		Revision:                7,
 		Status:                  "ACTIVE",
+		Tags:                    map[string]string{"vdr.fedramp.io/asset-value": "High"},
 		NetworkMode:             "awsvpc",
 		ExecutionRoleArn:        "arn:aws:iam::123:role/exec",
 		TaskRoleArn:             "arn:aws:iam::123:role/task",
@@ -100,9 +110,10 @@ func TestAWSClientInventoryListsAndDescribesActiveTaskDefinitions(t *testing.T) 
 }
 
 type fakeECSAPI struct {
-	listPages []*awsecs.ListTaskDefinitionsOutput
-	describe  map[string]*awsecs.DescribeTaskDefinitionOutput
-	listCalls int
+	listPages      []*awsecs.ListTaskDefinitionsOutput
+	describe       map[string]*awsecs.DescribeTaskDefinitionOutput
+	listCalls      int
+	describeInputs []*awsecs.DescribeTaskDefinitionInput
 }
 
 func (f *fakeECSAPI) ListTaskDefinitions(ctx context.Context, input *awsecs.ListTaskDefinitionsInput, optFns ...func(*awsecs.Options)) (*awsecs.ListTaskDefinitionsOutput, error) {
@@ -118,6 +129,7 @@ func (f *fakeECSAPI) ListTaskDefinitions(ctx context.Context, input *awsecs.List
 }
 
 func (f *fakeECSAPI) DescribeTaskDefinition(ctx context.Context, input *awsecs.DescribeTaskDefinitionInput, optFns ...func(*awsecs.Options)) (*awsecs.DescribeTaskDefinitionOutput, error) {
+	f.describeInputs = append(f.describeInputs, input)
 	return f.describe[*input.TaskDefinition], nil
 }
 

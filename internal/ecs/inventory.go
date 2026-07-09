@@ -79,6 +79,7 @@ func (b *inventoryBuilder) addTaskDefinition(taskDefinition TaskDefinition) {
 
 	resourceInventory := model.ResourceInventory{
 		Resource:         resource,
+		Labels:           copyStringMap(taskDefinition.Tags),
 		ProviderMetadata: taskDefinitionProviderMetadata(taskDefinition),
 	}
 	for _, container := range taskDefinition.Containers {
@@ -162,6 +163,17 @@ func taskDefinitionProviderMetadata(taskDefinition TaskDefinition) map[string]st
 		}
 	}
 	return metadata
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
 }
 
 func containerSecurity(container ContainerDefinition) *model.ContainerSecurity {

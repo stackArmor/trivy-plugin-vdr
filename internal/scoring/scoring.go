@@ -40,22 +40,25 @@ type Archetype struct {
 // glob (e.g. "kube-system", "gke-managed-*"). Used for workloads that cannot
 // carry in-cluster labels (managed, shared-responsibility components).
 type NamespaceRule struct {
-	Match     string `json:"match" yaml:"match"`
-	Archetype string `json:"archetype" yaml:"archetype"`
+	Match      string `json:"match" yaml:"match"`
+	Archetype  string `json:"archetype" yaml:"archetype"`
+	AssetValue string `json:"assetValue" yaml:"assetValue"`
 }
 
 // NameRule assigns an archetype to workloads whose name matches a glob, optionally
 // scoped to a namespace glob. Evaluated before namespace rules.
 type NameRule struct {
-	Namespace string `json:"namespace" yaml:"namespace"`
-	Match     string `json:"match" yaml:"match"`
-	Archetype string `json:"archetype" yaml:"archetype"`
+	Namespace  string `json:"namespace" yaml:"namespace"`
+	Match      string `json:"match" yaml:"match"`
+	Archetype  string `json:"archetype" yaml:"archetype"`
+	AssetValue string `json:"assetValue" yaml:"assetValue"`
 }
 
 // LabelKeys are the label keys read from a workload (or its namespace) to resolve
 // its archetype, multi-agency scope, and Certification Class.
 type LabelKeys struct {
 	Archetype   string `json:"archetype" yaml:"archetype"`
+	AssetValue  string `json:"assetValue" yaml:"assetValue"`
 	MultiAgency string `json:"multiAgency" yaml:"multiAgency"`
 	Class       string `json:"class" yaml:"class"`
 }
@@ -66,6 +69,7 @@ type LabelKeys struct {
 type Defaults struct {
 	MultiAgency bool   `json:"multiAgency" yaml:"multiAgency"`
 	Archetype   string `json:"archetype" yaml:"archetype"`
+	AssetValue  string `json:"assetValue" yaml:"assetValue"`
 	Class       string `json:"class" yaml:"class"`
 }
 
@@ -175,6 +179,7 @@ func Default() *Config {
 		},
 		LabelKeys: LabelKeys{
 			Archetype:   "vdr.fedramp.io/asset-archetype",
+			AssetValue:  "vdr.fedramp.io/asset-value",
 			MultiAgency: "vdr.fedramp.io/multi-agency",
 			Class:       "vdr.fedramp.io/class",
 		},
@@ -238,6 +243,13 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	if v := normalizeClass(data["class"]); v != "" {
 		c.Defaults.Class = v
 	}
+	av := data["assetValue"]
+	if av == "" {
+		av = data["asset-value"]
+	}
+	if v := normalizeAssetValue(av); v != "" {
+		c.Defaults.AssetValue = v
+	}
 	ma, ok := data["multiAgency"]
 	if !ok {
 		ma = data["multi-agency"]
@@ -250,14 +262,33 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 
 func (c *Config) validate() error {
 	for i, r := range c.NamespaceRules {
-		if _, ok := c.Archetypes[r.Archetype]; !ok {
-			return fmt.Errorf("namespaceRules[%d] references unknown archetype %q", i, r.Archetype)
+		if r.Archetype == "" && r.AssetValue == "" {
+			return fmt.Errorf("namespaceRules[%d] must set archetype or assetValue", i)
+		}
+		if r.Archetype != "" {
+			if _, ok := c.Archetypes[r.Archetype]; !ok {
+				return fmt.Errorf("namespaceRules[%d] references unknown archetype %q", i, r.Archetype)
+			}
+		}
+		if r.AssetValue != "" && normalizeAssetValue(r.AssetValue) == "" {
+			return fmt.Errorf("namespaceRules[%d] references unknown assetValue %q", i, r.AssetValue)
 		}
 	}
 	for i, r := range c.NameRules {
-		if _, ok := c.Archetypes[r.Archetype]; !ok {
-			return fmt.Errorf("nameRules[%d] references unknown archetype %q", i, r.Archetype)
+		if r.Archetype == "" && r.AssetValue == "" {
+			return fmt.Errorf("nameRules[%d] must set archetype or assetValue", i)
 		}
+		if r.Archetype != "" {
+			if _, ok := c.Archetypes[r.Archetype]; !ok {
+				return fmt.Errorf("nameRules[%d] references unknown archetype %q", i, r.Archetype)
+			}
+		}
+		if r.AssetValue != "" && normalizeAssetValue(r.AssetValue) == "" {
+			return fmt.Errorf("nameRules[%d] references unknown assetValue %q", i, r.AssetValue)
+		}
+	}
+	if c.Defaults.AssetValue != "" && normalizeAssetValue(c.Defaults.AssetValue) == "" {
+		return fmt.Errorf("defaults.assetValue %q must be one of H, M, L, High, Medium, Moderate, Low", c.Defaults.AssetValue)
 	}
 	if c.Defaults.Class != "" && normalizeClass(c.Defaults.Class) == "" {
 		return fmt.Errorf("defaults.class %q must be one of A, B, C, D", c.Defaults.Class)
@@ -277,12 +308,16 @@ func (c *Config) validate() error {
 
 // Score computes the PAIN and FedRAMP remediation deadline for a finding-on-asset.
 func (c *Config) Score(in Input) Result {
-	arch, source, found := c.resolveArchetype(in.Namespace, in.WorkloadName, in.Labels, in.NamespaceLabels)
+	arch, source, assetValue, found := c.resolveClassification(in.Namespace, in.WorkloadName, in.Labels, in.NamespaceLabels)
 
 	var a Archetype
 	forceMulti := false
 	if found {
-		a = c.Archetypes[arch]
+		if assetValue != "" {
+			a = archetypeForAssetValue(assetValue)
+		} else {
+			a = c.Archetypes[arch]
+		}
 	} else {
 		// Fail-safe: an unclassified asset is treated as CR/IR/AR=High and
 		// multi-agency=true, which floors the finding toward N5. Missing metadata
@@ -329,10 +364,31 @@ func (c *Config) Score(in Input) Result {
 	}
 }
 
-// resolveArchetype applies the precedence: workload label > namespace label >
-// name rule > namespace rule > fail-safe. The returned bool is false only for the
-// fail-safe path (no usable signal).
-func (c *Config) resolveArchetype(namespace, name string, labels, nsLabels map[string]string) (string, string, bool) {
+// resolveClassification prefers the richer asset-archetype path, then falls back
+// to asset-value (H/M/L mapped uniformly across CR/IR/AR), then the default
+// archetype/fail-safe path. The returned bool is false only for the fail-safe
+// path (no usable signal).
+func (c *Config) resolveClassification(namespace, name string, labels, nsLabels map[string]string) (string, string, string, bool) {
+	if arch, source, found := c.resolveArchetypeSignal(namespace, name, labels, nsLabels); found || source == "label-unknown" {
+		return arch, source, "", found
+	}
+	if value, source, found := c.resolveAssetValueSignal(namespace, name, labels, nsLabels); found || source == "assetValueLabelUnknown" {
+		return "asset-value-" + strings.ToLower(value), source, value, found
+	}
+	if c.Defaults.AssetValue != "" {
+		if value := normalizeAssetValue(c.Defaults.AssetValue); value != "" {
+			return "asset-value-" + strings.ToLower(value), "assetValueDefault", value, true
+		}
+	}
+	if c.Defaults.Archetype != "" {
+		if _, known := c.Archetypes[c.Defaults.Archetype]; known {
+			return c.Defaults.Archetype, "default", "", true
+		}
+	}
+	return "", "failsafe", "", false
+}
+
+func (c *Config) resolveArchetypeSignal(namespace, name string, labels, nsLabels map[string]string) (string, string, bool) {
 	if v, ok := labels[c.LabelKeys.Archetype]; ok {
 		v = strings.TrimSpace(v)
 		if _, known := c.Archetypes[v]; known {
@@ -366,17 +422,48 @@ func (c *Config) resolveArchetype(namespace, name string, labels, nsLabels map[s
 			}
 		}
 	}
-	// Cluster-wide default archetype: a known catalog entry named by
-	// Defaults.Archetype catches new/unclassified resources without forcing them to
-	// the multi-agency N5 fail-safe. The built-in default is the H/H/H
-	// "unclassified" archetype; the true fail-safe below only triggers if a config
-	// clears Defaults.Archetype or points it at an unknown name.
-	if c.Defaults.Archetype != "" {
-		if _, known := c.Archetypes[c.Defaults.Archetype]; known {
-			return c.Defaults.Archetype, "default", true
+	return "", "", false
+}
+
+func (c *Config) resolveAssetValueSignal(namespace, name string, labels, nsLabels map[string]string) (string, string, bool) {
+	if v, ok := labels[c.LabelKeys.AssetValue]; ok {
+		if value := normalizeAssetValue(v); value != "" {
+			return value, "assetValueLabel", true
+		}
+		return "", "assetValueLabelUnknown", false
+	}
+	if v, ok := nsLabels[c.LabelKeys.AssetValue]; ok {
+		if value := normalizeAssetValue(v); value != "" {
+			return value, "assetValueNamespaceLabel", true
+		}
+		return "", "assetValueLabelUnknown", false
+	}
+	for _, r := range c.NameRules {
+		if r.AssetValue == "" {
+			continue
+		}
+		if r.Namespace != "" {
+			if ok, _ := path.Match(r.Namespace, namespace); !ok {
+				continue
+			}
+		}
+		if ok, _ := path.Match(r.Match, name); ok {
+			if value := normalizeAssetValue(r.AssetValue); value != "" {
+				return value, "assetValueNameRule", true
+			}
 		}
 	}
-	return "", "failsafe", false
+	for _, r := range c.NamespaceRules {
+		if r.AssetValue == "" {
+			continue
+		}
+		if ok, _ := path.Match(r.Match, namespace); ok {
+			if value := normalizeAssetValue(r.AssetValue); value != "" {
+				return value, "assetValueNamespaceRule", true
+			}
+		}
+	}
+	return "", "", false
 }
 
 // resolveMultiAgency: workload label > namespace label > multiAgencyNamespaces
@@ -441,6 +528,32 @@ func normalizeClass(v string) string {
 		return "D"
 	default:
 		return ""
+	}
+}
+
+func normalizeAssetValue(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "h", "high":
+		return "high"
+	case "m", "medium", "moderate":
+		return "medium"
+	case "l", "low":
+		return "low"
+	default:
+		return ""
+	}
+}
+
+func archetypeForAssetValue(value string) Archetype {
+	switch normalizeAssetValue(value) {
+	case "high":
+		return Archetype{Lens: "asset-value", CR: "H", IR: "H", AR: "H"}
+	case "medium":
+		return Archetype{Lens: "asset-value", CR: "M", IR: "M", AR: "M"}
+	case "low":
+		return Archetype{Lens: "asset-value", CR: "L", IR: "L", AR: "L"}
+	default:
+		return Archetype{Lens: "asset-value", CR: "H", IR: "H", AR: "H"}
 	}
 }
 

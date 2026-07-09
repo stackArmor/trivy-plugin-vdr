@@ -336,19 +336,24 @@ Every finding is scored against the FedRAMP Rev5 VDR model: a **PAIN** rating (P
 - **Severity** is the CVE's CVSS impact vector (which of Confidentiality/Integrity/Availability it touches) re-weighted by the asset's `CR/IR/AR` requirements, which come from its **asset archetype**. CISA Vulnrichment **technical impact** refines this as a *floor*: when `total`, each in-scope CVSS dimension is raised to High before weighting; it never invents impact on a dimension the CVE does not touch, and `partial`/absent leaves the CVSS vector unchanged. The weighted impact maps to a word — Minimal → N1, Narrow → N2, Disruptive, Debilitating. The scalar cut points for those words are calibratable via `wordThresholds` in a governed `--scoring-config` file (defaults: Narrow 0.25, Disruptive 0.55, Debilitating 0.80). They are deliberately **not** read from the in-cluster ConfigMap, so the calibration can't be changed by ad-hoc cluster edits.
 - **Scope** is whether the asset serves one agency or more than one. Disruptive → N3 (single) / N4 (multi); Debilitating → N4 (single) / N5 (multi).
 
-### Asset archetypes
+### Asset classification
 
-An archetype assigns the `CR/IR/AR` requirements (e.g. `identity-secrets` and `data-backbone` are H/H/H, `app-tier` is M/M/H, `platform-foundation` — DNS/NTP/discovery, metadata-only — is L/H/H, `internal-tooling` is L/L/L). It is resolved most-specific-first:
+An archetype assigns the `CR/IR/AR` requirements (e.g. `identity-secrets` and `data-backbone` are H/H/H, `app-tier` is M/M/H, `platform-foundation` — DNS/NTP/discovery, metadata-only — is L/H/H, `internal-tooling` is L/L/L). It is resolved most-specific-first. If no archetype signal is present, `asset-value` can be used as a simpler fallback: `H`/`High` maps to CR:H/IR:H/AR:H, `M`/`Medium`/`Moderate` maps to CR:M/IR:M/AR:M, and `L`/`Low` maps to CR:L/IR:L/AR:L.
 
 ```
 workload label vdr.fedramp.io/asset-archetype
   → namespace label
   → name rule   (cluster ConfigMap; first match wins)
   → namespace rule (cluster ConfigMap; first match wins)
+  → workload label vdr.fedramp.io/asset-value
+  → namespace/project label vdr.fedramp.io/asset-value
+  → assetValue name rule   (cluster ConfigMap; first match wins)
+  → assetValue namespace rule (cluster ConfigMap; first match wins)
+  → configured assetValue default
   → built-in "unclassified" cluster-default (H/H/H — noisy N4, surfaces for classification)
 ```
 
-Tag workloads you control with `vdr.fedramp.io/asset-archetype: <archetype>`. Cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot carry the label are classified by name/namespace rules in the ConfigMap instead.
+Tag workloads you control with `vdr.fedramp.io/asset-archetype: <archetype>` when you know the system role, or `vdr.fedramp.io/asset-value: High|Medium|Low` when the value level is all you have. Cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot carry the label are classified by name/namespace rules in the ConfigMap instead. For Cloud Run, service/job labels override project labels. For ECS, task definition tags are used as labels.
 
 ### Remediation deadline
 
@@ -363,7 +368,7 @@ So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively
 
 ### Cluster configuration
 
-The provider **Certification Class** (A/B/C/D), the **agency scope**, and the archetype **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in the **`fedramp-vdr-trivy`** namespace — no flag required. It carries the scalar keys `class` and `multiAgency`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (catalog, algorithm, EPSS threshold, and the `unclassified` default). It can also carry `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` — lists of Ingress/Gateway class names to treat as internet-reachable when their edge load balancer is built outside Kubernetes, a cleaner alternative to labeling each resource (see [exposure rules](#exposure-rules)). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules).
+The provider **Certification Class** (A/B/C/D), the **agency scope**, and the archetype / asset-value **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in the **`fedramp-vdr-trivy`** namespace — no flag required. It carries the scalar keys `class`, `multiAgency`, and optionally `assetValue`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (catalog, algorithm, EPSS threshold, and the `unclassified` default). It can also carry `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` — lists of Ingress/Gateway class names to treat as internet-reachable when their edge load balancer is built outside Kubernetes, a cleaner alternative to labeling each resource (see [exposure rules](#exposure-rules)). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`, `vdr.fedramp.io/asset-value`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules).
 
 See [`examples/configmaps/`](examples/configmaps/) for starter GKE, EKS, and AKS ConfigMaps. The optional `--scoring-config <file>` flag layers a local YAML/JSON config under the ConfigMap for testing or non-cluster use.
 

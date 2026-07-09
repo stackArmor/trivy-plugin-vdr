@@ -29,10 +29,13 @@ The ConfigMap carries:
 
 - `class` — your FedRAMP Certification Class (`A`/`B`/`C`/`D`).
 - `multiAgency` — `"true"` if the cluster serves more than one agency.
-- `scoring.yaml` — `nameRules` / `namespaceRules` assigning archetypes to the
-  cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`,
-  `amazon-cloudwatch`, `azure-*`, …) that cannot carry `vdr.fedramp.io/*` labels
-  because their managed reconcilers revert manual changes.
+- `assetValue` — optional cluster-wide fallback (`High`, `Medium`/`Moderate`, or
+  `Low`) used when no asset-archetype signal exists.
+- `scoring.yaml` — `nameRules` / `namespaceRules` assigning archetypes or
+  `assetValue` to the cloud-managed, shared-responsibility components
+  (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot
+  carry `vdr.fedramp.io/*` labels because their managed reconcilers revert manual
+  changes.
 - `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` —
   optional lists of Ingress/Gateway class names to treat as internet-reachable
   (for edge load balancers built outside Kubernetes, e.g. ingress-nginx fronted by
@@ -57,13 +60,26 @@ metadata:
     vdr.fedramp.io/asset-archetype: app-tier
 ```
 
+When the exact archetype is not known, use the simpler asset-value fallback:
+
+```yaml
+metadata:
+  labels:
+    vdr.fedramp.io/asset-value: High # High/H, Medium/Moderate/M, or Low/L
+```
+
 ## Resolution precedence
 
 ```
-workload label
-  → namespace label
-  → nameRule   (ConfigMap scoring.yaml; first match wins)
-  → namespaceRule (ConfigMap scoring.yaml; first match wins)
+workload asset-archetype label
+  → namespace asset-archetype label
+  → archetype nameRule   (ConfigMap scoring.yaml; first match wins)
+  → archetype namespaceRule (ConfigMap scoring.yaml; first match wins)
+  → workload asset-value label
+  → namespace/project asset-value label
+  → assetValue nameRule   (ConfigMap scoring.yaml; first match wins)
+  → assetValue namespaceRule (ConfigMap scoring.yaml; first match wins)
+  → configured assetValue default
   → built-in "unclassified" default archetype (H/H/H)
 ```
 

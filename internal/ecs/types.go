@@ -14,6 +14,7 @@ type TaskDefinition struct {
 	Family                  string
 	Revision                int32
 	Status                  string
+	Tags                    map[string]string
 	NetworkMode             string
 	ExecutionRoleArn        string
 	TaskRoleArn             string

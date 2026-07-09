@@ -166,6 +166,7 @@ func (c awsInventoryClient) ListTaskDefinitions(ctx context.Context, region stri
 		for _, arn := range page.TaskDefinitionArns {
 			describe, err := c.ecs.DescribeTaskDefinition(ctx, &awsecs.DescribeTaskDefinitionInput{
 				TaskDefinition: aws.String(arn),
+				Include:        []types.TaskDefinitionField{types.TaskDefinitionFieldTags},
 			})
 			if err != nil {
 				return nil, fmt.Errorf("describe task definition %s: %w", arn, err)
@@ -173,7 +174,7 @@ func (c awsInventoryClient) ListTaskDefinitions(ctx context.Context, region stri
 			if describe.TaskDefinition == nil {
 				continue
 			}
-			taskDefinitions = append(taskDefinitions, convertTaskDefinition(region, *describe.TaskDefinition))
+			taskDefinitions = append(taskDefinitions, convertTaskDefinition(region, *describe.TaskDefinition, describe.Tags))
 		}
 		if page.NextToken == nil || *page.NextToken == "" {
 			break
@@ -183,13 +184,14 @@ func (c awsInventoryClient) ListTaskDefinitions(ctx context.Context, region stri
 	return taskDefinitions, nil
 }
 
-func convertTaskDefinition(region string, taskDefinition types.TaskDefinition) TaskDefinition {
+func convertTaskDefinition(region string, taskDefinition types.TaskDefinition, tags []types.Tag) TaskDefinition {
 	converted := TaskDefinition{
 		Region:           region,
 		Arn:              aws.ToString(taskDefinition.TaskDefinitionArn),
 		Family:           aws.ToString(taskDefinition.Family),
 		Revision:         taskDefinition.Revision,
 		Status:           string(taskDefinition.Status),
+		Tags:             convertTags(tags),
 		NetworkMode:      string(taskDefinition.NetworkMode),
 		ExecutionRoleArn: aws.ToString(taskDefinition.ExecutionRoleArn),
 		TaskRoleArn:      aws.ToString(taskDefinition.TaskRoleArn),
@@ -199,6 +201,24 @@ func convertTaskDefinition(region string, taskDefinition types.TaskDefinition) T
 	}
 	for _, container := range taskDefinition.ContainerDefinitions {
 		converted.Containers = append(converted.Containers, convertContainerDefinition(container))
+	}
+	return converted
+}
+
+func convertTags(tags []types.Tag) map[string]string {
+	if len(tags) == 0 {
+		return nil
+	}
+	converted := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		key := aws.ToString(tag.Key)
+		if key == "" {
+			continue
+		}
+		converted[key] = aws.ToString(tag.Value)
+	}
+	if len(converted) == 0 {
+		return nil
 	}
 	return converted
 }

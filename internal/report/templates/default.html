@@ -283,9 +283,15 @@
         namespaceLabel: "namespace asset-archetype label",
         nameRule: "name rule (config)",
         namespaceRule: "namespace rule (config)",
+        assetValueLabel: "asset-value label",
+        assetValueNamespaceLabel: "namespace/project asset-value label",
+        assetValueNameRule: "asset-value name rule (config)",
+        assetValueNamespaceRule: "asset-value namespace rule (config)",
+        assetValueDefault: "asset-value default (config)",
         default: "cluster default archetype (config)",
         failsafe: "fail-safe (unclassified — treated as High/High/High, multi-agency)",
-        "label-unknown": "fail-safe (label names an unknown archetype)"
+        "label-unknown": "fail-safe (label names an unknown archetype)",
+        assetValueLabelUnknown: "fail-safe (label names an unknown asset value)"
       }[pain.archetypeSource] || pain.archetypeSource;
       let sevSource = "";
       if (pain.severitySource) {
@@ -514,9 +520,10 @@
         "  N1 Minimal | N2 Narrow | N3 Disruptive (1 agency)",
         "  N4 Debilitating (1 agency) or Disruptive (>1) | N5 Debilitating (>1)",
         "",
-        "Archetype is resolved from the vdr.fedramp.io/asset-archetype label, else a",
-        "namespace/name rule, else the built-in 'unclassified' default (High/High/High,",
-        "noisy N4) so new resources surface for classification. Hover a value for details."
+        "Archetype is resolved from the vdr.fedramp.io/asset-archetype label or",
+        "rules first. If absent, vdr.fedramp.io/asset-value can map High/Medium/Low",
+        "to uniform CR/IR/AR. Otherwise the built-in 'unclassified' default (H/H/H)",
+        "keeps new resources visible. Hover a value for details."
       ].join("\n");
     }
     // Explain the Internet exposure column on hover of its header.

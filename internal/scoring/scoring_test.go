@@ -149,6 +149,59 @@ func TestResolutionOrder(t *testing.T) {
 	}
 }
 
+func TestAssetValueResolution(t *testing.T) {
+	cfg := Default()
+	cfg.NameRules = []NameRule{{Namespace: "ops", Match: "batch-*", AssetValue: "Moderate"}}
+	cfg.NamespaceRules = []NamespaceRule{{Match: "shared-*", AssetValue: "H"}}
+
+	r := cfg.Score(Input{
+		CVSSVector: vecConfHi,
+		Labels:     map[string]string{"vdr.fedramp.io/asset-value": "Low"},
+	})
+	if r.Archetype != "asset-value-low" || r.ArchetypeSource != "assetValueLabel" || r.CR != "L" || r.IR != "L" || r.AR != "L" {
+		t.Fatalf("asset-value label result = %+v, want low/L/L/L from label", r)
+	}
+	if r.Tier != "N2" {
+		t.Errorf("low asset-value confidentiality Tier = %s, want N2", r.Tier)
+	}
+
+	r = cfg.Score(Input{
+		CVSSVector:      vecCIAHigh,
+		NamespaceLabels: map[string]string{"vdr.fedramp.io/asset-value": "medium"},
+	})
+	if r.Archetype != "asset-value-medium" || r.ArchetypeSource != "assetValueNamespaceLabel" || r.CR != "M" || r.IR != "M" || r.AR != "M" {
+		t.Fatalf("namespace asset-value result = %+v, want medium/M/M/M", r)
+	}
+
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "ops", WorkloadName: "batch-sync"})
+	if r.Archetype != "asset-value-medium" || r.ArchetypeSource != "assetValueNameRule" {
+		t.Errorf("asset-value nameRule result = %s/%s, want asset-value-medium/assetValueNameRule", r.Archetype, r.ArchetypeSource)
+	}
+
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "shared-prod", WorkloadName: "api"})
+	if r.Archetype != "asset-value-high" || r.ArchetypeSource != "assetValueNamespaceRule" || r.CR != "H" || r.IR != "H" || r.AR != "H" {
+		t.Errorf("asset-value namespaceRule result = %+v, want high/H/H/H", r)
+	}
+}
+
+func TestAssetArchetypeWinsOverAssetValue(t *testing.T) {
+	cfg := Default()
+	cfg.NameRules = []NameRule{{Namespace: "ops", Match: "api", Archetype: "data-sensitive", AssetValue: "Low"}}
+	r := cfg.Score(Input{
+		CVSSVector:   vecCIAHigh,
+		Namespace:    "ops",
+		WorkloadName: "api",
+		Labels: map[string]string{
+			"vdr.fedramp.io/asset-archetype": "dev-test",
+			"vdr.fedramp.io/asset-value":     "High",
+		},
+		NamespaceLabels: map[string]string{"vdr.fedramp.io/asset-value": "Low"},
+	})
+	if r.Archetype != "dev-test" || r.ArchetypeSource != "label" || r.CR != "L" || r.IR != "L" || r.AR != "L" {
+		t.Fatalf("asset-archetype should win over asset-value: %+v", r)
+	}
+}
+
 // TestManagedNamespaceNoFalseN5 confirms that a managed-namespace workload
 // classified by a namespace rule is scored on its merits (not floored to N5).
 func TestManagedNamespaceNoFalseN5(t *testing.T) {
@@ -303,6 +356,34 @@ namespaceRules:
 	bad := Default()
 	if err := bad.ApplyClusterDefaults(map[string]string{"scoring": "namespaceRules:\n  - {match: x, archetype: nope}\n"}); err == nil {
 		t.Error("expected validate error for unknown archetype in ConfigMap doc")
+	}
+}
+
+func TestApplyClusterDefaultsAssetValue(t *testing.T) {
+	cfg := Default()
+	err := cfg.ApplyClusterDefaults(map[string]string{
+		"assetValue": "Medium",
+		"scoring.yaml": `
+nameRules:
+  - {namespace: jobs, match: nightly, assetValue: Low}
+namespaceRules:
+  - {match: shared-*, assetValue: High}
+`,
+	})
+	if err != nil {
+		t.Fatalf("ApplyClusterDefaults: %v", err)
+	}
+	if cfg.Defaults.AssetValue != "medium" {
+		t.Errorf("Defaults.AssetValue = %q, want medium", cfg.Defaults.AssetValue)
+	}
+	if r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "jobs", WorkloadName: "nightly"}); r.Archetype != "asset-value-low" || r.ArchetypeSource != "assetValueNameRule" {
+		t.Errorf("embedded assetValue nameRule not applied: %+v", r)
+	}
+	if r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "shared-a", WorkloadName: "api"}); r.Archetype != "asset-value-high" || r.ArchetypeSource != "assetValueNamespaceRule" {
+		t.Errorf("embedded assetValue namespaceRule not applied: %+v", r)
+	}
+	if r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "api"}); r.Archetype != "asset-value-medium" || r.ArchetypeSource != "assetValueDefault" {
+		t.Errorf("assetValue default not applied before built-in archetype: %+v", r)
 	}
 }
 
