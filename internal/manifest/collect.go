@@ -184,6 +184,16 @@ func parseDocuments(documents []Document) ([]parsedObject, error) {
 				}
 				key := objectKey(item)
 				if previous, ok := seen[key]; ok {
+					// Helm can render the same hook/RBAC helper from several
+					// subcharts (for example a shared pre-install ServiceAccount).
+					// These objects do not participate in VDR inventory, posture,
+					// pull-secret, or exposure analysis, so retaining the first is
+					// sufficient. Keep rejecting duplicate analysis objects and all
+					// cross-chart collisions, where silently choosing one would make
+					// the resulting topology ambiguous.
+					if previous == document.Name && !isAnalysisObject(item.GroupVersionKind()) {
+						continue
+					}
 					return nil, fmt.Errorf("duplicate rendered object %s in %s and %s", key, previous, document.Name)
 				}
 				seen[key] = document.Name
@@ -192,6 +202,25 @@ func parseDocuments(documents []Document) ([]parsedObject, error) {
 		}
 	}
 	return result, nil
+}
+
+func isAnalysisObject(gvk schema.GroupVersionKind) bool {
+	switch gvk.Group {
+	case "":
+		return gvk.Kind == "Namespace" || gvk.Kind == "ConfigMap" || gvk.Kind == "Secret" || gvk.Kind == "Pod" || gvk.Kind == "Service"
+	case "apps":
+		return gvk.Kind == "Deployment" || gvk.Kind == "StatefulSet" || gvk.Kind == "DaemonSet"
+	case "batch":
+		return gvk.Kind == "Job" || gvk.Kind == "CronJob"
+	case "networking.k8s.io":
+		return gvk.Kind == "Ingress" || gvk.Kind == "IngressClass" || gvk.Kind == "NetworkPolicy"
+	case "policy":
+		return gvk.Kind == "PodDisruptionBudget"
+	case "gateway.networking.k8s.io", "networking.gke.io", "cloud.google.com", "elbv2.k8s.aws", "gateway.k8s.aws":
+		return true
+	default:
+		return false
+	}
 }
 
 func flattenObject(object unstructured.Unstructured) ([]unstructured.Unstructured, error) {

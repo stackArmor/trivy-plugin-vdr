@@ -187,6 +187,46 @@ metadata:
 	}
 }
 
+func TestCollectIgnoresDuplicateNonAnalysisHooksWithinChart(t *testing.T) {
+	rendered := []byte(`
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shared-hook
+  annotations:
+    helm.sh/hook: pre-install
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shared-hook
+  labels:
+    rendered-by: another-subchart
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  selector:
+    matchLabels: {app: app}
+  template:
+    metadata:
+      labels: {app: app}
+    spec:
+      containers:
+        - name: app
+          image: app:v1
+`)
+	result, err := Collect(context.Background(), []Document{{Name: "app-chart", YAML: rendered, DefaultNamespace: "default"}}, Options{}, log.NewWithWriter(io.Discard, log.LevelQuiet))
+	if err != nil {
+		t.Fatalf("Collect returned error for duplicate non-analysis hooks: %v", err)
+	}
+	if len(result.Inventory.Resources) != 1 || result.Inventory.Resources[0].Resource.Name != "app" {
+		t.Fatalf("Inventory = %#v, want app Deployment", result.Inventory)
+	}
+}
+
 func TestLoadConfigMap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vdr-fedramp.yaml")
 	if err := os.WriteFile(path, []byte(`
