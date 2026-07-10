@@ -98,6 +98,7 @@
     <section class="filters" aria-label="Filters">
       <div class="filter"><span>Classical severity</span><div id="severity" class="checkboxes" role="group" aria-label="Classical severity"></div></div>
       <label>Fix status<select id="status"><option value="">All</option></select></label>
+      <label>Fix available<select id="fix-available"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
       <label>PAIN (agency impact)<select id="pain"><option value="">All</option></select></label>
       <label>Resource type<select id="resource-type"><option value="">All</option></select></label>
       {{ if not .IsCloudRun }}
@@ -200,6 +201,9 @@
         key: [finding.id || "", finding.imageRef || "", finding.packageName || ""].join("|"),
         severity: finding.severity || "",
         status: finding.status || "",
+        // Whether the advisory source provides a fixed version. Findings with no
+        // fix render "no fix" in the package sub-line and can be filtered out.
+        fixAvailable: !!(finding.fixedVersion || ""),
         package: packageLabel(finding),
         epss: typeof epss.score === "number" ? epss.score : null,
         namespace: ref.namespace || "",
@@ -397,7 +401,7 @@
     fillSelect("impact", rows.map(row => row.impact));
     const controlIDs = ["pain", "status", "resource-type"];
     if (!isCloudRun) controlIDs.push("namespace");
-    controlIDs.push("exposed", "automatable", "exploitation", "epss", "impact");
+    controlIDs.push("fix-available", "exposed", "automatable", "exploitation", "epss", "impact");
     const controls = controlIDs.map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
@@ -631,6 +635,7 @@
         (remediations.size === 0 || remediations.has(row.remediation)) &&
         (!filters.pain || row.pain === filters.pain) &&
         (!filters.status || row.status === filters.status) &&
+        (!filters["fix-available"] || String(row.fixAvailable) === filters["fix-available"]) &&
         (!filters["resource-type"] || row.resourceType === filters["resource-type"]) &&
         (isCloudRun || !filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&

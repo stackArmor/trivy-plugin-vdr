@@ -25,8 +25,8 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Namespace", "Internet-exposed findings", "Internet exposure", "Automatable",
 		"Exploitation", "EPSS score", "Technical impact", "window.__VDR_REPORT__",
 		"CVE-2026-0001",
-		"packageLabel",          // package sub-line renderer present in the template
-		"pkg-line",              // CSS/markup hook for the package sub-line under the CVE
+		"packageLabel",            // package sub-line renderer present in the template
+		"pkg-line",                // CSS/markup hook for the package sub-line under the CVE
 		`"packageName":"openssl"`, // package data carried in the embedded report JSON
 
 		"VDR Report",
@@ -35,6 +35,9 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Fix status",
 		`id="status"`,
 		"will_not_fix",
+		"Fix available", // filter to hide findings with no available fix
+		`id="fix-available"`,
+		"fixAvailable",        // row field the fix-available filter reads
 		"test-context",        // kubectx in the header
 		"Certification Class", // class chip/subtitle in the header
 		"privileged",          // security posture moved into the resource-name tooltip
