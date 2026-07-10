@@ -1,10 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
+	"os/exec"
+	"strings"
 	"testing"
+
+	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 )
 
 func TestRunK8sPassesPullSecretAuthsToRegistryBuild(t *testing.T) {
@@ -46,5 +54,29 @@ func TestRunK8sPassesPullSecretAuthsToRegistryBuild(t *testing.T) {
 
 	if !found {
 		t.Fatal("runK8s does not pass secretAuths to registry.Build")
+	}
+}
+
+func TestRunHelmReachabilityOnlyEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+	cfg, err := config.Parse([]string{
+		"helm", "../../internal/helm/testdata/chart",
+		"-f", "../../internal/helm/testdata/chart/values-base.yaml",
+		"-f", "../../internal/helm/testdata/chart/values-prod.yaml",
+		"--reachability-only",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	var output bytes.Buffer
+	if err := runHelm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runHelm returned error: %v", err)
+	}
+	for _, want := range []string{`"contextName": "helm:../../internal/helm/testdata/chart"`, `"imageRef": "ghcr.io/acme/app:prod"`, `"namespace": "default"`} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("report missing %s:\n%s", want, output.String())
+		}
 	}
 }

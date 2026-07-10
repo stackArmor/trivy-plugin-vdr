@@ -670,6 +670,44 @@ func TestAnalyzeUnprovisionedIngressAloneIsNotExposed(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDeclaredIncludesUnprovisionedIngress(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("web", "web:v1"))
+	pending := ingress("default", "declared-ing", "gce", "web-svc", nil)
+	pending.Status.LoadBalancer.Ingress = nil
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{pending},
+	}
+
+	got := AnalyzeWithOptions(inv, objects, AnalyzeOptions{Declared: true})
+	exposure := got[resourceRef("default", "web", "web", "container", "")]
+	if !exposure.InternetAccessible {
+		t.Fatalf("InternetAccessible = false, want declared public ingress: %#v", exposure)
+	}
+	if exposure.AssessmentBasis != "declared" {
+		t.Fatalf("AssessmentBasis = %q, want declared", exposure.AssessmentBasis)
+	}
+	if !strings.Contains(strings.Join(exposure.Evidence, " "), "runtime status were not observed") {
+		t.Fatalf("Evidence does not qualify declared exposure: %#v", exposure.Evidence)
+	}
+}
+
+func TestAnalyzeDeclaredIncludesUnprovisionedLoadBalancerService(t *testing.T) {
+	inv := inventoryWithWorkload("edge", "controller", map[string]string{"app": "edge"}, containerImage("controller", "edge:v1"))
+	lb := service("edge", "controller", map[string]string{"app": "edge"})
+	lb.Spec.Type = corev1.ServiceTypeLoadBalancer
+	lb.Status.LoadBalancer.Ingress = nil
+
+	got := AnalyzeWithOptions(inv, Objects{Services: []corev1.Service{lb}}, AnalyzeOptions{Declared: true})
+	exposure := got[resourceRef("edge", "controller", "controller", "container", "")]
+	if !exposure.InternetAccessible || exposure.AssessmentBasis != "declared" {
+		t.Fatalf("declared LoadBalancer exposure = %#v", exposure)
+	}
+	if !strings.Contains(strings.Join(exposure.Evidence, " "), "declares type=LoadBalancer") {
+		t.Fatalf("Evidence = %#v, want declared LoadBalancer evidence", exposure.Evidence)
+	}
+}
+
 func TestAnalyzeUnstructuredKindCollisionsIgnoreUnexpectedAPIGroups(t *testing.T) {
 	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
 	objects := Objects{

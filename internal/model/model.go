@@ -259,13 +259,17 @@ type Vulnrichment struct {
 }
 
 type Exposure struct {
-	InternetAccessible bool              `json:"internetAccessible"`
-	Provider           string            `json:"provider,omitempty"`
-	RouteKind          string            `json:"routeKind,omitempty"`
-	RouteName          string            `json:"routeName,omitempty"`
-	Routes             []RouteMetadata   `json:"routes,omitempty"`
-	Protection         *AccessProtection `json:"protection,omitempty"`
-	Evidence           []string          `json:"evidence,omitempty"`
+	InternetAccessible bool `json:"internetAccessible"`
+	// AssessmentBasis distinguishes live-cluster observations from static Helm
+	// deployment intent. Helm scans set this to "declared" because rendered
+	// manifests do not contain load-balancer provisioning or runtime status.
+	AssessmentBasis string            `json:"assessmentBasis,omitempty"`
+	Provider        string            `json:"provider,omitempty"`
+	RouteKind       string            `json:"routeKind,omitempty"`
+	RouteName       string            `json:"routeName,omitempty"`
+	Routes          []RouteMetadata   `json:"routes,omitempty"`
+	Protection      *AccessProtection `json:"protection,omitempty"`
+	Evidence        []string          `json:"evidence,omitempty"`
 }
 
 type RouteMetadata struct {

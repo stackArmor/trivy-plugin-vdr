@@ -1,8 +1,8 @@
 # vdr
 
-`vdr` is a Trivy plugin for vulnerability detection and response workflows. It can inventory Kubernetes workloads from the current Kubernetes context, Google Cloud Run services and jobs from a Google Cloud project, or AWS ECS task definitions from selected regions, scan each unique full image reference once, and report findings back against the resources and containers that use each image. It can also scan standalone image references directly.
+`vdr` is a Trivy plugin for vulnerability detection and response workflows. It can inventory Kubernetes workloads from the current Kubernetes context or rendered Helm charts, Google Cloud Run services and jobs from a Google Cloud project, or AWS ECS task definitions from selected regions, scan each unique full image reference once, and report findings back against the resources and containers that use each image. It can also scan standalone image references directly.
 
-The Kubernetes source collects workload image inventory, scans each unique image with Trivy, enriches CVEs with EPSS and CISA Vulnrichment data, analyzes public ingress/gateway exposure, and emits JSON, table, and optional standalone HTML reports. The Cloud Run source collects every container image used by Cloud Run services and jobs in the selected regions, analyzes service reachability through Cloud Run IAM/ingress and external load balancers/IAP, and emits the same report shapes. The ECS source inventories active task-definition revisions, records runtime and ECS security metadata, resolves ECR and repository credential auth for scans, and conservatively reports reachability only from collected runtime/exposure evidence. Use `--reachability-only` with Kubernetes, Cloud Run, or ECS to collect internet-reachability metadata without registry auth, Trivy scans, EPSS, or Vulnrichment enrichment. Use `--scan-reachability-only` to run vulnerability scans with internet reachability and asset classification, while omitting EPSS, Vulnrichment, PAIN, and remediation scoring from the final JSON or table output.
+The Kubernetes source collects workload image inventory, scans each unique image with Trivy, enriches CVEs with EPSS and CISA Vulnrichment data, analyzes public ingress/gateway exposure, and emits JSON, table, and optional standalone HTML reports. The Helm source applies the same pipeline to rendered deployment intent. The Cloud Run source collects every container image used by Cloud Run services and jobs in the selected regions, analyzes service reachability through Cloud Run IAM/ingress and external load balancers/IAP, and emits the same report shapes. The ECS source inventories active task-definition revisions, records runtime and ECS security metadata, resolves ECR and repository credential auth for scans, and conservatively reports reachability only from collected runtime/exposure evidence. Use `--reachability-only` with Kubernetes, Helm, Cloud Run, or ECS to collect internet-reachability metadata without registry auth, Trivy scans, EPSS, or Vulnrichment enrichment. Use `--scan-reachability-only` to run vulnerability scans with internet reachability and asset classification, while omitting EPSS, Vulnrichment, PAIN, and remediation scoring from the final JSON or table output.
 
 ## Features
 
@@ -11,6 +11,8 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Google Cloud Run source subcommand named `cloudrun`.
 - AWS ECS source subcommand named `ecs`.
 - Standalone image source subcommand named `image`.
+- Helm source subcommand named `helm`, supporting local charts, configured repository references, direct repository URLs, and OCI charts.
+- Ordered Helm values files with Helm-compatible rightmost-file precedence, plus an optional independently rendered Ingress, ingress-controller, or Gateway API chart.
 - Workload inventory from Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs, plus standalone Pods. Pods managed by a collected controller are skipped to avoid double-counting; pods owned by other controllers (e.g. operators/CRDs) are still inventoried.
 - JSON and table output mode flags.
 - Finding-centric and resource-centric view flags.
@@ -53,7 +55,58 @@ trivy vdr ecs --region us-east-1 --region us-gov-west-1 --output vdr-ecs.json
 trivy vdr ecs --region us-east-1 --view resources --reachability-only --output vdr-ecs-reachability.json
 trivy vdr image gcr.io/my-gcp-project/app:v1
 trivy vdr image --parallel-scans 2 gcr.io/my-gcp-project/app:v1 nginx:1.25
+trivy vdr helm ./charts/app -f values/base.yaml -f values/prod.yaml --format json
+trivy vdr helm bitnami/nginx --chart-version 19.0.0 --namespace prod
+trivy vdr helm nginx --repo https://charts.example.com --chart-version 1.2.3
+trivy vdr helm oci://registry.example.com/charts/app --chart-version 1.2.3
+trivy vdr helm ./charts/app --ingress-chart ./charts/edge --ingress-values values/edge.yaml
+trivy vdr helm ./charts/app --config-map examples/configmaps/vdr-fedramp-configmap.gke.yaml
 ```
+
+## Helm chart scanning
+
+The `helm` source runs the installed `helm template` client, inventories the rendered Kubernetes workloads, and sends their unique image references through the same registry-authentication, Trivy, enrichment, scoring, and reporting pipeline used by the live Kubernetes source. Helm must be installed and available on `PATH`.
+
+The chart argument may be:
+
+- a local chart directory or packaged `.tgz` archive;
+- a reference from the user's configured Helm repositories, such as `bitnami/nginx`;
+- an unqualified chart paired with `--repo <url>`; or
+- an `oci://` chart reference.
+
+`--chart-version` selects a remote chart version. Repository and OCI authentication use the existing Helm configuration and `helm registry login` state; VDR does not accept repository passwords on its command line.
+
+Application values files are passed to Helm exactly in the order supplied. `-f` is an alias for `--values` only for the `helm` source; use the long `--format` flag to select the VDR report format. Helm's normal precedence applies: chart defaults are lowest, then each values file is merged from left to right, and the rightmost file wins.
+
+```sh
+trivy vdr helm ./charts/payments \
+  -f values/base.yaml \
+  -f values/us-east.yaml \
+  -f values/prod.yaml \
+  --namespace payments \
+  --release-name payments \
+  --format json
+```
+
+Use `--ingress-chart` to render a second release containing shared Ingress, ingress-controller, or **Gateway API** infrastructure. Its values and namespace are independent from the application chart:
+
+```sh
+trivy vdr helm ./charts/payments \
+  -f values/prod.yaml \
+  --ingress-chart oci://registry.example.com/platform/edge \
+  --ingress-chart-version 2.1.0 \
+  --ingress-values values/edge-base.yaml \
+  --ingress-values values/edge-prod.yaml \
+  --ingress-namespace edge-system
+```
+
+The two rendered streams are merged before topology analysis. This allows VDR to resolve Ingress and Gateway routes through Services to application workloads, including HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, and cross-namespace ReferenceGrant relationships. A duplicate API version/kind/namespace/name across the two releases is rejected because the same collision would not be independently installable in Kubernetes.
+
+Helm exposure has `assessmentBasis: "declared"`. It represents deployment intent derived from rendered classes, schemes, annotations, Services, routes, and policies; it does **not** claim that a load balancer was provisioned or that the resources are currently serving traffic. Live `k8s` scans retain their observed-status behavior. For custom Ingress or Gateway classes whose external edge cannot be inferred from the manifests, provide `internetAccessibleIngressClasses` or `internetAccessibleGatewayClasses` in the VDR ConfigMap.
+
+If the rendered chart contains `fedramp-vdr-trivy/vdr-fedramp`, it is consumed automatically. `--config-map <file>` can supply a separate `v1/ConfigMap` and takes precedence over a rendered ConfigMap. This is useful when the scoring and custom class configuration is managed outside the application chart.
+
+Useful rendering flags include `--kube-version`, repeatable `--api-versions`, and `--include-crds`. The Helm source does not contact a Kubernetes API and requires no Kubernetes RBAC. Remote chart downloads and image scans still require their respective network access and credentials.
 
 ## Required permissions
 

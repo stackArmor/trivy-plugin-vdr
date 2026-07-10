@@ -28,6 +28,13 @@ type Objects struct {
 	InternetAccessibleGatewayClasses []string
 }
 
+type AnalyzeOptions struct {
+	// Declared evaluates the intended topology in rendered manifests. It allows
+	// public Ingress and LoadBalancer Service declarations without requiring the
+	// runtime status addresses that a live-cluster observation requires.
+	Declared bool
+}
+
 type serviceExposure struct {
 	serviceNamespace string
 	serviceName      string
@@ -67,6 +74,13 @@ type protectionInfo struct {
 
 // Analyze returns resource/container-level exposure for inventory workloads selected by Services.
 func Analyze(inventory *model.Inventory, objects Objects) map[model.ResourceRef]model.Exposure {
+	return AnalyzeWithOptions(inventory, objects, AnalyzeOptions{})
+}
+
+// AnalyzeWithOptions returns resource/container-level exposure. Declared mode
+// is used only for rendered Helm charts and marks every result so consumers can
+// distinguish deployment intent from observed runtime state.
+func AnalyzeWithOptions(inventory *model.Inventory, objects Objects, opts AnalyzeOptions) map[model.ResourceRef]model.Exposure {
 	if inventory == nil {
 		return map[model.ResourceRef]model.Exposure{}
 	}
@@ -85,15 +99,22 @@ func Analyze(inventory *model.Inventory, objects Objects) map[model.ResourceRef]
 	referenceGrants := indexReferenceGrants(objects.Unstructured)
 
 	serviceExposures := make([]serviceExposure, 0)
-	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, ingressClassOverrides, backendConfigs)...)
+	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, ingressClassOverrides, backendConfigs, opts.Declared)...)
 	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, serviceIndex, gateways, awsGatewayPublic, awsTargetGroups, gcpBackendPolicies, referenceGrants)...)
-	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services)...)
+	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services, opts.Declared)...)
 
 	result := map[model.ResourceRef]model.Exposure{}
 	for _, item := range serviceExposures {
 		key := serviceKey{namespace: item.serviceNamespace, name: item.serviceName}
 		for _, workload := range workloadsByService[key] {
 			applyWorkloadExposure(result, workload, item.exposure)
+		}
+	}
+	if opts.Declared {
+		for ref, item := range result {
+			item.AssessmentBasis = "declared"
+			item.Evidence = appendUnique(item.Evidence, "Exposure evaluated from rendered Helm configuration; deployment intent is declared, but load-balancer provisioning and runtime status were not observed.")
+			result[ref] = item
 		}
 	}
 	return result
@@ -147,6 +168,7 @@ func analyzeIngresses(
 	classParams map[string]string,
 	classOverrides map[string]struct{},
 	backendConfigs map[serviceKey]protectionInfo,
+	declared bool,
 ) []serviceExposure {
 	exposures := make([]serviceExposure, 0)
 	for _, ingress := range ingresses {
@@ -154,7 +176,7 @@ func analyzeIngresses(
 		// traffic, so it does not expose anything. Skipping it also means that
 		// when a Gateway and an unprovisioned Ingress both target a service, the
 		// Gateway's exposure is the one that applies.
-		if !ingressHasLoadBalancer(ingress) {
+		if !declared && !ingressHasLoadBalancer(ingress) {
 			continue
 		}
 		provider, public, evidence := classifyIngress(ingress, classes, classParams, classOverrides)
@@ -1303,7 +1325,7 @@ func applyWorkloadExposure(result map[model.ResourceRef]model.Exposure, resource
 // nodes having public IPs and permissive firewall/security-group rules, which is
 // not determinable from the cluster -- so it is deliberately NOT counted as
 // internet-reachable (it does not inflate IRV or the remediation deadline).
-func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
+func analyzeServiceExposure(services []corev1.Service, declared bool) []serviceExposure {
 	var exposures []serviceExposure
 	for _, svc := range services {
 		// An explicit operator label on the Service wins over type-based inference (and
@@ -1315,11 +1337,19 @@ func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
 		}
 		switch svc.Spec.Type {
 		case corev1.ServiceTypeLoadBalancer:
-			if !serviceHasLoadBalancerAddress(svc) {
+			if !declared && !serviceHasLoadBalancerAddress(svc) {
 				continue // load balancer not provisioned yet
 			}
 			if internal, _ := serviceInternalLB(svc); internal {
 				continue // internal-scheme load balancer is not internet-reachable
+			}
+			evidence := fmt.Sprintf(
+				"Service %s/%s is type=LoadBalancer with a provisioned external address (%s); the pods it selects are directly internet-reachable",
+				svc.Namespace, svc.Name, serviceLBAddress(svc))
+			if declared {
+				evidence = fmt.Sprintf(
+					"Service %s/%s declares type=LoadBalancer without an internal-scheme annotation; it is intended to expose the pods it selects",
+					svc.Namespace, svc.Name)
 			}
 			exposures = append(exposures, serviceExposure{
 				serviceNamespace: svc.Namespace,
@@ -1330,9 +1360,7 @@ func analyzeServiceExposure(services []corev1.Service) []serviceExposure {
 					RouteKind:          "Service/LoadBalancer",
 					RouteName:          svc.Name,
 					Routes:             serviceRouteMetadata(svc, "Service/LoadBalancer"),
-					Evidence: []string{fmt.Sprintf(
-						"Service %s/%s is type=LoadBalancer with a provisioned external address (%s); the pods it selects are directly internet-reachable",
-						svc.Namespace, svc.Name, serviceLBAddress(svc))},
+					Evidence:           []string{evidence},
 				},
 			})
 		case corev1.ServiceTypeNodePort:

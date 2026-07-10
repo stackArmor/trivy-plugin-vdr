@@ -15,9 +15,11 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/epss"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/vulnrichment"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/exposure"
+	helmsource "github.com/stackArmor/trivy-plugin-vdr/internal/helm"
 	imageinventory "github.com/stackArmor/trivy-plugin-vdr/internal/image"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/k8s"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/manifest"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/registry"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/report"
@@ -58,9 +60,111 @@ func run(args []string) error {
 		return runECS(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceImage:
 		return runImage(context.Background(), cfg, logger, os.Stdout)
+	case config.SourceHelm:
+		return runHelm(context.Background(), cfg, logger, os.Stdout)
 	default:
 		return fmt.Errorf("source %q is not implemented yet", cfg.Source)
 	}
+}
+
+func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+	namespace := cfg.Namespaces[0]
+	applicationChart := helmsource.Chart{
+		Reference:   cfg.Chart,
+		Version:     cfg.ChartVersion,
+		Repository:  cfg.ChartRepo,
+		ReleaseName: cfg.ReleaseName,
+		Namespace:   namespace,
+		ValuesFiles: cfg.ValuesFiles,
+		KubeVersion: cfg.KubeVersion,
+		APIVersions: cfg.APIVersions,
+		IncludeCRDs: cfg.IncludeCRDs,
+	}
+	logger.Info("rendering Helm chart %q as release %q in namespace %q", cfg.Chart, cfg.ReleaseName, namespace)
+	applicationYAML, err := helmsource.Render(ctx, applicationChart)
+	if err != nil {
+		return err
+	}
+	documents := []manifest.Document{{Name: cfg.Chart, YAML: applicationYAML, DefaultNamespace: namespace}}
+
+	if cfg.IngressChart != "" {
+		ingressChart := helmsource.Chart{
+			Reference:   cfg.IngressChart,
+			Version:     cfg.IngressChartVersion,
+			Repository:  cfg.IngressChartRepo,
+			ReleaseName: cfg.IngressReleaseName,
+			Namespace:   cfg.IngressNamespace,
+			ValuesFiles: cfg.IngressValuesFiles,
+			KubeVersion: cfg.KubeVersion,
+			APIVersions: cfg.APIVersions,
+			IncludeCRDs: cfg.IncludeCRDs,
+		}
+		logger.Info("rendering ingress/Gateway Helm chart %q as release %q in namespace %q", cfg.IngressChart, cfg.IngressReleaseName, cfg.IngressNamespace)
+		ingressYAML, renderErr := helmsource.Render(ctx, ingressChart)
+		if renderErr != nil {
+			return renderErr
+		}
+		documents = append(documents, manifest.Document{Name: cfg.IngressChart, YAML: ingressYAML, DefaultNamespace: cfg.IngressNamespace})
+	}
+
+	var clusterDefaults map[string]string
+	if cfg.ConfigMap != "" {
+		clusterDefaults, err = manifest.LoadConfigMap(cfg.ConfigMap)
+		if err != nil {
+			return err
+		}
+		logger.Info("loaded Helm scan ConfigMap from %s", cfg.ConfigMap)
+	}
+
+	collection, err := manifest.Collect(ctx, documents, manifest.Options{
+		ContextName:        "helm:" + cfg.Chart,
+		ClusterDefaults:    clusterDefaults,
+		CollectPullSecrets: !cfg.SkipRegistryAuth,
+	}, logger)
+	if err != nil {
+		return err
+	}
+	inventory := collection.Inventory
+	logger.Info("inventory: %d rendered workloads, %d unique images", len(inventory.Resources), len(inventory.Images))
+	warnings := append([]string(nil), collection.Warnings...)
+	for _, warning := range warnings {
+		logger.Warn("%s", warning)
+	}
+
+	exposures := map[model.ResourceRef]model.Exposure{}
+	if !cfg.SkipExposure {
+		logger.Info("analyzing declared Ingress and Gateway exposure from rendered manifests")
+		exposures = exposure.AnalyzeWithOptions(inventory, collection.ExposureObjects, exposure.AnalyzeOptions{Declared: true})
+		warning := "Helm exposure is evaluated from rendered deployment intent; load-balancer provisioning and runtime status were not observed"
+		warnings = append(warnings, warning)
+		logger.Warn("%s", warning)
+	}
+	if cfg.ReachabilityOnly {
+		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
+		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+	}
+
+	var dockerConfigDir string
+	if !cfg.SkipRegistryAuth {
+		res, buildErr := registry.Build(ctx, inventoryImageRefs(inventory), collection.PullSecretAuths, registry.Options{
+			EnableGcloud:                 !cfg.NoGcloudAuth,
+			EnableECR:                    !cfg.NoECRAuth,
+			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
+			AWSRoleARN:                   cfg.AWSRoleARN,
+		}, logger)
+		if buildErr != nil {
+			return buildErr
+		}
+		defer res.Cleanup()
+		dockerConfigDir = res.Dir
+		for _, warning := range res.Warnings {
+			warnings = append(warnings, "registry auth: "+warning)
+			logger.Warn("registry auth: %s", warning)
+		}
+		logger.Info("registry auth: configured credentials for %d registries (%d from rendered secrets)", res.Registries, len(collection.PullSecretAuths))
+	}
+
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
 }
 
 func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {

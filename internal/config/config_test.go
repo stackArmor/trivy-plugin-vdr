@@ -565,6 +565,108 @@ func TestParseImageSourceRejectsClusterFlags(t *testing.T) {
 	}
 }
 
+func TestParseHelmSourcePreservesValuesOrderAndFlagsAfterChart(t *testing.T) {
+	cfg, err := Parse([]string{
+		"helm", "oci://registry.example.com/charts/app",
+		"-f", "values/base.yaml",
+		"-f=values/region.yaml",
+		"--values", "values/prod.yaml",
+		"--chart-version", "1.2.3",
+		"--namespace", "prod",
+		"--release-name", "payments",
+		"--format", "table",
+		"--api-versions", "gateway.networking.k8s.io/v1",
+		"--api-versions", "monitoring.coreos.com/v1",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Source != SourceHelm || cfg.Chart != "oci://registry.example.com/charts/app" {
+		t.Fatalf("source/chart = %q/%q", cfg.Source, cfg.Chart)
+	}
+	if !reflect.DeepEqual(cfg.ValuesFiles, []string{"values/base.yaml", "values/region.yaml", "values/prod.yaml"}) {
+		t.Fatalf("ValuesFiles = %#v", cfg.ValuesFiles)
+	}
+	if cfg.ChartVersion != "1.2.3" || cfg.ReleaseName != "payments" || cfg.Namespaces[0] != "prod" {
+		t.Fatalf("Helm config = %#v", cfg)
+	}
+	if cfg.Format != FormatTable {
+		t.Fatalf("Format = %q, want table", cfg.Format)
+	}
+	if !reflect.DeepEqual(cfg.APIVersions, []string{"gateway.networking.k8s.io/v1", "monitoring.coreos.com/v1"}) {
+		t.Fatalf("APIVersions = %#v", cfg.APIVersions)
+	}
+}
+
+func TestParseHelmIngressGatewayChart(t *testing.T) {
+	cfg, err := Parse([]string{
+		"helm", "./app",
+		"--repo", "https://charts.example.com",
+		"--ingress-chart", "oci://registry.example.com/charts/edge",
+		"--ingress-chart-version", "2.0.0",
+		"--ingress-values", "edge/base.yaml",
+		"--ingress-values", "edge/prod.yaml",
+		"--ingress-namespace", "edge-system",
+		"--config-map", "vdr-fedramp.yaml",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.ChartRepo != "https://charts.example.com" || cfg.IngressChartVersion != "2.0.0" {
+		t.Fatalf("remote chart config = %#v", cfg)
+	}
+	if cfg.IngressChart != "oci://registry.example.com/charts/edge" || cfg.IngressNamespace != "edge-system" {
+		t.Fatalf("ingress chart config = %#v", cfg)
+	}
+	if !reflect.DeepEqual(cfg.IngressValuesFiles, []string{"edge/base.yaml", "edge/prod.yaml"}) {
+		t.Fatalf("IngressValuesFiles = %#v", cfg.IngressValuesFiles)
+	}
+}
+
+func TestParseHelmDefaults(t *testing.T) {
+	cfg, err := Parse([]string{"helm", "./chart"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Namespaces[0] != "default" || cfg.AllNamespaces {
+		t.Fatalf("namespace scope = %#v all=%v", cfg.Namespaces, cfg.AllNamespaces)
+	}
+	if cfg.ReleaseName != "vdr-scan" {
+		t.Fatalf("ReleaseName = %q", cfg.ReleaseName)
+	}
+}
+
+func TestParseHelmHelpDescribesIngressGatewayAndValuesAlias(t *testing.T) {
+	var out strings.Builder
+	_, err := ParseWithOutput([]string{"helm", "--help"}, &out)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("Parse error = %v, want flag.ErrHelp", err)
+	}
+	for _, want := range []string{
+		"alias for --values for the Helm source",
+		"Ingress, ingress-controller, or Gateway API infrastructure",
+		"rightmost file wins",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("Helm help missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestParseHelmRejectsIngressOptionsWithoutChart(t *testing.T) {
+	_, err := Parse([]string{"helm", "./chart", "--ingress-values", "edge.yaml"})
+	if err == nil || !strings.Contains(err.Error(), "--ingress-chart") {
+		t.Fatalf("error = %v, want ingress-chart requirement", err)
+	}
+}
+
+func TestParseRejectsHelmFlagsForOtherSources(t *testing.T) {
+	_, err := Parse([]string{"k8s", "--values", "values.yaml"})
+	if err == nil || !strings.Contains(err.Error(), "source helm") {
+		t.Fatalf("error = %v, want Helm-specific flag rejection", err)
+	}
+}
+
 func TestParseRejectsConflictingNamespaceScope(t *testing.T) {
 	_, err := Parse([]string{"k8s", "--namespace", "prod", "--all-namespaces"})
 	if err == nil {
