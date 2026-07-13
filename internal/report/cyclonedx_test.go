@@ -12,6 +12,8 @@ import (
 func sampleCycloneDXReport() model.Report {
 	automount := false
 	replicas := int32(3)
+	published := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	modified := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
 	return model.Report{
 		GeneratedAt: time.Date(2026, 6, 28, 14, 0, 0, 0, time.UTC),
 		ContextName: "prod-cluster",
@@ -51,14 +53,30 @@ func sampleCycloneDXReport() model.Report {
 				},
 				Findings: []model.Finding{
 					{
-						ID:          "CVE-2026-30303",
-						ImageRef:    "registry.example.com/payments-api:2.4.1",
-						PackageName: "libssl",
-						Severity:    "HIGH",
-						CVSSVector:  "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-						CWEs:        []string{"CWE-787", "CWE-79"},
-						Pain:        &model.Pain{Tier: "N4", Word: "Debilitating", Archetype: "web-service"},
-						Remediation: &model.Remediation{Column: "LEV+IRV", LEV: true, IRV: true, DeadlineDays: 3},
+						ID:                  "CVE-2026-30303",
+						ImageRef:            "registry.example.com/payments-api:2.4.1",
+						Target:              "/usr/bin/payments-api",
+						TargetClass:         "lang-pkgs",
+						TargetType:          "gobinary",
+						PackageID:           "libssl@3.2.1-r0",
+						PackageName:         "libssl",
+						PackagePURL:         "pkg:apk/wolfi/libssl@3.2.1-r0",
+						PackageUID:          "libssl@3.2.1-r0",
+						PackagePath:         "/usr/lib/libssl.so",
+						PackageRelationship: "direct",
+						Severity:            "HIGH",
+						SeveritySource:      "wolfi",
+						VendorSeverity:      map[string]string{"nvd": "CRITICAL", "wolfi": "HIGH"},
+						DataSource:          &model.VulnerabilityDataSource{ID: "wolfi", Name: "Wolfi SecDB", URL: "https://packages.wolfi.dev/os/security.json", BaseID: "osv"},
+						PrimaryURL:          "https://avd.aquasec.com/nvd/cve-2026-30303",
+						ScannerFingerprint:  "sha256:scanner-fingerprint",
+						VendorIDs:           []string{"GHSA-abcd-1234-5678", "WOLFI-2026-30303"},
+						PublishedDate:       &published,
+						LastModifiedDate:    &modified,
+						CVSSVector:          "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+						CWEs:                []string{"CWE-787", "CWE-79"},
+						Pain:                &model.Pain{Tier: "N4", Word: "Debilitating", Archetype: "web-service"},
+						Remediation:         &model.Remediation{Column: "LEV+IRV", LEV: true, IRV: true, DeadlineDays: 3},
 					},
 				},
 			},
@@ -190,11 +208,28 @@ func TestToCycloneDXVDRProperties(t *testing.T) {
 	active := findVuln(t, doc, "CVE-2026-30303")
 	vulnProps := propMap(active.Properties)
 	wantVuln := map[string]string{
-		"vdr:pain":                     "N4",
-		"vdr:cwes":                     "CWE-787,CWE-79",
-		"vdr:remediationTrack":         "LEV+IRV",
-		"vdr:findingInternetReachable": "true",
-		"vdr:reachabilityDecision":     "insufficient_evidence_to_downgrade",
+		"vdr:pain":                        "N4",
+		"vdr:cwes":                        "CWE-787,CWE-79",
+		"vdr:target":                      "/usr/bin/payments-api",
+		"vdr:targetClass":                 "lang-pkgs",
+		"vdr:targetType":                  "gobinary",
+		"vdr:packageId":                   "libssl@3.2.1-r0",
+		"vdr:affectedPackagePurl":         "pkg:apk/wolfi/libssl@3.2.1-r0",
+		"vdr:affectedPackageUid":          "libssl@3.2.1-r0",
+		"vdr:affectedPackagePath":         "/usr/lib/libssl.so",
+		"vdr:affectedPackageRelationship": "direct",
+		"vdr:severitySource":              "wolfi",
+		"vdr:vendorSeverity":              "nvd=CRITICAL,wolfi=HIGH",
+		"vdr:dataSourceId":                "wolfi",
+		"vdr:dataSourceName":              "Wolfi SecDB",
+		"vdr:dataSourceUrl":               "https://packages.wolfi.dev/os/security.json",
+		"vdr:dataSourceBaseId":            "osv",
+		"vdr:primaryUrl":                  "https://avd.aquasec.com/nvd/cve-2026-30303",
+		"vdr:scannerFingerprint":          "sha256:scanner-fingerprint",
+		"vdr:vendorIds":                   "GHSA-abcd-1234-5678,WOLFI-2026-30303",
+		"vdr:remediationTrack":            "LEV+IRV",
+		"vdr:findingInternetReachable":    "true",
+		"vdr:reachabilityDecision":        "insufficient_evidence_to_downgrade",
 	}
 	for k, want := range wantVuln {
 		if got := vulnProps[k]; got != want {
@@ -208,6 +243,15 @@ func TestToCycloneDXVDRProperties(t *testing.T) {
 	// CVSS rating.
 	if len(active.Ratings) != 1 || active.Ratings[0].Method != "CVSSv31" || active.Ratings[0].Severity != "high" {
 		t.Errorf("ratings = %+v, want one CVSSv31/high", active.Ratings)
+	}
+	if active.Ratings[0].Source == nil || active.Ratings[0].Source.Name != "wolfi" {
+		t.Errorf("rating source = %+v, want wolfi", active.Ratings[0].Source)
+	}
+	if active.Source == nil || active.Source.Name != "Wolfi SecDB" || active.Source.URL != "https://packages.wolfi.dev/os/security.json" {
+		t.Errorf("vulnerability source = %+v, want Wolfi SecDB", active.Source)
+	}
+	if active.Published != "2026-01-02T03:04:05Z" || active.Updated != "2026-02-03T04:05:06Z" {
+		t.Errorf("published/updated = %q/%q", active.Published, active.Updated)
 	}
 }
 

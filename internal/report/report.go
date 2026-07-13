@@ -742,10 +742,24 @@ func bestExposure(resources []model.ResourceRef, exposures map[model.ResourceRef
 
 func cloneFinding(finding model.Finding) model.Finding {
 	clone := finding
+	clone.VendorSeverity = copyStringMap(finding.VendorSeverity)
+	clone.VendorIDs = append([]string(nil), finding.VendorIDs...)
 	clone.References = append([]string(nil), finding.References...)
 	clone.CWEs = append([]string(nil), finding.CWEs...)
 	clone.AffectedResources = append([]model.ResourceRef(nil), finding.AffectedResources...)
 	clone.Affected = cloneAffected(finding.Affected)
+	if finding.DataSource != nil {
+		value := *finding.DataSource
+		clone.DataSource = &value
+	}
+	if finding.PublishedDate != nil {
+		value := *finding.PublishedDate
+		clone.PublishedDate = &value
+	}
+	if finding.LastModifiedDate != nil {
+		value := *finding.LastModifiedDate
+		clone.LastModifiedDate = &value
+	}
 	if finding.EPSS != nil {
 		value := *finding.EPSS
 		clone.EPSS = &value

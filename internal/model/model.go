@@ -186,17 +186,33 @@ type SecurityProfile struct {
 }
 
 type Finding struct {
-	ID               string   `json:"id"`
-	ImageRef         string   `json:"imageRef"`
-	NormalizedImage  string   `json:"normalizedImage,omitempty"`
-	PackageName      string   `json:"packageName,omitempty"`
-	InstalledVersion string   `json:"installedVersion,omitempty"`
-	FixedVersion     string   `json:"fixedVersion,omitempty"`
-	Severity         string   `json:"severity"`
-	Status           string   `json:"status,omitempty"`
-	Title            string   `json:"title,omitempty"`
-	Description      string   `json:"description,omitempty"`
-	References       []string `json:"references,omitempty"`
+	ID                  string                   `json:"id"`
+	ImageRef            string                   `json:"imageRef"`
+	NormalizedImage     string                   `json:"normalizedImage,omitempty"`
+	Target              string                   `json:"target,omitempty"`
+	TargetClass         string                   `json:"targetClass,omitempty"`
+	TargetType          string                   `json:"targetType,omitempty"`
+	PackageID           string                   `json:"packageId,omitempty"`
+	PackageName         string                   `json:"packageName,omitempty"`
+	PackagePURL         string                   `json:"packagePurl,omitempty"`
+	PackageUID          string                   `json:"packageUid,omitempty"`
+	PackagePath         string                   `json:"packagePath,omitempty"`
+	PackageRelationship string                   `json:"packageRelationship,omitempty"`
+	InstalledVersion    string                   `json:"installedVersion,omitempty"`
+	FixedVersion        string                   `json:"fixedVersion,omitempty"`
+	Severity            string                   `json:"severity"`
+	SeveritySource      string                   `json:"severitySource,omitempty"`
+	VendorSeverity      map[string]string        `json:"vendorSeverity,omitempty"`
+	Status              string                   `json:"status,omitempty"`
+	Title               string                   `json:"title,omitempty"`
+	Description         string                   `json:"description,omitempty"`
+	DataSource          *VulnerabilityDataSource `json:"dataSource,omitempty"`
+	PrimaryURL          string                   `json:"primaryUrl,omitempty"`
+	ScannerFingerprint  string                   `json:"scannerFingerprint,omitempty"`
+	VendorIDs           []string                 `json:"vendorIds,omitempty"`
+	References          []string                 `json:"references,omitempty"`
+	PublishedDate       *time.Time               `json:"publishedDate,omitempty"`
+	LastModifiedDate    *time.Time               `json:"lastModifiedDate,omitempty"`
 	// CVSSVector is the preferred CVSS base vector (v3, else v4) from the scanner.
 	// It feeds the report's automatability fallback when CISA Vulnrichment has no
 	// record for the CVE.
@@ -230,6 +246,13 @@ type Finding struct {
 	// not been dispositioned as suppressed.
 	WouldHaveBeenPain        *Pain        `json:"wouldHaveBeenPain,omitempty"`
 	WouldHaveBeenRemediation *Remediation `json:"wouldHaveBeenRemediation,omitempty"`
+}
+
+type VulnerabilityDataSource struct {
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	URL    string `json:"url,omitempty"`
+	BaseID string `json:"baseId,omitempty"`
 }
 
 type Suppression struct {

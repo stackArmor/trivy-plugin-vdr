@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/registry"
 )
@@ -134,6 +135,64 @@ func TestTrivyRunnerRetriesWithoutOCIVEXWhenAttestationFetchFails(t *testing.T) 
 	}
 	if containsArg(fake.callArgs[1], "--vex") || containsArg(fake.callArgs[1], "--show-suppressed") {
 		t.Fatalf("retry args = %#v, want no VEX flags", fake.callArgs[1])
+	}
+}
+
+func TestTrivyRunnerLogsConciseWarningForOCIVEXUnauthorized(t *testing.T) {
+	const trivyStderr = `2026-07-13T13:08:23-04:00 WARN Unable to get vulnerability details (CVE may be rejected) err.context.vuln_id="CVE-2026-6791" err.stacktrace="Oops: no vulnerability details"
+2026-07-13T13:08:23-04:00 FATAL Fatal error run error: filtering error: VEX OCI error: failed to retrieve VEX attestation: GET https://registry.example.com/v1/token: unexpected status code 401 Unauthorized: {"message":"missing_authorization_header_error","statusCode":401}`
+	fake := &sequenceCommandRunner{
+		results: []commandResult{
+			{stderr: []byte(trivyStderr), err: errors.New("exit status 1")},
+			{stdout: []byte(`{"Results":[]}`)},
+		},
+	}
+	var logs strings.Builder
+	runner := TrivyRunner{
+		Binary:         "trivy-test",
+		OCIVEXIncluded: true,
+		CommandRunner:  fake,
+		Logger:         log.NewWithWriter(&logs, log.LevelInfo),
+	}
+
+	if _, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second); err != nil {
+		t.Fatalf("ScanImage returned error: %v", err)
+	}
+
+	got := logs.String()
+	for _, want := range []string{
+		"WARN\tOCI VEX lookup failed for registry.example.com/app:v1",
+		"registry returned 401 Unauthorized",
+		"retrying vulnerability scan without OCI VEX",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("warning missing %q: %s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"FATAL", "stacktrace", "CVE-2026-6791", "/v1/token"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("warning contains Trivy stderr fragment %q: %s", unwanted, got)
+		}
+	}
+}
+
+func TestSummarizeOCIVEXRetrievalFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "unauthorized", err: errors.New("unexpected status code 401 Unauthorized"), want: "registry returned 401 Unauthorized"},
+		{name: "forbidden JSON", err: errors.New(`{"statusCode":403}`), want: "registry returned 403 Forbidden"},
+		{name: "missing artifact", err: errors.New("BLOB_UNKNOWN: Unknown blob"), want: "attestation artifact is unavailable"},
+		{name: "other", err: errors.New("VEX OCI error"), want: "attestation lookup failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := summarizeOCIVEXRetrievalFailure(tt.err); got != tt.want {
+				t.Fatalf("summarizeOCIVEXRetrievalFailure() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -292,17 +351,49 @@ func TestTrivyRunnerParsesVulnerabilitiesFromMultipleResults(t *testing.T) {
 			stdout: []byte(`{
 				"Results": [
 					{
-						"Target": "libssl",
+						"Target": "/usr/bin/helper",
+						"Class": "lang-pkgs",
+						"Type": "gobinary",
+						"Packages": [
+							{
+								"ID": "openssl@1.1.1",
+								"Identifier": {
+									"PURL": "pkg:apk/wolfi/openssl@1.1.1",
+									"UID": "openssl@1.1.1"
+								},
+								"Relationship": "direct",
+								"FilePath": "/usr/lib/libssl.so"
+							}
+						],
 						"Vulnerabilities": [
 							{
 								"VulnerabilityID": "CVE-2026-0001",
+								"VendorIDs": ["GHSA-abcd-1234-5678", "WOLFI-2026-0001"],
+								"PkgID": "openssl@1.1.1",
 								"PkgName": "openssl",
+								"PkgPath": "/usr/lib/libssl.so",
+								"PkgIdentifier": {
+									"PURL": "pkg:apk/wolfi/openssl@1.1.1",
+									"UID": "openssl@1.1.1"
+								},
 								"InstalledVersion": "1.1.1",
 								"FixedVersion": "1.1.2",
 								"Severity": "HIGH",
+								"SeveritySource": "ghsa",
+								"VendorSeverity": {"ghsa": 3, "nvd": 4, "wolfi": 2},
 								"Title": "openssl issue",
 								"Description": "bad openssl",
+								"PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-0001",
+								"DataSource": {
+									"ID": "wolfi",
+									"Name": "Wolfi SecDB",
+									"URL": "https://packages.wolfi.dev/os/security.json",
+									"BaseID": "osv"
+								},
+								"Fingerprint": "sha256:scanner-fingerprint",
 								"References": ["https://example.com/cve"],
+								"PublishedDate": "2026-01-02T03:04:05Z",
+								"LastModifiedDate": "2026-02-03T04:05:06Z",
 								"Status": "fixed",
 								"CVSS": {
 									"redhat": { "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:L" },
@@ -338,14 +429,41 @@ func TestTrivyRunnerParsesVulnerabilitiesFromMultipleResults(t *testing.T) {
 	first := findings[0]
 	if first.ID != "CVE-2026-0001" ||
 		first.ImageRef != "registry.example.com/app:v1" ||
+		first.Target != "/usr/bin/helper" ||
+		first.TargetClass != "lang-pkgs" ||
+		first.TargetType != "gobinary" ||
+		first.PackageID != "openssl@1.1.1" ||
 		first.PackageName != "openssl" ||
+		first.PackagePURL != "pkg:apk/wolfi/openssl@1.1.1" ||
+		first.PackageUID != "openssl@1.1.1" ||
+		first.PackagePath != "/usr/lib/libssl.so" ||
+		first.PackageRelationship != "direct" ||
 		first.InstalledVersion != "1.1.1" ||
 		first.FixedVersion != "1.1.2" ||
 		first.Severity != "HIGH" ||
+		first.SeveritySource != "ghsa" ||
 		first.Title != "openssl issue" ||
 		first.Description != "bad openssl" ||
-		first.Status != "fixed" {
+		first.Status != "fixed" ||
+		first.PrimaryURL != "https://avd.aquasec.com/nvd/cve-2026-0001" ||
+		first.ScannerFingerprint != "sha256:scanner-fingerprint" {
 		t.Fatalf("first finding did not preserve fields: %#v", first)
+	}
+	wantVendorSeverity := map[string]string{"ghsa": "HIGH", "nvd": "CRITICAL", "wolfi": "MEDIUM"}
+	if !reflect.DeepEqual(first.VendorSeverity, wantVendorSeverity) {
+		t.Fatalf("VendorSeverity = %#v, want %#v", first.VendorSeverity, wantVendorSeverity)
+	}
+	if first.DataSource == nil || first.DataSource.ID != "wolfi" || first.DataSource.Name != "Wolfi SecDB" || first.DataSource.URL != "https://packages.wolfi.dev/os/security.json" || first.DataSource.BaseID != "osv" {
+		t.Fatalf("DataSource = %#v, want Wolfi source details", first.DataSource)
+	}
+	if !reflect.DeepEqual(first.VendorIDs, []string{"GHSA-abcd-1234-5678", "WOLFI-2026-0001"}) {
+		t.Fatalf("VendorIDs = %#v", first.VendorIDs)
+	}
+	if first.PublishedDate == nil || first.PublishedDate.Format(time.RFC3339) != "2026-01-02T03:04:05Z" {
+		t.Fatalf("PublishedDate = %#v", first.PublishedDate)
+	}
+	if first.LastModifiedDate == nil || first.LastModifiedDate.Format(time.RFC3339) != "2026-02-03T04:05:06Z" {
+		t.Fatalf("LastModifiedDate = %#v", first.LastModifiedDate)
 	}
 	if first.CVSSVector != "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" {
 		t.Fatalf("CVSSVector = %q, want NVD v3 vector preferred over redhat", first.CVSSVector)

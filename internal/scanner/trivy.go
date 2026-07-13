@@ -138,7 +138,7 @@ func (r TrivyRunner) ScanImageWithOptions(ctx context.Context, image string, tim
 	findings, err := r.scanOnce(ctx, cacheDir, image, timeout, options)
 	if err != nil && r.useOCIVEX(image) && looksLikeOCIVEXRetrievalFailure(err) {
 		if r.Logger != nil {
-			r.Logger.Warn("OCI VEX lookup failed for %s; retrying vulnerability scan without OCI VEX: %v", image, err)
+			r.Logger.Warn("OCI VEX lookup failed for %s: %s; retrying vulnerability scan without OCI VEX", image, summarizeOCIVEXRetrievalFailure(err))
 		}
 		retry := r
 		retry.OCIVEXIncluded = false
@@ -242,6 +242,27 @@ func looksLikeOCIVEXRetrievalFailure(err error) bool {
 			strings.Contains(msg, "fetching attestations") ||
 			strings.Contains(msg, "blob_unknown") ||
 			strings.Contains(msg, "unknown blob"))
+}
+
+// summarizeOCIVEXRetrievalFailure keeps a recoverable VEX failure from replaying
+// Trivy's entire stderr stream. That stream can contain successful scanner
+// progress, unrelated vulnerability-database warnings, and a final FATAL line
+// even though VDR immediately retries the image scan without OCI VEX.
+func summarizeOCIVEXRetrievalFailure(err error) string {
+	if err == nil {
+		return "attestation lookup failed"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "401 unauthorized"), strings.Contains(msg, `"statuscode":401`):
+		return "registry returned 401 Unauthorized"
+	case strings.Contains(msg, "403 forbidden"), strings.Contains(msg, `"statuscode":403`):
+		return "registry returned 403 Forbidden"
+	case strings.Contains(msg, "blob_unknown"), strings.Contains(msg, "unknown blob"):
+		return "attestation artifact is unavailable"
+	default:
+		return "attestation lookup failed"
+	}
 }
 
 // workerCachePool hands out isolated Trivy cache directories so concurrent scans
@@ -700,13 +721,13 @@ func parseTrivyFindings(data []byte, image string) ([]model.Finding, error) {
 	var findings []model.Finding
 	for _, result := range report.Results {
 		for _, vulnerability := range result.Vulnerabilities {
-			findings = append(findings, findingFromTrivyVulnerability(vulnerability, image))
+			findings = append(findings, findingFromTrivyVulnerability(vulnerability, image, result))
 		}
 		for _, modified := range result.ModifiedFindings {
 			if modified.Type != "" && modified.Type != "vulnerability" {
 				continue
 			}
-			finding := findingFromTrivyVulnerability(modified.Finding, image)
+			finding := findingFromTrivyVulnerability(modified.Finding, image, result)
 			finding.Suppressed = true
 			finding.Suppression = &model.Suppression{
 				Source:          "vex",
@@ -720,19 +741,45 @@ func parseTrivyFindings(data []byte, image string) ([]model.Finding, error) {
 	return findings, nil
 }
 
-func findingFromTrivyVulnerability(vulnerability trivyVulnerability, image string) model.Finding {
+func findingFromTrivyVulnerability(vulnerability trivyVulnerability, image string, result trivyResult) model.Finding {
+	pkg := matchingTrivyPackage(result.Packages, vulnerability)
+	packagePath := vulnerability.PkgPath
+	packageRelationship := ""
+	if pkg != nil {
+		if packagePath == "" {
+			packagePath = pkg.FilePath
+		}
+		packageRelationship = pkg.Relationship
+	}
+
 	return model.Finding{
-		ID:               vulnerability.VulnerabilityID,
-		ImageRef:         image,
-		PackageName:      vulnerability.PkgName,
-		InstalledVersion: vulnerability.InstalledVersion,
-		FixedVersion:     vulnerability.FixedVersion,
-		Severity:         vulnerability.Severity,
-		Status:           vulnerability.Status,
-		Title:            vulnerability.Title,
-		Description:      vulnerability.Description,
-		References:       append([]string(nil), vulnerability.References...),
-		CVSSVector:       bestCVSSVector(vulnerability.CVSS),
+		ID:                  vulnerability.VulnerabilityID,
+		ImageRef:            image,
+		Target:              result.Target,
+		TargetClass:         result.Class,
+		TargetType:          result.Type,
+		PackageID:           vulnerability.PkgID,
+		PackageName:         vulnerability.PkgName,
+		PackagePURL:         vulnerability.PkgIdentifier.PURL,
+		PackageUID:          vulnerability.PkgIdentifier.UID,
+		PackagePath:         packagePath,
+		PackageRelationship: packageRelationship,
+		InstalledVersion:    vulnerability.InstalledVersion,
+		FixedVersion:        vulnerability.FixedVersion,
+		Severity:            vulnerability.Severity,
+		SeveritySource:      vulnerability.SeveritySource,
+		VendorSeverity:      vendorSeverityFromTrivy(vulnerability.VendorSeverity),
+		Status:              vulnerability.Status,
+		Title:               vulnerability.Title,
+		Description:         vulnerability.Description,
+		DataSource:          dataSourceFromTrivy(vulnerability.DataSource),
+		PrimaryURL:          vulnerability.PrimaryURL,
+		ScannerFingerprint:  vulnerability.Fingerprint,
+		VendorIDs:           append([]string(nil), vulnerability.VendorIDs...),
+		References:          append([]string(nil), vulnerability.References...),
+		PublishedDate:       vulnerability.PublishedDate,
+		LastModifiedDate:    vulnerability.LastModifiedDate,
+		CVSSVector:          bestCVSSVector(vulnerability.CVSS),
 	}
 }
 
@@ -743,19 +790,118 @@ type trivyReport struct {
 type trivyResult struct {
 	Vulnerabilities  []trivyVulnerability   `json:"Vulnerabilities"`
 	ModifiedFindings []trivyModifiedFinding `json:"ExperimentalModifiedFindings"`
+	Packages         []trivyPackage         `json:"Packages"`
+	Target           string                 `json:"Target"`
+	Class            string                 `json:"Class"`
+	Type             string                 `json:"Type"`
 }
 
 type trivyVulnerability struct {
 	VulnerabilityID  string               `json:"VulnerabilityID"`
+	VendorIDs        []string             `json:"VendorIDs"`
+	PkgID            string               `json:"PkgID"`
 	PkgName          string               `json:"PkgName"`
+	PkgPath          string               `json:"PkgPath"`
+	PkgIdentifier    trivyPkgIdentifier   `json:"PkgIdentifier"`
 	InstalledVersion string               `json:"InstalledVersion"`
 	FixedVersion     string               `json:"FixedVersion"`
 	Severity         string               `json:"Severity"`
+	SeveritySource   string               `json:"SeveritySource"`
+	VendorSeverity   map[string]int       `json:"VendorSeverity"`
 	Status           string               `json:"Status"`
 	Title            string               `json:"Title"`
 	Description      string               `json:"Description"`
+	PrimaryURL       string               `json:"PrimaryURL"`
+	DataSource       *trivyDataSource     `json:"DataSource"`
+	Fingerprint      string               `json:"Fingerprint"`
 	References       []string             `json:"References"`
+	PublishedDate    *time.Time           `json:"PublishedDate"`
+	LastModifiedDate *time.Time           `json:"LastModifiedDate"`
 	CVSS             map[string]trivyCVSS `json:"CVSS"`
+}
+
+type trivyPkgIdentifier struct {
+	PURL string `json:"PURL"`
+	UID  string `json:"UID"`
+}
+
+type trivyPackage struct {
+	ID           string             `json:"ID"`
+	Identifier   trivyPkgIdentifier `json:"Identifier"`
+	Relationship string             `json:"Relationship"`
+	FilePath     string             `json:"FilePath"`
+}
+
+type trivyDataSource struct {
+	ID     string `json:"ID"`
+	Name   string `json:"Name"`
+	URL    string `json:"URL"`
+	BaseID string `json:"BaseID"`
+}
+
+func matchingTrivyPackage(packages []trivyPackage, vulnerability trivyVulnerability) *trivyPackage {
+	if vulnerability.PkgID != "" {
+		for i := range packages {
+			if packages[i].ID == vulnerability.PkgID {
+				return &packages[i]
+			}
+		}
+	}
+	if vulnerability.PkgIdentifier.UID != "" {
+		for i := range packages {
+			if packages[i].Identifier.UID == vulnerability.PkgIdentifier.UID {
+				return &packages[i]
+			}
+		}
+	}
+	if vulnerability.PkgIdentifier.PURL != "" {
+		for i := range packages {
+			if packages[i].Identifier.PURL == vulnerability.PkgIdentifier.PURL {
+				return &packages[i]
+			}
+		}
+	}
+	return nil
+}
+
+func dataSourceFromTrivy(source *trivyDataSource) *model.VulnerabilityDataSource {
+	if source == nil || (source.ID == "" && source.Name == "" && source.URL == "" && source.BaseID == "") {
+		return nil
+	}
+	return &model.VulnerabilityDataSource{
+		ID:     source.ID,
+		Name:   source.Name,
+		URL:    source.URL,
+		BaseID: source.BaseID,
+	}
+}
+
+func vendorSeverityFromTrivy(values map[string]int) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for source, severity := range values {
+		result[source] = trivySeverityName(severity)
+	}
+	return result
+}
+
+func trivySeverityName(value int) string {
+	switch value {
+	case 0:
+		return "UNKNOWN"
+	case 1:
+		return "LOW"
+	case 2:
+		return "MEDIUM"
+	case 3:
+		return "HIGH"
+	case 4:
+		return "CRITICAL"
+	default:
+		return fmt.Sprintf("UNKNOWN(%d)", value)
+	}
 }
 
 type trivyModifiedFinding struct {

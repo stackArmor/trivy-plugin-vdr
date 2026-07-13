@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
@@ -69,6 +70,8 @@ type cdxVulnerability struct {
 	BOMRef     string        `json:"bom-ref,omitempty"`
 	ID         string        `json:"id"`
 	Source     *cdxSource    `json:"source,omitempty"`
+	Published  string        `json:"published,omitempty"`
+	Updated    string        `json:"updated,omitempty"`
 	Ratings    []cdxRating   `json:"ratings,omitempty"`
 	CWEs       []int         `json:"cwes,omitempty"`
 	Analysis   *cdxAnalysis  `json:"analysis,omitempty"`
@@ -82,9 +85,10 @@ type cdxSource struct {
 }
 
 type cdxRating struct {
-	Severity string `json:"severity,omitempty"`
-	Method   string `json:"method,omitempty"`
-	Vector   string `json:"vector,omitempty"`
+	Severity string     `json:"severity,omitempty"`
+	Method   string     `json:"method,omitempty"`
+	Vector   string     `json:"vector,omitempty"`
+	Source   *cdxSource `json:"source,omitempty"`
 }
 
 type cdxAnalysis struct {
@@ -383,11 +387,17 @@ func vulnerabilityFor(finding model.Finding, assetRef string, exposure *model.Ex
 		BOMRef:  vulnBOMRef(finding, assetRef),
 		Affects: []cdxAffect{{Ref: assetRef}},
 	}
-	if src := vulnSource(finding.ID); src != nil {
+	if src := vulnSource(finding); src != nil {
 		vuln.Source = src
 	}
 	if rating := vulnRating(finding); rating != nil {
 		vuln.Ratings = []cdxRating{*rating}
+	}
+	if finding.PublishedDate != nil {
+		vuln.Published = finding.PublishedDate.UTC().Format(time.RFC3339)
+	}
+	if finding.LastModifiedDate != nil {
+		vuln.Updated = finding.LastModifiedDate.UTC().Format(time.RFC3339)
 	}
 	vuln.CWEs = numericCWEs(finding.CWEs)
 	vuln.Analysis = analysisFor(finding)
@@ -410,9 +420,28 @@ func vulnerabilityFor(finding model.Finding, assetRef string, exposure *model.Ex
 		add("vdr:findingInternetReachable", strconv.FormatBool(rem.IRV))
 	}
 	add("vdr:reachabilityDecision", reachabilityDecision(rem, exposure))
+	add("vdr:target", finding.Target)
+	add("vdr:targetClass", finding.TargetClass)
+	add("vdr:targetType", finding.TargetType)
+	add("vdr:packageId", finding.PackageID)
 	if finding.PackageName != "" {
 		add("vdr:affectedPackage", finding.PackageName)
 	}
+	add("vdr:affectedPackagePurl", finding.PackagePURL)
+	add("vdr:affectedPackageUid", finding.PackageUID)
+	add("vdr:affectedPackagePath", finding.PackagePath)
+	add("vdr:affectedPackageRelationship", finding.PackageRelationship)
+	add("vdr:severitySource", finding.SeveritySource)
+	add("vdr:vendorSeverity", formatStringMap(finding.VendorSeverity))
+	if finding.DataSource != nil {
+		add("vdr:dataSourceId", finding.DataSource.ID)
+		add("vdr:dataSourceName", finding.DataSource.Name)
+		add("vdr:dataSourceUrl", finding.DataSource.URL)
+		add("vdr:dataSourceBaseId", finding.DataSource.BaseID)
+	}
+	add("vdr:primaryUrl", finding.PrimaryURL)
+	add("vdr:scannerFingerprint", finding.ScannerFingerprint)
+	add("vdr:vendorIds", strings.Join(finding.VendorIDs, ","))
 	vuln.Properties = props
 	return vuln
 }
@@ -435,12 +464,21 @@ func vulnBOMRef(finding model.Finding, assetRef string) string {
 	return strings.Join(parts, "|")
 }
 
-func vulnSource(id string) *cdxSource {
-	if strings.HasPrefix(id, "CVE-") {
-		return &cdxSource{Name: "NVD", URL: "https://nvd.nist.gov/vuln/detail/" + id}
+func vulnSource(finding model.Finding) *cdxSource {
+	if finding.DataSource != nil {
+		name := finding.DataSource.Name
+		if name == "" {
+			name = finding.DataSource.ID
+		}
+		if name != "" || finding.DataSource.URL != "" {
+			return &cdxSource{Name: name, URL: finding.DataSource.URL}
+		}
 	}
-	if strings.HasPrefix(id, "GHSA-") {
-		return &cdxSource{Name: "GitHub Advisory Database", URL: "https://github.com/advisories/" + id}
+	if strings.HasPrefix(finding.ID, "CVE-") {
+		return &cdxSource{Name: "NVD", URL: "https://nvd.nist.gov/vuln/detail/" + finding.ID}
+	}
+	if strings.HasPrefix(finding.ID, "GHSA-") {
+		return &cdxSource{Name: "GitHub Advisory Database", URL: "https://github.com/advisories/" + finding.ID}
 	}
 	return nil
 }
@@ -452,10 +490,29 @@ func vulnRating(finding model.Finding) *cdxRating {
 		return nil
 	}
 	rating := &cdxRating{Severity: severity, Vector: vector}
+	if finding.SeveritySource != "" {
+		rating.Source = &cdxSource{Name: finding.SeveritySource}
+	}
 	if vector != "" {
 		rating.Method = cvssMethod(vector)
 	}
 	return rating
+}
+
+func formatStringMap(values map[string]string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+values[key])
+	}
+	return strings.Join(parts, ",")
 }
 
 func cdxSeverity(severity string) string {

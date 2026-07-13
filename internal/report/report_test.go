@@ -3,6 +3,7 @@ package report
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -330,7 +331,24 @@ func TestBuildSeparatesSuppressedFindingsWithWouldHaveBeenPain(t *testing.T) {
 }
 
 func TestRenderJSONWritesSelectedView(t *testing.T) {
-	report := model.Report{GeneratedAt: fixedTime(), Summary: model.Summary{Findings: 1}, Findings: []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}}
+	published := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	finding.Target = "/usr/bin/app"
+	finding.TargetClass = "lang-pkgs"
+	finding.TargetType = "gobinary"
+	finding.PackageID = "openssl@1.0.0"
+	finding.PackagePURL = "pkg:apk/wolfi/openssl@1.0.0"
+	finding.PackageUID = "openssl@1.0.0"
+	finding.PackagePath = "/usr/lib/libssl.so"
+	finding.PackageRelationship = "direct"
+	finding.SeveritySource = "wolfi"
+	finding.VendorSeverity = map[string]string{"nvd": "CRITICAL", "wolfi": "HIGH"}
+	finding.DataSource = &model.VulnerabilityDataSource{ID: "wolfi", Name: "Wolfi SecDB"}
+	finding.PrimaryURL = "https://avd.aquasec.com/nvd/cve-2026-0001"
+	finding.ScannerFingerprint = "sha256:fingerprint"
+	finding.VendorIDs = []string{"WOLFI-2026-0001"}
+	finding.PublishedDate = &published
+	report := model.Report{GeneratedAt: fixedTime(), Summary: model.Summary{Findings: 1}, Findings: []model.Finding{finding}}
 	var buf bytes.Buffer
 
 	if err := RenderJSON(&buf, report); err != nil {
@@ -343,6 +361,16 @@ func TestRenderJSONWritesSelectedView(t *testing.T) {
 	}
 	if len(decoded.Findings) != 1 || decoded.Findings[0].ID != "CVE-2026-0001" {
 		t.Fatalf("decoded Findings = %#v, want CVE", decoded.Findings)
+	}
+	if decoded.Findings[0].PackagePURL != finding.PackagePURL || decoded.Findings[0].PackageUID != finding.PackageUID {
+		t.Fatalf("decoded package identity = %q/%q, want %q/%q", decoded.Findings[0].PackagePURL, decoded.Findings[0].PackageUID, finding.PackagePURL, finding.PackageUID)
+	}
+	got := decoded.Findings[0]
+	if got.TargetType != "gobinary" || got.PackageRelationship != "direct" || got.SeveritySource != "wolfi" || got.ScannerFingerprint != "sha256:fingerprint" {
+		t.Fatalf("decoded Trivy metadata incomplete: %#v", got)
+	}
+	if !reflect.DeepEqual(got.VendorSeverity, finding.VendorSeverity) || !reflect.DeepEqual(got.VendorIDs, finding.VendorIDs) || got.DataSource == nil || got.DataSource.ID != "wolfi" {
+		t.Fatalf("decoded provenance metadata incomplete: %#v", got)
 	}
 }
 
