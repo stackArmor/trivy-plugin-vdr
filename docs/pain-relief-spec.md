@@ -191,7 +191,7 @@ Evidence line format:
 
 ```text
 "PAIN Relief: CC-RUN-SELINUX-CONFINE v0.7.0 counters CWE-787 via class:ACE (enforcing; process domain httpd_t, policy query 2026-07-02); MC,MI High->Low"
-"PAIN Relief: CC-LIKE-EDR-BLOCK v0.7.0 residualFactor 0.85; EPSS 0.74 -> adjustedEPSS 0.63 -> NLEV (blocking EDR enforcing, policy export 2026-07-02)"
+"PAIN Relief: CC-LIKE-EDR-BLOCK v0.7.0 residualFactor 0.85; EPSS 0.74 -> adjustedEPSS 0.63 -> LEV (blocking EDR enforcing, policy export 2026-07-02)"
 "PAIN Relief near-miss: CC-HA-RECOVERABLE-CRASH blocked -- missing PodDisruptionBudget (replicas=4, zone spread ok, liveness ok)"
 ```
 

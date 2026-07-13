@@ -135,7 +135,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset archetype's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.70 or active exploitation and IRV = internet-reachable. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
+    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset archetype's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50 or active exploitation and IRV = internet-reachable. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
     {{ if .Report.SuppressedFindings }}
     <table class="suppressed-table" id="suppressed-findings">
       <thead>
@@ -326,7 +326,7 @@
         "FedRAMP VDR-TFR-PVR — deadline " + rem.deadline,
         "Certification Class: " + rem.class,
         "Column: " + rem.column,
-        "Likely exploitable (LEV): " + (rem.lev ? "yes" : "no") + " (EPSS ≥ 0.70 or active exploitation)",
+        "Likely exploitable (LEV): " + (rem.lev ? "yes" : "no") + " (EPSS ≥ 0.50 or active exploitation)",
         "Internet reachable (IRV): " + (rem.irv ? "yes" : "no")
       ].join("\n");
     }
@@ -600,7 +600,7 @@
         "  deadline = matrix[ Certification Class ][ PAIN ][ column ]",
         "",
         "  column = LEV+IRV | LEV+NIRV | NLEV",
-        "  LEV  (likely exploitable) = EPSS ≥ 0.70 OR exploitation = active",
+        "  LEV  (likely exploitable) = EPSS ≥ 0.50 OR exploitation = active",
         "  IRV  (internet reachable) = the affected resource is internet-reachable",
         "",
         "PAIN comes from the asset archetype (CR/IR/AR) × CVE impact × agency scope.",

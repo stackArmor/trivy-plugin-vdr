@@ -20,7 +20,7 @@ Only tenant-specific overrides. The plugin ships the full rubric built in:
 
 - the archetype catalog (CR/IR/AR per archetype),
 - the scoring algorithm,
-- the EPSS LEV threshold (`0.70`),
+- the EPSS LEV threshold (`0.50`),
 - the H/H/H **`unclassified`** cluster-default archetype that catches new or
   otherwise-unclassified resources (noisy PAIN-4, single-agency) so they surface
   for deliberate classification.

@@ -423,11 +423,11 @@ Tag workloads you control with `vdr.fedramp.io/asset-archetype: <archetype>` whe
 ```
 deadline = matrix[ Certification Class ][ PAIN ][ column ]
   column = LEV+IRV | LEV+NIRV | NLEV
-  LEV (likely exploitable) = EPSS >= 0.70  OR  exploitation = active
+  LEV (likely exploitable) = EPSS >= 0.50  OR  exploitation = active
   IRV (internet reachable) = the affected resource is internet-reachable
 ```
 
-So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively exploited asset. The EPSS LEV cutoff (0.70) is built into the plugin. PAIN-1 findings have no FedRAMP deadline. In the findings view the finding-level PAIN/deadline is the most urgent across all affected resources.
+So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively exploited asset. The EPSS LEV cutoff (0.50) is built into the plugin. PAIN-1 findings have no FedRAMP deadline. In the findings view the finding-level PAIN/deadline is the most urgent across all affected resources.
 
 ### Cluster configuration
 

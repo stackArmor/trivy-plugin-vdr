@@ -145,7 +145,7 @@ type Result struct {
 
 // Default returns the built-in rubric: the archetype catalog (14 named archetypes
 // plus the H/H/H "unclassified" cluster-default for new/unclassified resources),
-// standard label keys, an EPSS LEV threshold of 0.70, and a default Certification
+// standard label keys, an EPSS LEV threshold of 0.50, and a default Certification
 // Class of B. It carries no namespace/name rules (those are tenant-specific) and
 // assumes a single-tenant (single-agency) offering.
 func Default() *Config {
@@ -189,7 +189,7 @@ func Default() *Config {
 			Class:       "B",
 		},
 		WordThresholds:   defaultWordThresholds,
-		LEVEPSSThreshold: 0.70,
+		LEVEPSSThreshold: 0.50,
 	}
 }
 

@@ -10,7 +10,7 @@ session so the build can proceed (subagent per task). Read this, the
 1. **Exploitability downgrade = graduated adjustedEPSS** (implemented in the
    taxonomy, vdr-pain-relief 0.7.0). LEV stays binary. Controls never edit
    published EPSS; an `epss-residual` likelihood row lowers a local estimate
-   `adjustedEPSS = EPSS * strongest-residualFactor`, thresholded at 0.70.
+   `adjustedEPSS = EPSS * strongest-residualFactor`, thresholded at 0.50.
    **KEV frozen** (no factor, clock untouched). **Floor** defeated only binary
    via edge-auth. **No stacking** in v1 (lowest factor wins). **No taxonomy →
    adjustedEPSS = EPSS**, stock LEV. Only CC-LIKE-EDR-BLOCK carries a factor

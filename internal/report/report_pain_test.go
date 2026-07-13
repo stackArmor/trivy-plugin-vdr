@@ -38,7 +38,7 @@ func painFinding(id string, refs ...model.ResourceRef) model.Finding {
 		ImageRef:          "example/app:v1",
 		Severity:          "HIGH",
 		CVSSVector:        vecCIAHigh,
-		EPSS:              &model.EPSS{Score: 0.5},
+		EPSS:              &model.EPSS{Score: 0.49},
 		AffectedResources: refs,
 	}
 }
@@ -265,6 +265,9 @@ func TestRenderHTMLIncludesPainColumnAndData(t *testing.T) {
 	// dev-test N3, no LEV, no IRV => NLEV, Class B => 192 days.
 	if !strings.Contains(out, "\"deadline\":\"192 days\"") {
 		t.Error("HTML missing serialized FedRAMP remediation deadline")
+	}
+	if !strings.Contains(out, "EPSS ≥ 0.50") || strings.Contains(out, "EPSS ≥ 0.70") {
+		t.Error("HTML legend does not use the built-in EPSS LEV threshold of 0.50")
 	}
 }
 

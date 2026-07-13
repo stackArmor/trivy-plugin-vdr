@@ -27,8 +27,8 @@ func TestRemediationColumnsAndMatrix(t *testing.T) {
 		wantLEV   bool
 	}{
 		{"LEV+IRV via EPSS", dataSensitiveN5(0.8, "none", true), "LEV+IRV", 2, "2 days", true},
-		{"NLEV (low EPSS, no active)", dataSensitiveN5(0.5, "none", true), "NLEV", 16, "16 days", false},
-		{"LEV+NIRV via active exploitation", dataSensitiveN5(0.5, "active", false), "LEV+NIRV", 4, "4 days", true},
+		{"NLEV (low EPSS, no active)", dataSensitiveN5(0.49, "none", true), "NLEV", 16, "16 days", false},
+		{"LEV+NIRV via active exploitation", dataSensitiveN5(0.49, "active", false), "LEV+NIRV", 4, "4 days", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,12 +93,12 @@ func TestRemediationN1NoDeadline(t *testing.T) {
 }
 
 func TestLEVThresholdBoundary(t *testing.T) {
-	cfg := Default() // threshold 0.70
-	if !cfg.isLEV(Input{EPSS: 0.70}) {
-		t.Error("EPSS 0.70 should be LEV (>= threshold)")
+	cfg := Default() // threshold 0.50
+	if !cfg.isLEV(Input{EPSS: 0.50}) {
+		t.Error("EPSS 0.50 should be LEV (>= threshold)")
 	}
-	if cfg.isLEV(Input{EPSS: 0.69}) {
-		t.Error("EPSS 0.69 should not be LEV")
+	if cfg.isLEV(Input{EPSS: 0.49}) {
+		t.Error("EPSS 0.49 should not be LEV")
 	}
 	if !cfg.isLEV(Input{EPSS: -1, Exploitation: "active"}) {
 		t.Error("active exploitation should be LEV regardless of EPSS")
