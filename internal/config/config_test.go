@@ -643,8 +643,11 @@ func TestParseHelmHelpDescribesIngressGatewayAndValuesAlias(t *testing.T) {
 		t.Fatalf("Parse error = %v, want flag.ErrHelp", err)
 	}
 	for _, want := range []string{
-		"alias for --values for the Helm source",
-		"Ingress, ingress-controller, or Gateway API infrastructure",
+		"-f, --values FILE",
+		"Application chart:",
+		"Ingress and Gateway chart:",
+		"Ingress, ingress-controller, or Gateway",
+		"API infrastructure",
 		"rightmost file wins",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -823,7 +826,7 @@ func TestParseRejectsInvalidScanAndCacheFlags(t *testing.T) {
 	}
 }
 
-func TestParseHelpIncludesExamplesAndAliasSummary(t *testing.T) {
+func TestParseRootHelpOrganizesSourcesFlagsAndExamples(t *testing.T) {
 	var out strings.Builder
 	_, err := ParseWithOutput([]string{"--help"}, &out)
 	if !errors.Is(err, flag.ErrHelp) {
@@ -831,20 +834,52 @@ func TestParseHelpIncludesExamplesAndAliasSummary(t *testing.T) {
 	}
 	help := out.String()
 	for _, want := range []string{
-		"Common aliases:",
-		"-n, --namespace",
-		"-o, --output",
-		"-f, --format",
-		"-q, --quiet",
-		"-t, --timeout",
-		"-O, --oci-vex-included",
+		"Sources:",
+		"k8s       Scan workloads",
+		"cloudrun  Scan Cloud Run",
 		"Examples:",
-		"vdr k8s -n default -f table",
-		"vdr cloudrun --project my-gcp-project --region us-east4",
-		"vdr image -O nginx:1.25",
+		"vdr k8s -n default --format table",
+		"vdr cloudrun --project my-project --region us-east4 --reachability-only",
+		"vdr image nginx:1.25 ghcr.io/acme/api:v2",
+		"Common flags:",
+		"-f, --format FORMAT",
+		"-o, --output FILE",
+		"vdr <source> --help",
+		"For the helm source, -f means --values",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help output missing %q:\n%s", want, help)
+		}
+	}
+}
+
+func TestParseSourceHelpOnlyShowsRelevantFlags(t *testing.T) {
+	var out strings.Builder
+	_, err := ParseWithOutput([]string{"k8s", "--help"}, &out)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("Parse error = %v, want flag.ErrHelp", err)
+	}
+	help := out.String()
+	for _, want := range []string{
+		"Usage:\n  vdr k8s [flags]",
+		"Kubernetes source:",
+		"-n, --namespace NAMESPACE",
+		"Private registries:",
+		"workload imagePullSecrets",
+		"local Docker config",
+		"Exposure and scan modes:",
+		"Vulnerability scanning:",
+		"Registry authentication and VEX:",
+		"Cache management:",
+		"Report output:",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("k8s help output missing %q:\n%s", want, help)
+		}
+	}
+	for _, unwanted := range []string{"--project PROJECT", "--region REGION", "--values FILE", "--ingress-chart CHART"} {
+		if strings.Contains(help, unwanted) {
+			t.Fatalf("k8s help unexpectedly contains %q:\n%s", unwanted, help)
 		}
 	}
 }

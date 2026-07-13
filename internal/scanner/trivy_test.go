@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/registry"
 )
 
 func TestTrivyRunnerBuildsImageScanCommand(t *testing.T) {
@@ -786,6 +787,27 @@ func TestTrivyRunnerDockerEnv(t *testing.T) {
 	env := (TrivyRunner{DockerConfigDir: "/tmp/x"}).dockerEnv()
 	if len(env) != 1 || env[0] != "DOCKER_CONFIG=/tmp/x" {
 		t.Fatalf("dockerEnv() = %v, want [DOCKER_CONFIG=/tmp/x]", env)
+	}
+}
+
+func TestTrivyRunnerRegistryEnvUsesOnlyMatchingHostCredentials(t *testing.T) {
+	runner := TrivyRunner{
+		DockerConfigDir: "/tmp/x",
+		RegistryAuths: map[string]registry.DockerAuth{
+			"registry.example.com": {Username: "user", Password: "password"},
+			"other.example.com":    {Username: "other", Password: "secret"},
+		},
+	}
+	want := []string{
+		"DOCKER_CONFIG=/tmp/x",
+		"TRIVY_USERNAME=user",
+		"TRIVY_PASSWORD=password",
+	}
+	if got := runner.registryEnv("registry.example.com/team/app:v1"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("registryEnv() = %v, want %v", got, want)
+	}
+	if got := runner.registryEnv("unknown.example.com/team/app:v1"); !reflect.DeepEqual(got, []string{"DOCKER_CONFIG=/tmp/x"}) {
+		t.Fatalf("registryEnv() for unknown host = %v, want Docker config only", got)
 	}
 }
 

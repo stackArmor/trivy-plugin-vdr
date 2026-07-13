@@ -145,6 +145,7 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 	}
 
 	var dockerConfigDir string
+	var registryAuths map[string]registry.DockerAuth
 	if !cfg.SkipRegistryAuth {
 		res, buildErr := registry.Build(ctx, inventoryImageRefs(inventory), collection.PullSecretAuths, registry.Options{
 			EnableGcloud:                 !cfg.NoGcloudAuth,
@@ -157,6 +158,7 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 		}
 		defer res.Cleanup()
 		dockerConfigDir = res.Dir
+		registryAuths = res.Credentials
 		for _, warning := range res.Warnings {
 			warnings = append(warnings, "registry auth: "+warning)
 			logger.Warn("registry auth: %s", warning)
@@ -164,7 +166,7 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 		logger.Info("registry auth: configured credentials for %d registries (%d from rendered secrets)", res.Registries, len(collection.PullSecretAuths))
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, exposures)
 }
 
 func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
@@ -209,6 +211,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 
 	var dockerConfigDir string
+	var registryAuths map[string]registry.DockerAuth
 	if !cfg.SkipRegistryAuth {
 		secretAuths, secretWarnings, err := collector.CollectPullSecretAuths(ctx, k8sOptions, logger)
 		if err != nil {
@@ -227,6 +230,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 		defer res.Cleanup()
 		dockerConfigDir = res.Dir
+		registryAuths = res.Credentials
 		for _, w := range res.Warnings {
 			warnings = append(warnings, "registry auth: "+w)
 		}
@@ -239,7 +243,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, exposures)
 }
 
 func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
@@ -287,6 +291,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 	}
 
 	var dockerConfigDir string
+	var registryAuths map[string]registry.DockerAuth
 	if !cfg.SkipRegistryAuth {
 		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
 			EnableGcloud:                 !cfg.NoGcloudAuth,
@@ -299,6 +304,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 		}
 		defer res.Cleanup()
 		dockerConfigDir = res.Dir
+		registryAuths = res.Credentials
 		for _, w := range res.Warnings {
 			warnings = append(warnings, "registry auth: "+w)
 			logger.Warn("registry auth: %s", w)
@@ -306,7 +312,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, exposures)
 }
 
 func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
@@ -357,6 +363,7 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 
 	var dockerConfigDir string
+	var registryAuths map[string]registry.DockerAuth
 	if !cfg.SkipRegistryAuth {
 		secretAuths, secretWarnings := ecs.RepositoryCredentialAuths(ctx, taskDefinitions, client)
 		for _, w := range secretWarnings {
@@ -374,6 +381,7 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		}
 		defer res.Cleanup()
 		dockerConfigDir = res.Dir
+		registryAuths = res.Credentials
 		for _, w := range res.Warnings {
 			warnings = append(warnings, "registry auth: "+w)
 			logger.Warn("registry auth: %s", w)
@@ -381,7 +389,7 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, exposures)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, exposures)
 }
 
 func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
@@ -390,6 +398,7 @@ func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 
 	var warnings []string
 	var dockerConfigDir string
+	var registryAuths map[string]registry.DockerAuth
 	if !cfg.SkipRegistryAuth {
 		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
 			EnableGcloud:                 !cfg.NoGcloudAuth,
@@ -402,6 +411,7 @@ func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 		}
 		defer res.Cleanup()
 		dockerConfigDir = res.Dir
+		registryAuths = res.Credentials
 		for _, w := range res.Warnings {
 			warnings = append(warnings, "registry auth: "+w)
 			logger.Warn("registry auth: %s", w)
@@ -409,14 +419,15 @@ func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
 	}
 
-	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, nil)
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, nil)
 }
 
-func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, warnings []string, dockerConfigDir string, exposures map[model.ResourceRef]model.Exposure) error {
+func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, warnings []string, dockerConfigDir string, registryAuths map[string]registry.DockerAuth, exposures map[model.ResourceRef]model.Exposure) error {
 	trivyRunner := scanner.TrivyRunner{
 		ImageSrc:         cfg.ImageSrc,
 		CacheDir:         cfg.CacheDir,
 		DockerConfigDir:  dockerConfigDir,
+		RegistryAuths:    registryAuths,
 		OCIVEXIncluded:   cfg.OCIVEXIncluded,
 		VEXOCIRegistries: cfg.VEXOCIRegistries,
 		Logger:           logger,

@@ -18,6 +18,7 @@ import (
 	"github.com/distribution/reference"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/registry"
 )
 
 const defaultTrivyBinary = "trivy"
@@ -46,6 +47,9 @@ type TrivyRunner struct {
 	ImageSrc        string
 	CacheDir        string
 	DockerConfigDir string
+	// RegistryAuths provides normalized host-scoped credentials. Each image scan
+	// receives only the credentials matching that image's registry.
+	RegistryAuths map[string]registry.DockerAuth
 	// OCIVEXIncluded enables --vex oci for every scanned image.
 	OCIVEXIncluded bool
 	// VEXOCIRegistries enables --vex oci for images whose registry/repository
@@ -181,7 +185,7 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 		args = append(args, "--skip-dir", dir)
 	}
 	args = append(args, "--timeout", timeout.String(), image)
-	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
+	stdout, stderr, err := r.imageCommandRunner(image).Run(ctx, r.binary(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("trivy image scan failed for %q: %w: %s", image, err, string(bytes.TrimSpace(stderr)))
 	}
@@ -809,6 +813,34 @@ func (r TrivyRunner) dockerEnv() []string {
 		return nil
 	}
 	return []string{"DOCKER_CONFIG=" + r.DockerConfigDir}
+}
+
+func (r TrivyRunner) imageCommandRunner(image string) CommandRunner {
+	if r.CommandRunner != nil {
+		return r.CommandRunner
+	}
+	return execCommandRunner{extraEnv: r.registryEnv(image)}
+}
+
+// registryEnv augments the host-scoped Docker config with Trivy's explicit
+// credential variables. Trivy does not consistently consume generated Docker
+// configs for every registry implementation, while its explicit credential
+// path is stable. Credentials are selected for one image host at a time so they
+// are never offered to an unrelated registry.
+func (r TrivyRunner) registryEnv(image string) []string {
+	env := r.dockerEnv()
+	ref, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		return env
+	}
+	auth, ok := r.RegistryAuths[reference.Domain(ref)]
+	if !ok || (auth.Username == "" && auth.Password == "") {
+		return env
+	}
+	return append(env,
+		"TRIVY_USERNAME="+auth.Username,
+		"TRIVY_PASSWORD="+auth.Password,
+	)
 }
 
 type execCommandRunner struct {

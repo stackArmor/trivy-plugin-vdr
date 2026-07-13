@@ -40,6 +40,10 @@ type Result struct {
 	Warnings []string
 	// Registries is the number of hosts with credentials configured.
 	Registries int
+	// Credentials contains normalized host-scoped credentials for callers that
+	// need to pass authentication directly to a registry client. Values must
+	// never be logged.
+	Credentials map[string]DockerAuth
 }
 
 // Build merges k8s secret credentials with cloud-CLI tokens for the registries
@@ -126,7 +130,11 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 		}
 	}
 
-	result := Result{Cleanup: func() {}, Warnings: warnings, Registries: len(auths)}
+	credentials := make(map[string]DockerAuth, len(auths))
+	for host, auth := range auths {
+		credentials[host] = normalizeAuth(auth)
+	}
+	result := Result{Cleanup: func() {}, Warnings: warnings, Registries: len(auths), Credentials: credentials}
 	if len(auths) == 0 {
 		return result, nil
 	}

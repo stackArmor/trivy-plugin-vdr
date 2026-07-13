@@ -70,6 +70,10 @@ func TestBuildGcloudCalledOnceForMultipleGARHosts(t *testing.T) {
 		if a.Username != "oauth2accesstoken" || a.Password != "gar-token" {
 			t.Fatalf("unexpected GAR auth for %s: %+v", host, a)
 		}
+		credential, ok := res.Credentials[host]
+		if !ok || credential.Username != a.Username || credential.Password != a.Password {
+			t.Fatalf("result credential for %s does not match Docker config", host)
+		}
 	}
 }
 

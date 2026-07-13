@@ -183,9 +183,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 
 	fs := flag.NewFlagSet("vdr", flag.ContinueOnError)
 	fs.SetOutput(output)
+	helpSource := ""
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: vdr <source> [flags]\n       vdr image [flags] IMAGE...\n       vdr helm CHART [flags]\n\nSources:\n  k8s\n  cloudrun\n  ecs\n  image\n  helm\n\nCommon aliases:\n  -n, --namespace\n  -o, --output\n  -f, --format (-f means --values for the helm source)\n  -q, --quiet\n  -t, --timeout\n  -O, --oci-vex-included\n\nExamples:\n  vdr k8s -n default -f table\n  vdr k8s --namespace prod,dev --output vdr-k8s.json\n  vdr cloudrun --project my-gcp-project --region us-east4\n  vdr ecs --region us-gov-west-1\n  vdr image -O nginx:1.25\n  vdr helm ./chart -f values.yaml --format json\n\nFlags:\n")
-		fs.PrintDefaults()
+		printHelp(fs, helpSource)
 	}
 	fs.StringVar(&cfg.Project, "project", cfg.Project, "Google Cloud project for cloudrun source")
 	fs.Var(&regions, "region", "cloud region for cloudrun or ecs source; may be repeated")
@@ -253,6 +253,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	if source != SourceK8s && source != SourceCloudRun && source != SourceECS && source != SourceImage && source != SourceHelm {
 		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, cloudrun, ecs, image, helm", source)
 	}
+	helpSource = source
 
 	flagArgs := fs.Args()[1:]
 	if source == SourceHelm {

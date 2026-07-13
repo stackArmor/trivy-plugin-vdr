@@ -19,7 +19,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Per-finding FedRAMP Rev5 VDR **PAIN** (Potential Agency Impact, N1–N5) and **VDR-TFR-PVR** remediation deadline, driven by an asset-archetype classification (see [PAIN scoring and remediation](#pain-scoring-and-remediation)).
 - Optional standalone HTML report with per-finding PAIN and FedRAMP remediation deadlines, plus filter controls for severity (multi-select), PAIN, namespace, internet exposure, automatable, exploitation status, EPSS score, technical impact, and remediation deadline (multi-select).
 - Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
-- Automatic private-registry authentication from Kubernetes `imagePullSecrets`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
+- Automatic private-registry authentication from the local Docker config, Kubernetes `imagePullSecrets`, ECS task `repositoryCredentials`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
 - Resilient scanning: a single image that fails to pull or scan is reported as a warning and the run continues, producing a partial (still enriched) report.
 - INFO-level progress logging to stderr by default.
 - Shared JSON model for inventory, findings, EPSS, CISA Vulnrichment, exposure, access protection, reports, and summaries.
@@ -159,7 +159,10 @@ rules:
 
 Notes:
 
-- `secrets/get` is only needed when registry auth from Kubernetes `imagePullSecrets` is enabled. Use `--skip-registry-auth` or `--reachability-only` to avoid reading Secrets.
+- Choose one of these Secret-access options when registry authentication from Kubernetes `imagePullSecrets` is enabled:
+  - **Any referenced Secret:** keep the `secrets/get` ClusterRole rule above. VDR can get any Secret by name, but it still cannot list or watch Secrets.
+  - **Only approved Secret names:** omit the `secrets/get` rule above and apply the namespace-scoped [`vdr-image-pull-secret-reader` example](examples/rbac/vdr-image-pull-secret-reader.yaml), customized with the exact `imagePullSecret` names. Repeat it in each scanned namespace.
+- Use `--skip-registry-auth` or `--reachability-only` to avoid reading Secrets entirely.
 - `configmaps/get` is used for the optional `fedramp-vdr-trivy/vdr-fedramp` scoring ConfigMap.
 - Exposure resources are optional for vulnerability scan reports. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis. `--reachability-only` requires exposure resources and cannot be combined with `--skip-exposure`.
 - If you never use AWS ALB/Gateway resources, the `elbv2.k8s.aws` and `gateway.k8s.aws` rules can be omitted. If you never use GKE ingress/gateway IAP metadata, the `cloud.google.com/backendconfigs` and `networking.gke.io/gcpbackendpolicies` rules can be omitted.
@@ -211,13 +214,20 @@ Use `--refresh-enrichment` to force EPSS and Vulnrichment refresh attempts even 
 
 ## Private registry authentication
 
-Before scanning, `vdr` assembles Docker credentials so Trivy can pull private images, and hands them to Trivy through a temporary `DOCKER_CONFIG` directory (written owner-only and removed when the run ends). Credentials come from three sources:
+Before scanning, `vdr` assembles Docker credentials so Trivy can pull private images. It writes an owner-only temporary `DOCKER_CONFIG` directory that is removed when the run ends. For each image scan, it also passes only the credential matching that image's registry through Trivy's explicit credential environment, which supports registries that do not consume the generated Docker config consistently. Credentials come from four sources:
 
-- **Kubernetes `imagePullSecrets`** — the `kubernetes.io/dockerconfigjson` (and legacy `kubernetes.io/dockercfg`) Secrets referenced by the scanned workloads' pod specs.
+- **Local Docker config** — credentials in `$DOCKER_CONFIG/config.json`, or `~/.docker/config.json` when `DOCKER_CONFIG` is unset.
+- **Deployment credentials** — Kubernetes `kubernetes.io/dockerconfigjson` (and legacy `kubernetes.io/dockercfg`) `imagePullSecrets` referenced by scanned pod specs, plus AWS Secrets Manager credentials referenced by ECS task `repositoryCredentials`.
 - **Google Artifact Registry / GCR** — for `*.pkg.dev`, `gcr.io`, and `*.gcr.io` images, `vdr` runs `gcloud auth print-access-token` once.
 - **AWS ECR** — for `*.dkr.ecr.<region>.amazonaws.com` images, `vdr` runs `aws ecr get-login-password --region <region>` once per registry.
 
 A cluster secret always wins over a cloud-CLI token for the same registry host. Tokens are never logged. Each source degrades gracefully: a missing/unauthenticated `gcloud` or `aws` CLI, an unreadable Secret, or an RBAC denial produces a warning, not a failure (affected images then surface as per-image scan warnings).
+
+Customers can choose broad or limited Secret access. The broad ClusterRole rule
+allows VDR to `get` any referenced Secret by name without allowing `list` or
+`watch`. For tighter access, omit that broad rule and restrict `get` to exact
+`imagePullSecret` names with `Role.rules[].resourceNames`; see the
+[`vdr-image-pull-secret-reader` RBAC example](examples/rbac/vdr-image-pull-secret-reader.yaml).
 
 Flags:
 
@@ -275,7 +285,7 @@ rules:
     verbs: ["get", "list"]
 ```
 
-Bind it with a `ClusterRoleBinding` for all namespaces, or a `RoleBinding` per namespace when using `--namespace` and when you do not need cluster-scoped resources such as `namespaces` and `ingressclasses`. If `--skip-registry-auth` is set, the `secrets get` rule can be omitted; otherwise unreadable pull Secrets are reported as warnings and affected private images may fail to scan.
+Bind it with a `ClusterRoleBinding` for all namespaces, or a `RoleBinding` per namespace when using `--namespace` and when you do not need cluster-scoped resources such as `namespaces` and `ingressclasses`. The displayed `secrets/get` rule is the broad option: it permits getting any Secret by name but not listing or watching Secrets. For exact-name access, omit that rule and apply the namespace-scoped [`vdr-image-pull-secret-reader` example](examples/rbac/vdr-image-pull-secret-reader.yaml). If `--skip-registry-auth` is set, Secret access can be omitted entirely; otherwise unreadable pull Secrets are reported as warnings and affected private images may fail to scan.
 
 For GKE IAM-based Kubernetes API access, `roles/container.viewer` is enough for workload, namespace, Service, Ingress, Gateway, ConfigMap, and GKE exposure metadata reads, but it does not include Secret reads. Reading image-pull Secrets through GKE IAM requires a role containing `container.secrets.get` such as `roles/container.developer`, or a narrower custom role. Prefer Kubernetes RBAC when possible because it can grant `get` on Secrets without broad write access.
 
