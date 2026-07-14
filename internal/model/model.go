@@ -186,9 +186,14 @@ type SecurityProfile struct {
 }
 
 type Finding struct {
-	ID                  string                   `json:"id"`
-	ImageRef            string                   `json:"imageRef"`
-	NormalizedImage     string                   `json:"normalizedImage,omitempty"`
+	ID              string `json:"id"`
+	ImageRef        string `json:"imageRef"`
+	NormalizedImage string `json:"normalizedImage,omitempty"`
+	// ImageRefs lists every distinct image reference the duplicates merged by
+	// report deduplication (on by default; disable with --no-dedupe) were found
+	// in, sorted. Populated only when duplicates span more than one image;
+	// ImageRef remains the survivor's image.
+	ImageRefs           []string                 `json:"imageRefs,omitempty"`
 	Target              string                   `json:"target,omitempty"`
 	TargetClass         string                   `json:"targetClass,omitempty"`
 	TargetType          string                   `json:"targetType,omitempty"`

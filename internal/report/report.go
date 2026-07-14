@@ -27,6 +27,10 @@ type Options struct {
 	Warnings            []string
 	ClassificationOnly  bool
 	SuppressEnrichments bool
+	// Dedupe merges findings that share the same vulnerability ID, package name,
+	// and installed version across images and scan targets (findings view), and
+	// collapses duplicate findings within each resource (resources view).
+	Dedupe bool
 	// Scoring is the FedRAMP PAIN rubric. When nil, the built-in default rubric
 	// (scoring.Default) is used.
 	Scoring *scoring.Config
@@ -60,7 +64,15 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 
 	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS, options.SuppressEnrichments)
 	active, suppressed := partitionFindings(filtered)
-	resourceReports := buildResourceReports(inventory, active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly)
+	resourceReports := buildResourceReports(inventory, active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly, options.Dedupe)
+	if options.Dedupe {
+		// The resources view deduplicates per resource inside buildResourceReports
+		// (a merged survivor carries a single image's scalar fields, which would be
+		// wrong on other images' resources). The global merge below feeds the
+		// summary, the findings view, and the suppressed list.
+		active = dedupeFindings(active)
+		suppressed = dedupeFindings(suppressed)
+	}
 	report := model.Report{
 		GeneratedAt:        options.GeneratedAt,
 		ContextName:        contextName,
@@ -233,7 +245,7 @@ func RenderTable(w io.Writer, report model.Report) error {
 			vulnrichmentValue(finding.Vulnrichment, "exploitation"),
 			vulnrichmentValue(finding.Vulnrichment, "technicalImpact"),
 			formatCWEs(finding.CWEs),
-			finding.ImageRef,
+			findingImage(finding),
 			formatAffectedResources(finding.AffectedResources),
 		); err != nil {
 			return err
@@ -278,7 +290,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 			finding.Status,
 			formatAffectedClasses(finding.Affected),
 			formatAffectedArchetypes(finding.Affected),
-			finding.ImageRef,
+			findingImage(finding),
 			formatExposure(finding.Exposure),
 			formatAffectedResources(finding.AffectedResources),
 		); err != nil {
@@ -300,7 +312,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 				suppressionJustification(finding.Suppression),
 				formatAffectedClasses(finding.Affected),
 				formatAffectedArchetypes(finding.Affected),
-				finding.ImageRef,
+				findingImage(finding),
 				formatExposure(finding.Exposure),
 				formatAffectedResources(finding.AffectedResources),
 			); err != nil {
@@ -309,6 +321,15 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 		}
 	}
 	return tw.Flush()
+}
+
+// findingImage renders the image column for a finding: all merged images when
+// deduplication combined records from more than one, else the single image ref.
+func findingImage(finding model.Finding) string {
+	if len(finding.ImageRefs) > 0 {
+		return strings.Join(finding.ImageRefs, ",")
+	}
+	return finding.ImageRef
 }
 
 // formatPackage renders the vulnerable package as "name installed → fixed", using
@@ -349,7 +370,7 @@ func renderSuppressedTable(w io.Writer, findings []model.Finding) error {
 			suppressionJustification(finding.Suppression),
 			formatPain(finding.WouldHaveBeenPain),
 			formatRemediation(finding.WouldHaveBeenRemediation),
-			finding.ImageRef,
+			findingImage(finding),
 			formatAffectedResources(finding.AffectedResources),
 		); err != nil {
 			return err
@@ -387,7 +408,7 @@ func filterFindings(findings []model.Finding, minSeverity string, minEPSS float6
 	return filtered
 }
 
-func buildResourceReports(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.ResourceReport {
+func buildResourceReports(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly, dedupe bool) []model.ResourceReport {
 	if inventory == nil {
 		return nil
 	}
@@ -410,8 +431,26 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 		}
 		reports[ref] = report
 	}
+	var seen map[model.ResourceRef]map[dedupeKey]struct{}
+	if dedupe {
+		seen = map[model.ResourceRef]map[dedupeKey]struct{}{}
+	}
 	for _, finding := range findings {
 		for _, ref := range finding.AffectedResources {
+			if dedupe {
+				// Duplicates within one resource always share the same image, so the
+				// first occurrence (input is sorted) is representative.
+				keys := seen[ref]
+				if keys == nil {
+					keys = map[dedupeKey]struct{}{}
+					seen[ref] = keys
+				}
+				key := findingDedupeKey(finding)
+				if _, dup := keys[key]; dup {
+					continue
+				}
+				keys[key] = struct{}{}
+			}
 			report := reports[ref]
 			if report == nil {
 				report = &model.ResourceReport{Resource: ref}
@@ -743,6 +782,7 @@ func bestExposure(resources []model.ResourceRef, exposures map[model.ResourceRef
 func cloneFinding(finding model.Finding) model.Finding {
 	clone := finding
 	clone.VendorSeverity = copyStringMap(finding.VendorSeverity)
+	clone.ImageRefs = append([]string(nil), finding.ImageRefs...)
 	clone.VendorIDs = append([]string(nil), finding.VendorIDs...)
 	clone.References = append([]string(nil), finding.References...)
 	clone.CWEs = append([]string(nil), finding.CWEs...)

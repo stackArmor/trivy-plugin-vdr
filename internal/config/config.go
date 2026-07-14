@@ -60,6 +60,7 @@ type Config struct {
 	IncludeZeroDaemonSets        bool
 	Format                       string
 	View                         string
+	Dedupe                       bool
 	Output                       string
 	CacheDir                     string
 	Timeout                      time.Duration
@@ -180,6 +181,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	apiVersions := orderedList(cfg.APIVersions)
 	timeout := cfg.Timeout.String()
 	minEPSS := strconv.FormatFloat(cfg.MinEPSS, 'f', -1, 64)
+	noDedupe := !cfg.Dedupe
 
 	fs := flag.NewFlagSet("vdr", flag.ContinueOnError)
 	fs.SetOutput(output)
@@ -196,6 +198,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.Format, "format", cfg.Format, "output format: json, table, or cyclonedx")
 	fs.StringVar(&cfg.Format, "f", cfg.Format, "alias for --format")
 	fs.StringVar(&cfg.View, "view", cfg.View, "report view: findings or resources")
+	fs.BoolVar(&noDedupe, "no-dedupe", noDedupe, "keep duplicate findings instead of merging findings that share the same vulnerability ID, package name, and installed version")
 	fs.StringVar(&cfg.Output, "output", cfg.Output, "write output to file")
 	fs.StringVar(&cfg.Output, "o", cfg.Output, "alias for --output")
 	fs.StringVar(&cfg.CacheDir, "cache-dir", cfg.CacheDir, "cache directory")
@@ -469,6 +472,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		cfg.AllNamespaces = false
 	}
 
+	cfg.Dedupe = !noDedupe
+
 	if err := validateFormat(cfg.Format); err != nil {
 		return Config{}, err
 	}
@@ -504,6 +509,7 @@ func Default() Config {
 		IncludeZeroDaemonSets: false,
 		Format:                FormatJSON,
 		View:                  ViewFindings,
+		Dedupe:                true,
 		CacheDir:              filepath.Join(home, ".cache", "trivy", "vdr"),
 		Timeout:               30 * time.Minute,
 		ImageSrc:              "remote",

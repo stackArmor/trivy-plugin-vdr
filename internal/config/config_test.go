@@ -71,6 +71,19 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.SkipRegistryAuth || cfg.NoGcloudAuth || cfg.NoECRAuth || cfg.Quiet {
 		t.Fatalf("registry auth/quiet flags = %v/%v/%v/%v, want all false", cfg.SkipRegistryAuth, cfg.NoGcloudAuth, cfg.NoECRAuth, cfg.Quiet)
 	}
+	if !cfg.Dedupe {
+		t.Fatal("Dedupe = false, want true")
+	}
+}
+
+func TestParseNoDedupe(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--no-dedupe"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Dedupe {
+		t.Fatal("Dedupe = true, want false with --no-dedupe")
+	}
 }
 
 func TestParseRegistryAuthAndLogFlags(t *testing.T) {

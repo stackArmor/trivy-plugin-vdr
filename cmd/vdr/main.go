@@ -441,7 +441,6 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 		trivyRunner.SkipDBUpdate = true
 	}
 	trivyRunner = trivyRunner.WithSelfHeal()
-
 	// For parallel scans, give each worker an isolated cache directory (databases
 	// hardlinked from the shared cache, private scan cache) so concurrent scans
 	// don't deadlock on Trivy's shared cache lock.
@@ -511,6 +510,9 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 }
 
 func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, findings []model.Finding, warnings []string, exposures map[model.ResourceRef]model.Exposure) error {
+	if cfg.Dedupe {
+		logger.Info("duplicate findings are merged by default since v2.0.0; pass --no-dedupe for the previous behavior")
+	}
 	scoringConfig := scoring.Default()
 	if cfg.ScoringConfig != "" {
 		loaded, scErr := scoring.Load(cfg.ScoringConfig)
@@ -547,6 +549,7 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 		Scoring:             scoringConfig,
 		ClassificationOnly:  cfg.ScanReachabilityOnly,
 		SuppressEnrichments: cfg.ScanReachabilityOnly,
+		Dedupe:              cfg.Dedupe,
 	})
 	if err := writePrimaryReport(stdout, cfg.Output, cfg.Format, primary); err != nil {
 		return err
@@ -560,6 +563,7 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 			Scoring:             scoringConfig,
 			ClassificationOnly:  cfg.ScanReachabilityOnly,
 			SuppressEnrichments: cfg.ScanReachabilityOnly,
+			Dedupe:              cfg.Dedupe,
 		})
 		if err := writeHTMLReport(cfg.HTMLOutput, cfg.HTMLTemplate, htmlReport); err != nil {
 			return err
