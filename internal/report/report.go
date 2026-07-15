@@ -139,19 +139,21 @@ func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, 
 		InternetReachable: internetReachable,
 	})
 	pain := &model.Pain{
-		Tier:            res.Tier,
-		Word:            res.Word,
-		Severity:        res.Severity,
-		Archetype:       res.Archetype,
-		ArchetypeSource: res.ArchetypeSource,
-		SeveritySource:  res.SeveritySource,
-		CR:              res.CR,
-		IR:              res.IR,
-		AR:              res.AR,
-		MultiAgency:     res.MultiAgency,
+		Tier:              res.Tier,
+		Word:              res.Word,
+		Severity:          res.Severity,
+		Archetype:         res.Archetype,
+		ArchetypeSource:   res.ArchetypeSource,
+		SeveritySource:    res.SeveritySource,
+		CR:                res.CR,
+		IR:                res.IR,
+		AR:                res.AR,
+		MultiAgency:       res.MultiAgency,
+		MultiAgencySource: res.MultiAgencySource,
 	}
 	rem := &model.Remediation{
 		Class:        res.Class,
+		ClassSource:  res.ClassSource,
 		Column:       res.Column,
 		LEV:          res.LEV,
 		IRV:          res.IRV,
@@ -630,6 +632,7 @@ func classificationFromScore(pain *model.Pain, remediation *model.Remediation) *
 	classification := &model.AssetClassification{}
 	if remediation != nil {
 		classification.Class = remediation.Class
+		classification.ClassSource = remediation.ClassSource
 	}
 	if pain != nil {
 		classification.Archetype = pain.Archetype

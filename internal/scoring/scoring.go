@@ -119,7 +119,7 @@ type Input struct {
 	Severity        string
 	Namespace       string
 	WorkloadName    string
-	WorkloadKind    string // Kubernetes kind (Job, Deployment, ...); used by kindRules
+	WorkloadKind    string            // Kubernetes kind (Job, Deployment, ...); used by kindRules
 	Labels          map[string]string // workload labels
 	NamespaceLabels map[string]string // labels on the namespace object
 
@@ -149,8 +149,14 @@ type Result struct {
 	IR              string
 	AR              string
 	MultiAgency     bool
+	// MultiAgencySource records which signal set MultiAgency:
+	// label | namespaceLabel | multiAgencyNamespaces | default | failsafe.
+	MultiAgencySource string
 	// Remediation (FedRAMP VDR-TFR-PVR)
-	Class            string
+	Class string
+	// ClassSource records which signal set Class:
+	// label | namespaceLabel | default | builtin.
+	ClassSource      string
 	LEV              bool
 	IRV              bool
 	Column           string  // LEV+IRV | LEV+NIRV | NLEV
@@ -364,34 +370,39 @@ func (c *Config) Score(in Input) Result {
 	s := math.Min(isc, 0.915) / 0.915
 	word := c.wordFromScalar(s)
 
-	multi := c.resolveMultiAgency(in.Namespace, in.Labels, in.NamespaceLabels)
+	multi, multiSource := c.resolveMultiAgency(in.Namespace, in.Labels, in.NamespaceLabels)
 	effectiveMulti := multi || forceMulti
+	if forceMulti && !multi {
+		multiSource = "failsafe"
+	}
 	tier := tierFromWord(word, effectiveMulti)
 
 	// Remediation: FedRAMP VDR-TFR-PVR matrix[Class][PAIN][column].
-	class := c.resolveClass(in.Labels, in.NamespaceLabels)
+	class, classSource := c.resolveClass(in.Labels, in.NamespaceLabels)
 	lev := c.isLEV(in)
 	irv := in.InternetReachable
 	column := remediationColumn(lev, irv)
 	days, label := remediationDeadline(class, tier, column)
 
 	return Result{
-		Tier:             tier,
-		Word:             word,
-		Severity:         s,
-		Archetype:        arch,
-		ArchetypeSource:  source,
-		SeveritySource:   sevSource,
-		CR:               normalizeReq(a.CR),
-		IR:               normalizeReq(a.IR),
-		AR:               normalizeReq(a.AR),
-		MultiAgency:      effectiveMulti,
-		Class:            class,
-		LEV:              lev,
-		IRV:              irv,
-		Column:           column,
-		DeadlineDays:     days,
-		RemediationLabel: label,
+		Tier:              tier,
+		Word:              word,
+		Severity:          s,
+		Archetype:         arch,
+		ArchetypeSource:   source,
+		SeveritySource:    sevSource,
+		CR:                normalizeReq(a.CR),
+		IR:                normalizeReq(a.IR),
+		AR:                normalizeReq(a.AR),
+		MultiAgency:       effectiveMulti,
+		MultiAgencySource: multiSource,
+		Class:             class,
+		ClassSource:       classSource,
+		LEV:               lev,
+		IRV:               irv,
+		Column:            column,
+		DeadlineDays:      days,
+		RemediationLabel:  label,
 	}
 }
 
@@ -540,33 +551,33 @@ func (c *Config) resolveAssetValueSignal(namespace, name, kind string, labels, n
 
 // resolveMultiAgency: workload label > namespace label > multiAgencyNamespaces
 // match > cluster default.
-func (c *Config) resolveMultiAgency(namespace string, labels, nsLabels map[string]string) bool {
+func (c *Config) resolveMultiAgency(namespace string, labels, nsLabels map[string]string) (bool, string) {
 	if b, ok := parseBoolLabel(labels[c.LabelKeys.MultiAgency]); ok {
-		return b
+		return b, "label"
 	}
 	if b, ok := parseBoolLabel(nsLabels[c.LabelKeys.MultiAgency]); ok {
-		return b
+		return b, "namespaceLabel"
 	}
 	for _, glob := range c.MultiAgencyNamespaces {
 		if ok, _ := path.Match(glob, namespace); ok {
-			return true
+			return true, "multiAgencyNamespaces"
 		}
 	}
-	return c.Defaults.MultiAgency
+	return c.Defaults.MultiAgency, "default"
 }
 
 // resolveClass: workload label > namespace label > cluster default > "B".
-func (c *Config) resolveClass(labels, nsLabels map[string]string) string {
+func (c *Config) resolveClass(labels, nsLabels map[string]string) (string, string) {
 	if v := normalizeClass(labels[c.LabelKeys.Class]); v != "" {
-		return v
+		return v, "label"
 	}
 	if v := normalizeClass(nsLabels[c.LabelKeys.Class]); v != "" {
-		return v
+		return v, "namespaceLabel"
 	}
 	if v := normalizeClass(c.Defaults.Class); v != "" {
-		return v
+		return v, "default"
 	}
-	return "B"
+	return "B", "builtin"
 }
 
 func (c *Config) isLEV(in Input) bool {

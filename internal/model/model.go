@@ -373,6 +373,7 @@ type Affected struct {
 
 type AssetClassification struct {
 	Class           string `json:"class,omitempty"`
+	ClassSource     string `json:"classSource,omitempty"`
 	Archetype       string `json:"archetype,omitempty"`
 	ArchetypeSource string `json:"archetypeSource,omitempty"`
 }
@@ -381,7 +382,12 @@ type AssetClassification struct {
 // on an asset, selected by the provider Certification Class, the PAIN rating, and
 // the exploitability column (LEV+IRV | LEV+NIRV | NLEV).
 type Remediation struct {
-	Class        string  `json:"class"`        // A|B|C|D
+	Class string `json:"class"` // A|B|C|D
+	// ClassSource records which signal set Class: label | namespaceLabel |
+	// default | builtin. "default" means the cluster-wide class (ConfigMap or
+	// --scoring-config) applied because no label was present; "builtin" means
+	// nothing was configured anywhere and the hard-coded Class B applied.
+	ClassSource  string  `json:"classSource,omitempty"`
 	Column       string  `json:"column"`       // LEV+IRV|LEV+NIRV|NLEV
 	LEV          bool    `json:"lev"`          // likely exploitable
 	IRV          bool    `json:"irv"`          // internet reachable
@@ -403,6 +409,11 @@ type Pain struct {
 	IR              string  `json:"ir"`                       // integrity requirement (L|M|H)
 	AR              string  `json:"ar"`                       // availability requirement (L|M|H)
 	MultiAgency     bool    `json:"multiAgency"`              // effective scope used (incl. fail-safe)
+	// MultiAgencySource records which signal set MultiAgency: label |
+	// namespaceLabel | multiAgencyNamespaces | default | failsafe. "default" means
+	// the cluster-wide value (ConfigMap or built-in false) applied because no
+	// label or namespace glob matched.
+	MultiAgencySource string `json:"multiAgencySource,omitempty"`
 }
 
 type Report struct {

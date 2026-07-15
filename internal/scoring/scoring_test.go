@@ -567,3 +567,81 @@ func TestKindRuleValidation(t *testing.T) {
 		t.Error("expected error for kindRule with unknown archetype")
 	}
 }
+
+func TestClassAndMultiAgencySources(t *testing.T) {
+	cfg := Default()
+
+	// The built-in rubric ships Class B as a configured default.
+	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web", WorkloadKind: "Deployment"})
+	if r.Class != "B" || r.ClassSource != "default" {
+		t.Errorf("Class/ClassSource = %s/%s, want B/default", r.Class, r.ClassSource)
+	}
+	if r.MultiAgency || r.MultiAgencySource != "default" {
+		t.Errorf("MultiAgency/Source = %v/%s, want false/default", r.MultiAgency, r.MultiAgencySource)
+	}
+
+	// With no default configured at all, the hard-coded Class B is attributed
+	// to builtin.
+	cfg.Defaults.Class = ""
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web"})
+	if r.Class != "B" || r.ClassSource != "builtin" {
+		t.Errorf("Class/ClassSource = %s/%s, want B/builtin", r.Class, r.ClassSource)
+	}
+
+	// Cluster ConfigMap default class.
+	if err := cfg.ApplyClusterDefaults(map[string]string{"class": "C"}); err != nil {
+		t.Fatalf("ApplyClusterDefaults error: %v", err)
+	}
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web"})
+	if r.Class != "C" || r.ClassSource != "default" {
+		t.Errorf("Class/ClassSource = %s/%s, want C/default", r.Class, r.ClassSource)
+	}
+
+	// Workload labels win and are attributed.
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web",
+		Labels: map[string]string{"vdr.fedramp.io/class": "A", "vdr.fedramp.io/multi-agency": "true"}})
+	if r.Class != "A" || r.ClassSource != "label" {
+		t.Errorf("Class/ClassSource = %s/%s, want A/label", r.Class, r.ClassSource)
+	}
+	if !r.MultiAgency || r.MultiAgencySource != "label" {
+		t.Errorf("MultiAgency/Source = %v/%s, want true/label", r.MultiAgency, r.MultiAgencySource)
+	}
+
+	// Namespace labels are attributed separately.
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web",
+		NamespaceLabels: map[string]string{"vdr.fedramp.io/class": "D", "vdr.fedramp.io/multi-agency": "true"}})
+	if r.Class != "D" || r.ClassSource != "namespaceLabel" {
+		t.Errorf("Class/ClassSource = %s/%s, want D/namespaceLabel", r.Class, r.ClassSource)
+	}
+	if !r.MultiAgency || r.MultiAgencySource != "namespaceLabel" {
+		t.Errorf("MultiAgency/Source = %v/%s, want true/namespaceLabel", r.MultiAgency, r.MultiAgencySource)
+	}
+
+	// Namespace glob list.
+	cfg.MultiAgencyNamespaces = []string{"shared-*"}
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "shared-api", WorkloadName: "gw"})
+	if !r.MultiAgency || r.MultiAgencySource != "multiAgencyNamespaces" {
+		t.Errorf("MultiAgency/Source = %v/%s, want true/multiAgencyNamespaces", r.MultiAgency, r.MultiAgencySource)
+	}
+}
+
+func TestFailsafeForcesMultiAgencySource(t *testing.T) {
+	cfg := Default()
+	cfg.Defaults.Archetype = "" // no default archetype => fail-safe path
+
+	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "x", WorkloadName: "y"})
+	if r.ArchetypeSource != "failsafe" {
+		t.Fatalf("ArchetypeSource = %s, want failsafe", r.ArchetypeSource)
+	}
+	if !r.MultiAgency || r.MultiAgencySource != "failsafe" {
+		t.Errorf("MultiAgency/Source = %v/%s, want true/failsafe (forced by fail-safe)", r.MultiAgency, r.MultiAgencySource)
+	}
+
+	// An explicit label saying true keeps its own attribution even on the
+	// fail-safe path.
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "x", WorkloadName: "y",
+		Labels: map[string]string{"vdr.fedramp.io/multi-agency": "true"}})
+	if !r.MultiAgency || r.MultiAgencySource != "label" {
+		t.Errorf("MultiAgency/Source = %v/%s, want true/label", r.MultiAgency, r.MultiAgencySource)
+	}
+}
