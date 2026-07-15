@@ -571,13 +571,13 @@ func TestKindRuleValidation(t *testing.T) {
 func TestClassAndMultiAgencySources(t *testing.T) {
 	cfg := Default()
 
-	// The built-in rubric ships Class B as a configured default.
+	// Nothing configured beyond the built-in rubric: both attribute to builtin.
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web", WorkloadKind: "Deployment"})
-	if r.Class != "B" || r.ClassSource != "default" {
-		t.Errorf("Class/ClassSource = %s/%s, want B/default", r.Class, r.ClassSource)
+	if r.Class != "B" || r.ClassSource != "builtin" {
+		t.Errorf("Class/ClassSource = %s/%s, want B/builtin", r.Class, r.ClassSource)
 	}
-	if r.MultiAgency || r.MultiAgencySource != "default" {
-		t.Errorf("MultiAgency/Source = %v/%s, want false/default", r.MultiAgency, r.MultiAgencySource)
+	if r.MultiAgency || r.MultiAgencySource != "builtin" {
+		t.Errorf("MultiAgency/Source = %v/%s, want false/builtin", r.MultiAgency, r.MultiAgencySource)
 	}
 
 	// With no default configured at all, the hard-coded Class B is attributed
@@ -588,13 +588,17 @@ func TestClassAndMultiAgencySources(t *testing.T) {
 		t.Errorf("Class/ClassSource = %s/%s, want B/builtin", r.Class, r.ClassSource)
 	}
 
-	// Cluster ConfigMap default class.
-	if err := cfg.ApplyClusterDefaults(map[string]string{"class": "C"}); err != nil {
+	// Cluster ConfigMap defaults are attributed to configMap, even when the
+	// multiAgency value matches the built-in zero value.
+	if err := cfg.ApplyClusterDefaults(map[string]string{"class": "C", "multiAgency": "false"}); err != nil {
 		t.Fatalf("ApplyClusterDefaults error: %v", err)
 	}
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web"})
-	if r.Class != "C" || r.ClassSource != "default" {
-		t.Errorf("Class/ClassSource = %s/%s, want C/default", r.Class, r.ClassSource)
+	if r.Class != "C" || r.ClassSource != "configMap" {
+		t.Errorf("Class/ClassSource = %s/%s, want C/configMap", r.Class, r.ClassSource)
+	}
+	if r.MultiAgency || r.MultiAgencySource != "configMap" {
+		t.Errorf("MultiAgency/Source = %v/%s, want false/configMap", r.MultiAgency, r.MultiAgencySource)
 	}
 
 	// Workload labels win and are attributed.
@@ -643,5 +647,35 @@ func TestFailsafeForcesMultiAgencySource(t *testing.T) {
 		Labels: map[string]string{"vdr.fedramp.io/multi-agency": "true"}})
 	if !r.MultiAgency || r.MultiAgencySource != "label" {
 		t.Errorf("MultiAgency/Source = %v/%s, want true/label", r.MultiAgency, r.MultiAgencySource)
+	}
+}
+
+func TestScoringConfigDefaultsAreAttributed(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "scoring.yaml")
+	body := "defaults:\n  class: A\n  multiAgency: true\n"
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(file)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+
+	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web"})
+	if r.Class != "A" || r.ClassSource != "scoringConfig" {
+		t.Errorf("Class/ClassSource = %s/%s, want A/scoringConfig", r.Class, r.ClassSource)
+	}
+	if !r.MultiAgency || r.MultiAgencySource != "scoringConfig" {
+		t.Errorf("MultiAgency/Source = %v/%s, want true/scoringConfig", r.MultiAgency, r.MultiAgencySource)
+	}
+
+	// A ConfigMap layered on top takes over the attribution.
+	if err := cfg.ApplyClusterDefaults(map[string]string{"class": "C"}); err != nil {
+		t.Fatalf("ApplyClusterDefaults error: %v", err)
+	}
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web"})
+	if r.Class != "C" || r.ClassSource != "configMap" {
+		t.Errorf("Class/ClassSource = %s/%s, want C/configMap", r.Class, r.ClassSource)
 	}
 }

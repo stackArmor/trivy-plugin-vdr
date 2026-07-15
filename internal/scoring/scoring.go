@@ -111,6 +111,14 @@ type Config struct {
 	// LEVEPSSThreshold is the EPSS score at or above which a finding is considered
 	// Likely Exploitable (LEV). FedRAMP leaves the framework to the provider.
 	LEVEPSSThreshold float64 `json:"levEpssThreshold" yaml:"levEpssThreshold"`
+
+	// classOrigin/multiAgencyOrigin track which layer supplied the cluster-wide
+	// Defaults values, for provenance reporting: "scoringConfig" (--scoring-config
+	// file) or "configMap" (in-cluster ConfigMap). Empty means the built-in
+	// rubric's value is still in effect. Unexported so config files cannot spoof
+	// them.
+	classOrigin       string
+	multiAgencyOrigin string
 }
 
 // Input describes one finding-on-asset to be scored.
@@ -150,12 +158,13 @@ type Result struct {
 	AR              string
 	MultiAgency     bool
 	// MultiAgencySource records which signal set MultiAgency:
-	// label | namespaceLabel | multiAgencyNamespaces | default | failsafe.
+	// label | namespaceLabel | multiAgencyNamespaces | configMap | scoringConfig
+	// | builtin | failsafe.
 	MultiAgencySource string
 	// Remediation (FedRAMP VDR-TFR-PVR)
 	Class string
 	// ClassSource records which signal set Class:
-	// label | namespaceLabel | default | builtin.
+	// label | namespaceLabel | configMap | scoringConfig | builtin.
 	ClassSource      string
 	LEV              bool
 	IRV              bool
@@ -225,8 +234,15 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	pre := cfg.Defaults
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse scoring config %q: %w", path, err)
+	}
+	if cfg.Defaults.Class != pre.Class {
+		cfg.classOrigin = "scoringConfig"
+	}
+	if cfg.Defaults.MultiAgency != pre.MultiAgency {
+		cfg.multiAgencyOrigin = "scoringConfig"
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("scoring config %q: %w", path, err)
@@ -250,6 +266,7 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	// operator could change ad hoc); only --scoring-config or the built-in default
 	// may set them. Preserve whatever is already in effect across the merge.
 	savedThresholds := c.WordThresholds
+	pre := c.Defaults
 	for _, key := range []string{"scoring.yaml", "scoring", "config.yaml", "config"} {
 		doc, ok := data[key]
 		if !ok || strings.TrimSpace(doc) == "" {
@@ -261,8 +278,15 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 		break
 	}
 	c.WordThresholds = savedThresholds
+	if c.Defaults.Class != pre.Class {
+		c.classOrigin = "configMap"
+	}
+	if c.Defaults.MultiAgency != pre.MultiAgency {
+		c.multiAgencyOrigin = "configMap"
+	}
 	if v := normalizeClass(data["class"]); v != "" {
 		c.Defaults.Class = v
+		c.classOrigin = "configMap"
 	}
 	av := data["assetValue"]
 	if av == "" {
@@ -277,6 +301,7 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	}
 	if b, ok := parseBoolLabel(ma); ok {
 		c.Defaults.MultiAgency = b
+		c.multiAgencyOrigin = "configMap"
 	}
 	return c.validate()
 }
@@ -563,7 +588,10 @@ func (c *Config) resolveMultiAgency(namespace string, labels, nsLabels map[strin
 			return true, "multiAgencyNamespaces"
 		}
 	}
-	return c.Defaults.MultiAgency, "default"
+	if c.multiAgencyOrigin != "" {
+		return c.Defaults.MultiAgency, c.multiAgencyOrigin
+	}
+	return c.Defaults.MultiAgency, "builtin"
 }
 
 // resolveClass: workload label > namespace label > cluster default > "B".
@@ -575,7 +603,10 @@ func (c *Config) resolveClass(labels, nsLabels map[string]string) (string, strin
 		return v, "namespaceLabel"
 	}
 	if v := normalizeClass(c.Defaults.Class); v != "" {
-		return v, "default"
+		if c.classOrigin != "" {
+			return v, c.classOrigin
+		}
+		return v, "builtin"
 	}
 	return "B", "builtin"
 }

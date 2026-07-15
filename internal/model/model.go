@@ -389,9 +389,10 @@ type AssetClassification struct {
 type Remediation struct {
 	Class string `json:"class"` // A|B|C|D
 	// ClassSource records which signal set Class: label | namespaceLabel |
-	// default | builtin. "default" means the cluster-wide class (ConfigMap or
-	// --scoring-config) applied because no label was present; "builtin" means
-	// nothing was configured anywhere and the hard-coded Class B applied.
+	// configMap | scoringConfig | builtin. "configMap" means the in-cluster
+	// vdr-fedramp ConfigMap class applied because no label was present;
+	// "scoringConfig" means a --scoring-config file set it; "builtin" means
+	// nothing was configured anywhere and the built-in Class B applied.
 	ClassSource  string  `json:"classSource,omitempty"`
 	Column       string  `json:"column"`       // LEV+IRV|LEV+NIRV|NLEV
 	LEV          bool    `json:"lev"`          // likely exploitable
@@ -415,9 +416,10 @@ type Pain struct {
 	AR              string  `json:"ar"`                       // availability requirement (L|M|H)
 	MultiAgency     bool    `json:"multiAgency"`              // effective scope used (incl. fail-safe)
 	// MultiAgencySource records which signal set MultiAgency: label |
-	// namespaceLabel | multiAgencyNamespaces | default | failsafe. "default" means
-	// the cluster-wide value (ConfigMap or built-in false) applied because no
-	// label or namespace glob matched.
+	// namespaceLabel | multiAgencyNamespaces | configMap | scoringConfig |
+	// builtin | failsafe. "configMap" means the in-cluster vdr-fedramp ConfigMap
+	// value applied because no label or namespace glob matched; "builtin" means
+	// nothing was configured anywhere.
 	MultiAgencySource string `json:"multiAgencySource,omitempty"`
 }
 
