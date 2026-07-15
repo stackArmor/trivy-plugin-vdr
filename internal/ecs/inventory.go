@@ -177,7 +177,8 @@ func copyStringMap(values map[string]string) map[string]string {
 }
 
 func containerSecurity(container ContainerDefinition) *model.ContainerSecurity {
-	if !container.Privileged && !container.ReadonlyRootFilesystem && len(container.CapabilitiesAdd) == 0 && len(container.CapabilitiesDrop) == 0 {
+	seccomp, apparmor := dockerSecurityProfiles(container.DockerSecurityOptions)
+	if !container.Privileged && !container.ReadonlyRootFilesystem && len(container.CapabilitiesAdd) == 0 && len(container.CapabilitiesDrop) == 0 && seccomp == nil && apparmor == nil {
 		return nil
 	}
 	privileged := container.Privileged
@@ -187,7 +188,39 @@ func containerSecurity(container ContainerDefinition) *model.ContainerSecurity {
 		ReadOnlyRootFilesystem: &readonly,
 		CapabilitiesAdd:        append([]string(nil), container.CapabilitiesAdd...),
 		CapabilitiesDrop:       append([]string(nil), container.CapabilitiesDrop...),
+		SeccompProfile:         seccomp,
+		AppArmorProfile:        apparmor,
 	}
+}
+
+// dockerSecurityProfiles maps ECS dockerSecurityOptions entries (EC2 launch
+// type) to seccomp and AppArmor profiles. Docker option syntax is
+// "seccomp:<profile-or-unconfined>" and "apparmor:<profile-or-unconfined>";
+// other entries (no-new-privileges, label:, credentialspec:) have no profile
+// representation and are ignored.
+func dockerSecurityProfiles(options []string) (*model.SecurityProfile, *model.SecurityProfile) {
+	var seccomp, apparmor *model.SecurityProfile
+	for _, option := range options {
+		key, value, found := strings.Cut(option, ":")
+		if !found {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "seccomp":
+			seccomp = dockerSecurityProfile(value)
+		case "apparmor":
+			apparmor = dockerSecurityProfile(value)
+		}
+	}
+	return seccomp, apparmor
+}
+
+func dockerSecurityProfile(value string) *model.SecurityProfile {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "unconfined") {
+		return &model.SecurityProfile{Type: "Unconfined"}
+	}
+	return &model.SecurityProfile{Type: "Localhost", LocalhostProfile: value}
 }
 
 func (b *inventoryBuilder) finish() *model.Inventory {

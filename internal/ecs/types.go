@@ -31,6 +31,7 @@ type ContainerDefinition struct {
 	User                           string
 	CapabilitiesAdd                []string
 	CapabilitiesDrop               []string
+	DockerSecurityOptions          []string
 	InitProcessEnabled             *bool
 	LogDriver                      string
 	RepositoryCredentialsSecretARN string

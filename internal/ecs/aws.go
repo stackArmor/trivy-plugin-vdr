@@ -231,6 +231,7 @@ func convertContainerDefinition(container types.ContainerDefinition) ContainerDe
 		Privileged:             aws.ToBool(container.Privileged),
 		ReadonlyRootFilesystem: aws.ToBool(container.ReadonlyRootFilesystem),
 		User:                   aws.ToString(container.User),
+		DockerSecurityOptions:  append([]string(nil), container.DockerSecurityOptions...),
 	}
 	if container.LinuxParameters != nil {
 		converted.InitProcessEnabled = container.LinuxParameters.InitProcessEnabled

@@ -178,6 +178,11 @@ type ContainerSecurity struct {
 	ReadOnlyRootFilesystem *bool            `json:"readOnlyRootFilesystem,omitempty"`
 	SeccompProfile         *SecurityProfile `json:"seccompProfile,omitempty"`
 	AppArmorProfile        *SecurityProfile `json:"appArmorProfile,omitempty"`
+	// Sandbox records a platform-enforced isolation boundary around the
+	// container, when one is known: "gVisor" (Cloud Run gen1 user-space kernel)
+	// or "microVM" (Cloud Run gen2). Empty when the platform does not declare
+	// one (Kubernetes, ECS) or the execution environment is unspecified.
+	Sandbox string `json:"sandbox,omitempty"`
 }
 
 type SecurityProfile struct {

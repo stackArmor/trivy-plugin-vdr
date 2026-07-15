@@ -214,3 +214,83 @@ func (f *fakeInventoryClient) ListJobs(ctx context.Context, project, region stri
 func (f *fakeInventoryClient) GetProjectLabels(ctx context.Context, project string) (map[string]string, error) {
 	return copyStringMap(f.projectLabels), nil
 }
+
+func TestCollectSetsPlatformSecurityMetadata(t *testing.T) {
+	client := &fakeInventoryClient{
+		services: map[string][]Service{
+			"us-east4": {{
+				Project:              "armory-gss-prod",
+				Region:               "us-east4",
+				Name:                 "peregrine",
+				ExecutionEnvironment: "gen2",
+				Containers:           []Container{{Name: "gateway", Image: "us-east4-docker.pkg.dev/p/peregrine/gateway:1"}},
+			}},
+		},
+		jobs: map[string][]Job{
+			"us-east4": {{
+				Project:              "armory-gss-prod",
+				Region:               "us-east4",
+				Name:                 "migrate",
+				ExecutionEnvironment: "gen1",
+				Containers:           []Container{{Name: "migrate", Image: "us-east4-docker.pkg.dev/p/migrate/migrate:1"}},
+			}},
+		},
+	}
+	collector := Collector{Client: client}
+
+	got, err := collector.Collect(context.Background(), Options{Project: "armory-gss-prod", Regions: []string{"us-east4"}})
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if len(got.Resources) != 2 {
+		t.Fatalf("resources = %d, want 2: %#v", len(got.Resources), got.Resources)
+	}
+	for _, resource := range got.Resources {
+		if len(resource.Images) != 1 {
+			t.Fatalf("images = %#v, want 1 for %s", resource.Images, resource.Resource.Name)
+		}
+		security := resource.Images[0].Security
+		if security == nil {
+			t.Fatalf("Security = nil for %s, want platform-enforced metadata", resource.Resource.Name)
+		}
+		if security.Privileged == nil || *security.Privileged {
+			t.Fatalf("Privileged = %#v for %s, want false (platform-enforced)", security.Privileged, resource.Resource.Name)
+		}
+		if security.ReadOnlyRootFilesystem == nil || *security.ReadOnlyRootFilesystem {
+			t.Fatalf("ReadOnlyRootFilesystem = %#v for %s, want false (in-memory writable)", security.ReadOnlyRootFilesystem, resource.Resource.Name)
+		}
+		switch resource.Resource.Kind {
+		case "Service":
+			if security.Sandbox != "microVM" {
+				t.Fatalf("Service Sandbox = %q, want microVM for gen2", security.Sandbox)
+			}
+		case "Job":
+			if security.Sandbox != "gVisor" {
+				t.Fatalf("Job Sandbox = %q, want gVisor for gen1", security.Sandbox)
+			}
+		}
+	}
+}
+
+func TestCollectLeavesSandboxEmptyForDefaultExecutionEnvironment(t *testing.T) {
+	client := &fakeInventoryClient{
+		services: map[string][]Service{
+			"us-east4": {{
+				Project:    "armory-gss-prod",
+				Region:     "us-east4",
+				Name:       "peregrine",
+				Containers: []Container{{Name: "gateway", Image: "us-east4-docker.pkg.dev/p/peregrine/gateway:1"}},
+			}},
+		},
+	}
+	collector := Collector{Client: client}
+
+	got, err := collector.Collect(context.Background(), Options{Project: "armory-gss-prod", Regions: []string{"us-east4"}})
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	security := got.Resources[0].Images[0].Security
+	if security == nil || security.Sandbox != "" {
+		t.Fatalf("Security = %#v, want sandbox empty when execution environment is unspecified", security)
+	}
+}

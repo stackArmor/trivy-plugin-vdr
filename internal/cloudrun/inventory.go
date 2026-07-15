@@ -93,7 +93,7 @@ func (b *inventoryBuilder) addService(service Service) {
 	}
 	ref.CanonicalID = cloudRunBaseCanonicalID(ref)
 	ref.DisplayID = ref.CanonicalID
-	b.addResource(ref, service.Labels, service.Containers, skipDirsForRuntime(service.RuntimeClassName))
+	b.addResource(ref, service.Labels, service.Containers, skipDirsForRuntime(service.RuntimeClassName), service.ExecutionEnvironment)
 }
 
 func (b *inventoryBuilder) addJob(job Job) {
@@ -108,21 +108,41 @@ func (b *inventoryBuilder) addJob(job Job) {
 	ref.UID = cloudRunUID(job.Project, job.Region, ref.Kind, job.Name)
 	ref.CanonicalID = cloudRunBaseCanonicalID(ref)
 	ref.DisplayID = ref.CanonicalID
-	b.addResource(ref, job.Labels, job.Containers, nil)
+	b.addResource(ref, job.Labels, job.Containers, nil, job.ExecutionEnvironment)
 }
 
-func (b *inventoryBuilder) addResource(resource model.ResourceRef, labels map[string]string, containers []Container, skipDirs []string) {
+// cloudRunContainerSecurity reports the security posture Cloud Run enforces on
+// every container: never privileged, no capability changes, and a writable
+// in-memory root filesystem. Sandbox is set when the execution environment is
+// explicit: gen1 runs under the gVisor user-space kernel, gen2 in a microVM.
+func cloudRunContainerSecurity(executionEnvironment string) *model.ContainerSecurity {
+	privileged := false
+	readOnly := false
+	security := &model.ContainerSecurity{
+		Privileged:             &privileged,
+		ReadOnlyRootFilesystem: &readOnly,
+	}
+	switch executionEnvironment {
+	case "gen1":
+		security.Sandbox = "gVisor"
+	case "gen2":
+		security.Sandbox = "microVM"
+	}
+	return security
+}
+
+func (b *inventoryBuilder) addResource(resource model.ResourceRef, labels map[string]string, containers []Container, skipDirs []string, executionEnvironment string) {
 	resourceInventory := model.ResourceInventory{Resource: resource, Labels: copyStringMap(labels)}
 	singleContainer := len(containers) == 1
 	for _, container := range containers {
-		b.addContainer(&resourceInventory, resource, container, skipDirs, singleContainer)
+		b.addContainer(&resourceInventory, resource, container, skipDirs, singleContainer, executionEnvironment)
 	}
 	if len(resourceInventory.Images) > 0 {
 		b.inventory.Resources = append(b.inventory.Resources, resourceInventory)
 	}
 }
 
-func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, container Container, skipDirs []string, singleContainer bool) {
+func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, container Container, skipDirs []string, singleContainer bool, executionEnvironment string) {
 	if container.Image == "" {
 		return
 	}
@@ -136,6 +156,7 @@ func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInvento
 		ContainerType:   "container",
 		ImageRef:        container.Image,
 		NormalizedImage: normalized,
+		Security:        cloudRunContainerSecurity(executionEnvironment),
 	})
 
 	ref := resource

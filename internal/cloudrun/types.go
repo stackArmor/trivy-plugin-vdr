@@ -26,18 +26,24 @@ type Service struct {
 	URI                string
 	RuntimeClassName   string
 	InvokerIAMDisabled bool
-	Labels             map[string]string
-	Annotations        map[string]string
-	Containers         []Container
+	// ExecutionEnvironment is the explicit Cloud Run execution environment
+	// ("gen1" or "gen2"); empty when the service uses the platform default.
+	ExecutionEnvironment string
+	Labels               map[string]string
+	Annotations          map[string]string
+	Containers           []Container
 }
 
 type Job struct {
-	Project     string
-	Region      string
-	Name        string
-	Labels      map[string]string
-	Annotations map[string]string
-	Containers  []Container
+	Project string
+	Region  string
+	Name    string
+	// ExecutionEnvironment is the explicit Cloud Run execution environment
+	// ("gen1" or "gen2"); empty when the job uses the platform default.
+	ExecutionEnvironment string
+	Labels               map[string]string
+	Annotations          map[string]string
+	Containers           []Container
 }
 
 type InventoryClient interface {

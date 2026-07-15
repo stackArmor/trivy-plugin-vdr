@@ -102,3 +102,38 @@ func TestSecurityMetadataIsPreservedInResourceReports(t *testing.T) {
 		t.Fatalf("ProviderMetadata = %#v", scanReport.Resources[0].ProviderMetadata)
 	}
 }
+
+func TestDockerSecurityOptionsMapToProfiles(t *testing.T) {
+	taskDefinition := TaskDefinition{
+		Region:   "us-east-1",
+		Arn:      "arn:aws:ecs:us-east-1:123:task-definition/edge:3",
+		Family:   "edge",
+		Revision: 3,
+		Containers: []ContainerDefinition{{
+			Name:  "edge",
+			Image: "example.com/edge:1",
+			DockerSecurityOptions: []string{
+				"no-new-privileges",
+				"seccomp:/etc/seccomp/edge.json",
+				"apparmor:unconfined",
+			},
+		}},
+	}
+
+	got := buildInventoryFromTaskDefinitions([]TaskDefinition{taskDefinition})
+
+	if len(got.Resources) != 1 || len(got.Resources[0].Images) != 1 {
+		t.Fatalf("inventory = %#v, want one resource/image", got)
+	}
+	security := got.Resources[0].Images[0].Security
+	if security == nil {
+		t.Fatal("Security = nil, want profiles from dockerSecurityOptions")
+	}
+	want := &model.SecurityProfile{Type: "Localhost", LocalhostProfile: "/etc/seccomp/edge.json"}
+	if !reflect.DeepEqual(security.SeccompProfile, want) {
+		t.Fatalf("SeccompProfile = %#v, want %#v", security.SeccompProfile, want)
+	}
+	if security.AppArmorProfile == nil || security.AppArmorProfile.Type != "Unconfined" {
+		t.Fatalf("AppArmorProfile = %#v, want Unconfined", security.AppArmorProfile)
+	}
+}

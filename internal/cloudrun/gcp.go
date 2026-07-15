@@ -592,9 +592,21 @@ func serviceFromPB(project, region string, service *runpb.Service) Service {
 		Ingress:            ingressFromPB(service.GetIngress()),
 		URI:                service.GetUri(),
 		InvokerIAMDisabled: service.GetInvokerIamDisabled(),
-		Labels:             copyStringMap(service.GetLabels()),
-		Annotations:        copyStringMap(service.GetAnnotations()),
-		Containers:         containersFromPB(service.GetTemplate().GetContainers()),
+		ExecutionEnvironment: executionEnvironmentFromPB(service.GetTemplate().GetExecutionEnvironment()),
+		Labels:               copyStringMap(service.GetLabels()),
+		Annotations:          copyStringMap(service.GetAnnotations()),
+		Containers:           containersFromPB(service.GetTemplate().GetContainers()),
+	}
+}
+
+func executionEnvironmentFromPB(env runpb.ExecutionEnvironment) string {
+	switch env {
+	case runpb.ExecutionEnvironment_EXECUTION_ENVIRONMENT_GEN1:
+		return "gen1"
+	case runpb.ExecutionEnvironment_EXECUTION_ENVIRONMENT_GEN2:
+		return "gen2"
+	default:
+		return ""
 	}
 }
 
@@ -615,16 +627,33 @@ func serviceFromV1(project, region string, service *runv1.Service) Service {
 		templateSpec = service.Spec.Template.Spec
 	}
 	return Service{
-		Project:            project,
-		Region:             region,
-		Name:               path.Base(name),
-		Ingress:            ingressFromAnnotation(annotations["run.googleapis.com/ingress"]),
-		URI:                serviceURLV1(service),
-		RuntimeClassName:   runtimeClassNameV1(templateSpec),
-		InvokerIAMDisabled: parseBoolAnnotation(annotations["run.googleapis.com/invoker-iam-disabled"]),
-		Labels:             copyStringMap(labels),
-		Annotations:        copyStringMap(annotations),
-		Containers:         containersFromV1(templateSpec),
+		Project:              project,
+		Region:               region,
+		Name:                 path.Base(name),
+		Ingress:              ingressFromAnnotation(annotations["run.googleapis.com/ingress"]),
+		URI:                  serviceURLV1(service),
+		RuntimeClassName:     runtimeClassNameV1(templateSpec),
+		InvokerIAMDisabled:   parseBoolAnnotation(annotations["run.googleapis.com/invoker-iam-disabled"]),
+		ExecutionEnvironment: executionEnvironmentV1(service),
+		Labels:               copyStringMap(labels),
+		Annotations:          copyStringMap(annotations),
+		Containers:           containersFromV1(templateSpec),
+	}
+}
+
+// executionEnvironmentV1 reads the explicit execution environment from the
+// revision template annotation ("gen1"/"gen2"); empty means platform default.
+func executionEnvironmentV1(service *runv1.Service) string {
+	if service.Spec == nil || service.Spec.Template == nil || service.Spec.Template.Metadata == nil {
+		return ""
+	}
+	switch service.Spec.Template.Metadata.Annotations["run.googleapis.com/execution-environment"] {
+	case "gen1":
+		return "gen1"
+	case "gen2":
+		return "gen2"
+	default:
+		return ""
 	}
 }
 
@@ -660,12 +689,13 @@ func containersFromV1(spec *runv1.RevisionSpec) []Container {
 
 func jobFromPB(project, region string, job *runpb.Job) Job {
 	return Job{
-		Project:     project,
-		Region:      region,
-		Name:        path.Base(job.GetName()),
-		Labels:      copyStringMap(job.GetLabels()),
-		Annotations: copyStringMap(job.GetAnnotations()),
-		Containers:  containersFromPB(job.GetTemplate().GetTemplate().GetContainers()),
+		Project:              project,
+		Region:               region,
+		Name:                 path.Base(job.GetName()),
+		ExecutionEnvironment: executionEnvironmentFromPB(job.GetTemplate().GetTemplate().GetExecutionEnvironment()),
+		Labels:               copyStringMap(job.GetLabels()),
+		Annotations:          copyStringMap(job.GetAnnotations()),
+		Containers:           containersFromPB(job.GetTemplate().GetTemplate().GetContainers()),
 	}
 }
 
