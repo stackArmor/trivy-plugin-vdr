@@ -424,7 +424,9 @@ type Pain struct {
 }
 
 type Report struct {
-	GeneratedAt time.Time `json:"generatedAt"`
+	GeneratedAt    time.Time `json:"generatedAt"`
+	ScannerVersion string    `json:"scannerVersion"`
+	PluginVersion  string    `json:"pluginVersion"`
 	// ContextName is the Kubernetes context (kubectx) the inventory was collected
 	// from. Shown in the report header.
 	ContextName string `json:"contextName,omitempty"`

@@ -61,9 +61,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           bin="vdr"
+          version="${GITHUB_REF_NAME#v}"
 
           echo "Building ${GOOS}/${GOARCH} at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$bin" ./cmd/vdr
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/stackArmor/trivy-plugin-vdr/internal/buildinfo.PluginVersion=${version}" -o "$bin" ./cmd/vdr
 
           tar -czf "dist/vdr_${GOOS}_${GOARCH}.tar.gz" "$bin" plugin.yaml
 

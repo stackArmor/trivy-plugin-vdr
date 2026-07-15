@@ -16,6 +16,36 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/registry"
 )
 
+func TestTrivyRunnerVersion(t *testing.T) {
+	fake := &fakeCommandRunner{
+		stdout: []byte(`{"Version":"0.72.0","VulnerabilityDB":{"Version":2}}`),
+	}
+	runner := TrivyRunner{Binary: "trivy-test", CommandRunner: fake}
+
+	got, err := runner.Version(context.Background())
+	if err != nil {
+		t.Fatalf("Version returned error: %v", err)
+	}
+	if got != "0.72.0" {
+		t.Fatalf("Version = %q, want 0.72.0", got)
+	}
+	if fake.name != "trivy-test" {
+		t.Fatalf("command name = %q, want trivy-test", fake.name)
+	}
+	wantArgs := []string{"version", "--format", "json"}
+	if !reflect.DeepEqual(fake.args, wantArgs) {
+		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
+	}
+}
+
+func TestTrivyRunnerVersionRejectsMissingVersion(t *testing.T) {
+	runner := TrivyRunner{CommandRunner: &fakeCommandRunner{stdout: []byte(`{"VulnerabilityDB":{"Version":2}}`)}}
+
+	if _, err := runner.Version(context.Background()); err == nil {
+		t.Fatal("Version returned nil error for response without Version")
+	}
+}
+
 func TestTrivyRunnerBuildsImageScanCommand(t *testing.T) {
 	fake := &fakeCommandRunner{
 		stdout: []byte(`{"Results":[]}`),

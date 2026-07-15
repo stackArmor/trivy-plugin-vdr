@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/buildinfo"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudrun"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/ecs"
@@ -141,7 +142,7 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures)
 	}
 
 	var dockerConfigDir string
@@ -207,7 +208,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures)
 	}
 
 	var dockerConfigDir string
@@ -287,7 +288,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures)
 	}
 
 	var dockerConfigDir string
@@ -359,7 +360,7 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures)
 	}
 
 	var dockerConfigDir string
@@ -497,7 +498,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 
 	warnings = append(warnings, scannerWarnings(scanWarnings)...)
 
-	if err := reportInventory(cfg, logger, stdout, inventory, findings, warnings, exposures); err != nil {
+	if err := reportInventory(ctx, cfg, logger, stdout, inventory, findings, warnings, exposures); err != nil {
 		return err
 	}
 
@@ -509,7 +510,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 	return nil
 }
 
-func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, findings []model.Finding, warnings []string, exposures map[model.ResourceRef]model.Exposure) error {
+func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, findings []model.Finding, warnings []string, exposures map[model.ResourceRef]model.Exposure) error {
 	if cfg.Dedupe {
 		logger.Info("duplicate findings are merged by default since v2.0.0; pass --no-dedupe for the previous behavior")
 	}
@@ -541,7 +542,14 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 	if cfg.Format == config.FormatCycloneDX {
 		primaryView = report.ViewResources
 	}
+	scannerVersion, versionErr := (scanner.TrivyRunner{}).Version(ctx)
+	if versionErr != nil {
+		scannerVersion = "unknown"
+		logger.Warn("could not determine Trivy version: %v", versionErr)
+	}
 	primary := report.Build(inventory, findings, exposures, report.Options{
+		ScannerVersion:      scannerVersion,
+		PluginVersion:       buildinfo.PluginVersion,
 		View:                primaryView,
 		MinSeverity:         cfg.MinSeverity,
 		MinEPSS:             cfg.MinEPSS,
@@ -556,6 +564,8 @@ func reportInventory(cfg config.Config, logger *log.Logger, stdout io.Writer, in
 	}
 	if cfg.HTMLOutput != "" {
 		htmlReport := report.Build(inventory, findings, exposures, report.Options{
+			ScannerVersion:      scannerVersion,
+			PluginVersion:       buildinfo.PluginVersion,
 			View:                report.ViewResources,
 			MinSeverity:         cfg.MinSeverity,
 			MinEPSS:             cfg.MinEPSS,

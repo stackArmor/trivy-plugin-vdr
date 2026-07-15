@@ -21,6 +21,8 @@ const (
 
 type Options struct {
 	GeneratedAt         time.Time
+	ScannerVersion      string
+	PluginVersion       string
 	View                string
 	MinSeverity         string
 	MinEPSS             float64
@@ -75,6 +77,8 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	}
 	report := model.Report{
 		GeneratedAt:        options.GeneratedAt,
+		ScannerVersion:     options.ScannerVersion,
+		PluginVersion:      options.PluginVersion,
 		ContextName:        contextName,
 		Class:              class,
 		Summary:            buildSummary(inventory, active, resourceReports),

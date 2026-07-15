@@ -32,6 +32,29 @@ func TestBuildFindingViewKeepsAffectedResourcesAndSummary(t *testing.T) {
 	}
 }
 
+func TestBuildAndRenderJSONIncludeVersionMetadata(t *testing.T) {
+	got := Build(nil, nil, nil, Options{
+		GeneratedAt:    fixedTime(),
+		ScannerVersion: "0.72.0",
+		PluginVersion:  "2.3.1",
+	})
+
+	if got.ScannerVersion != "0.72.0" || got.PluginVersion != "2.3.1" {
+		t.Fatalf("versions = scanner %q, plugin %q", got.ScannerVersion, got.PluginVersion)
+	}
+	var output bytes.Buffer
+	if err := RenderJSON(&output, got); err != nil {
+		t.Fatalf("RenderJSON returned error: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode rendered JSON: %v", err)
+	}
+	if decoded["scannerVersion"] != "0.72.0" || decoded["pluginVersion"] != "2.3.1" {
+		t.Fatalf("rendered version metadata = %#v", decoded)
+	}
+}
+
 func TestBuildFindingViewIncludesPerAffectedResourceExposure(t *testing.T) {
 	inv := sampleInventory()
 	exposed := sampleContainerRef()

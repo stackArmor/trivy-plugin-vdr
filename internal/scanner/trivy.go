@@ -93,6 +93,26 @@ func (r TrivyRunner) commandRunner() CommandRunner {
 	return execCommandRunner{extraEnv: r.dockerEnv()}
 }
 
+// Version returns the version reported by the same Trivy binary used for image
+// scans. Database metadata in the command output is intentionally ignored.
+func (r TrivyRunner) Version(ctx context.Context) (string, error) {
+	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), "version", "--format", "json")
+	if err != nil {
+		return "", fmt.Errorf("trivy version failed: %w: %s", err, string(bytes.TrimSpace(stderr)))
+	}
+	var result struct {
+		Version string `json:"Version"`
+	}
+	if err := json.Unmarshal(stdout, &result); err != nil {
+		return "", fmt.Errorf("parse trivy version: %w", err)
+	}
+	result.Version = strings.TrimSpace(result.Version)
+	if result.Version == "" {
+		return "", errors.New("parse trivy version: response did not contain Version")
+	}
+	return result.Version, nil
+}
+
 // EnsureDatabases downloads/updates the Trivy vulnerability database and the
 // Java index database once up front so per-image scans can run with
 // --skip-db-update --skip-java-db-update and share the cache safely. Downloading

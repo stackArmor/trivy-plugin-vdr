@@ -1,9 +1,11 @@
 .PHONY: build test install-local
 
 BINARY := vdr
+PLUGIN_VERSION := $(shell awk '/^version:/ {print $$2; exit}' plugin.yaml)
+VERSION_LDFLAG := -X github.com/stackArmor/trivy-plugin-vdr/internal/buildinfo.PluginVersion=$(PLUGIN_VERSION)
 
 build:
-	go build -o $(BINARY) ./cmd/vdr
+	go build -ldflags "$(VERSION_LDFLAG)" -o $(BINARY) ./cmd/vdr
 
 test:
 	go test ./...

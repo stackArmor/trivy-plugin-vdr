@@ -380,6 +380,8 @@ If cleanup fails after an image scan succeeds, the scan result is kept and a war
 
 JSON output defaults to a finding-centric report. Each finding includes `affected` — a list of `{resource, exposure}` entries — so a deduplicated image scan can still be traced back to every Kubernetes, Cloud Run, or ECS resource and container using that image, along with that resource's internet exposure when available.
 
+The top-level JSON metadata includes `scannerVersion` for the Trivy binary used by the plugin and `pluginVersion` for the VDR plugin build.
+
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
 Container security metadata (`images[].security`) is collected from every source (since v2.3.0): Kubernetes and Helm report the pod/container securityContext (privileged, capability add/drop, read-only root filesystem, seccomp/AppArmor profiles); ECS reports `privileged`, `readonlyRootFilesystem`, capability add/drop, and seccomp/AppArmor profiles from `dockerSecurityOptions` (EC2 launch type); Cloud Run reports the platform-enforced posture — never privileged, writable in-memory root filesystem — plus `sandbox` (`gVisor` for gen1, `microVM` for gen2) when the execution environment is explicit.
