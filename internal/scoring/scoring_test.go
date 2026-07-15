@@ -504,3 +504,66 @@ func TestLoadRejectsUnknownArchetype(t *testing.T) {
 		t.Error("expected error for unknown archetype in rule")
 	}
 }
+
+func TestKindRules(t *testing.T) {
+	cfg := Default()
+	cfg.NameRules = []NameRule{{Namespace: "rally", Match: "special-job", Archetype: "data-backbone"}}
+	cfg.KindRules = []KindRule{{Kind: "Job", Archetype: "internal-tooling"}}
+	cfg.NamespaceRules = []NamespaceRule{{Match: "rally", Archetype: "app-tier"}}
+
+	// A standalone Job with no label or name rule gets the kind rule, which wins
+	// over the namespace rule.
+	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "postgres-admin-migrations", WorkloadKind: "Job"})
+	if r.ArchetypeSource != "kindRule" || r.Archetype != "internal-tooling" {
+		t.Errorf("kindRule match failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	}
+
+	// A name rule still wins over the kind rule.
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "special-job", WorkloadKind: "Job"})
+	if r.ArchetypeSource != "nameRule" || r.Archetype != "data-backbone" {
+		t.Errorf("nameRule precedence over kindRule failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	}
+
+	// Other kinds fall through to the namespace rule.
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web", WorkloadKind: "Deployment"})
+	if r.ArchetypeSource != "namespaceRule" || r.Archetype != "app-tier" {
+		t.Errorf("non-matching kind fallthrough failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	}
+
+	// An empty kind never matches a kind rule.
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "thing"})
+	if r.ArchetypeSource != "default" || r.Archetype != "unclassified" {
+		t.Errorf("empty kind should skip kind rules: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	}
+}
+
+func TestKindRuleScoping(t *testing.T) {
+	cfg := Default()
+	cfg.KindRules = []KindRule{{Kind: "Job", Namespace: "rally", Match: "*-generate-secrets", AssetValue: "Low"}}
+
+	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "kafka-generate-secrets", WorkloadKind: "Job"})
+	if r.ArchetypeSource != "assetValueKindRule" || r.CR != "L" || r.IR != "L" || r.AR != "L" {
+		t.Errorf("scoped assetValue kindRule failed: source=%s CR/IR/AR=%s/%s/%s", r.ArchetypeSource, r.CR, r.IR, r.AR)
+	}
+
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "kafka-generate-secrets", WorkloadKind: "Job"})
+	if r.ArchetypeSource == "assetValueKindRule" {
+		t.Errorf("kindRule namespace scope not honored: source=%s", r.ArchetypeSource)
+	}
+}
+
+func TestKindRuleValidation(t *testing.T) {
+	cfg := Default()
+	cfg.KindRules = []KindRule{{Archetype: "internal-tooling"}}
+	if err := cfg.validate(); err == nil {
+		t.Error("expected error for kindRule without kind")
+	}
+	cfg.KindRules = []KindRule{{Kind: "Job"}}
+	if err := cfg.validate(); err == nil {
+		t.Error("expected error for kindRule without archetype or assetValue")
+	}
+	cfg.KindRules = []KindRule{{Kind: "Job", Archetype: "not-a-real-archetype"}}
+	if err := cfg.validate(); err == nil {
+		t.Error("expected error for kindRule with unknown archetype")
+	}
+}

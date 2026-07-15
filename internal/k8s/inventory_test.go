@@ -986,3 +986,33 @@ func resourceListKind(resource string) string {
 		return "UnstructuredList"
 	}
 }
+
+func TestCollectSkipsCronJobOwnedJobs(t *testing.T) {
+	controller := true
+	owned := job("batch", "nightly-29123456", podSpec(container("runner", "example.com/cron:v2")))
+	owned.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "CronJob", Name: "nightly", Controller: &controller}}
+	client := fake.NewSimpleClientset(
+		owned,
+		job("batch", "helm-hook", podSpec(container("runner", "example.com/hook:v1"))),
+		cronJob("batch", "nightly", podSpec(container("runner", "example.com/cron:v2"))),
+	)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	requireRef(t, requireImage(t, inv, "example.com/hook:v1"), model.ResourceRef{
+		APIVersion:    "batch/v1",
+		Kind:          "Job",
+		Namespace:     "batch",
+		Name:          "helm-hook",
+		ContainerType: "container",
+		ContainerName: "runner",
+	})
+	for _, ref := range requireImage(t, inv, "example.com/cron:v2").Resources {
+		if ref.Kind == "Job" {
+			t.Fatalf("CronJob-owned Job was inventoried: %#v", ref)
+		}
+	}
+}

@@ -409,16 +409,20 @@ An archetype assigns the `CR/IR/AR` requirements (e.g. `identity-secrets` and `d
 workload label vdr.fedramp.io/asset-archetype
   → namespace label
   → name rule   (cluster ConfigMap; first match wins)
+  → kind rule   (cluster ConfigMap; first match wins)
   → namespace rule (cluster ConfigMap; first match wins)
   → workload label vdr.fedramp.io/asset-value
   → namespace/project label vdr.fedramp.io/asset-value
   → assetValue name rule   (cluster ConfigMap; first match wins)
+  → assetValue kind rule   (cluster ConfigMap; first match wins)
   → assetValue namespace rule (cluster ConfigMap; first match wins)
   → configured assetValue default
   → built-in "unclassified" cluster-default (H/H/H — noisy N4, surfaces for classification)
 ```
 
 Tag workloads you control with `vdr.fedramp.io/asset-archetype: <archetype>` when you know the system role, or `vdr.fedramp.io/asset-value: High|Medium|Low` when the value level is all you have. Cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot carry the label are classified by name/namespace rules in the ConfigMap instead. For Cloud Run, service/job labels override project labels. For ECS, task definition tags are used as labels.
+
+`kindRules` (since v2.1.0) match on workload kind with optional namespace and name globs — e.g. `{kind: Job, archetype: internal-tooling}` classifies standalone Jobs (Helm hooks, one-shot migrations) whose generated names defeat name globs and which cannot carry labels. Kind rules sit between name rules and namespace rules, so a specific name rule or label still wins. CronJob-spawned Jobs are not inventoried separately (since v2.1.0); they are covered by their CronJob's template, so a `Job` kind rule only affects standalone Jobs.
 
 ### Remediation deadline
 

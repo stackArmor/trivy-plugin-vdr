@@ -54,6 +54,19 @@ type NameRule struct {
 	AssetValue string `json:"assetValue" yaml:"assetValue"`
 }
 
+// KindRule assigns an archetype to workloads whose kind matches a glob (e.g.
+// "Job", "Pod"), optionally scoped to namespace and name globs. Evaluated after
+// name rules and before namespace rules, so a specific name rule or label can
+// still override it. Typical use: standalone Jobs (Helm hooks, one-shot
+// migrations) that carry no labels and whose generated names defeat name globs.
+type KindRule struct {
+	Kind       string `json:"kind" yaml:"kind"`
+	Namespace  string `json:"namespace" yaml:"namespace"`
+	Match      string `json:"match" yaml:"match"`
+	Archetype  string `json:"archetype" yaml:"archetype"`
+	AssetValue string `json:"assetValue" yaml:"assetValue"`
+}
+
 // LabelKeys are the label keys read from a workload (or its namespace) to resolve
 // its archetype, multi-agency scope, and Certification Class.
 type LabelKeys struct {
@@ -91,6 +104,7 @@ type Config struct {
 	WordThresholds WordThresholds       `json:"wordThresholds" yaml:"wordThresholds"`
 	NamespaceRules []NamespaceRule      `json:"namespaceRules" yaml:"namespaceRules"`
 	NameRules      []NameRule           `json:"nameRules" yaml:"nameRules"`
+	KindRules      []KindRule           `json:"kindRules" yaml:"kindRules"`
 	// MultiAgencyNamespaces are namespace globs whose workloads are treated as
 	// multi-agency unless a more specific label says otherwise.
 	MultiAgencyNamespaces []string `json:"multiAgencyNamespaces" yaml:"multiAgencyNamespaces"`
@@ -105,6 +119,7 @@ type Input struct {
 	Severity        string
 	Namespace       string
 	WorkloadName    string
+	WorkloadKind    string // Kubernetes kind (Job, Deployment, ...); used by kindRules
 	Labels          map[string]string // workload labels
 	NamespaceLabels map[string]string // labels on the namespace object
 
@@ -287,6 +302,22 @@ func (c *Config) validate() error {
 			return fmt.Errorf("nameRules[%d] references unknown assetValue %q", i, r.AssetValue)
 		}
 	}
+	for i, r := range c.KindRules {
+		if r.Kind == "" {
+			return fmt.Errorf("kindRules[%d] must set kind", i)
+		}
+		if r.Archetype == "" && r.AssetValue == "" {
+			return fmt.Errorf("kindRules[%d] must set archetype or assetValue", i)
+		}
+		if r.Archetype != "" {
+			if _, ok := c.Archetypes[r.Archetype]; !ok {
+				return fmt.Errorf("kindRules[%d] references unknown archetype %q", i, r.Archetype)
+			}
+		}
+		if r.AssetValue != "" && normalizeAssetValue(r.AssetValue) == "" {
+			return fmt.Errorf("kindRules[%d] references unknown assetValue %q", i, r.AssetValue)
+		}
+	}
 	if c.Defaults.AssetValue != "" && normalizeAssetValue(c.Defaults.AssetValue) == "" {
 		return fmt.Errorf("defaults.assetValue %q must be one of H, M, L, High, Medium, Moderate, Low", c.Defaults.AssetValue)
 	}
@@ -308,7 +339,7 @@ func (c *Config) validate() error {
 
 // Score computes the PAIN and FedRAMP remediation deadline for a finding-on-asset.
 func (c *Config) Score(in Input) Result {
-	arch, source, assetValue, found := c.resolveClassification(in.Namespace, in.WorkloadName, in.Labels, in.NamespaceLabels)
+	arch, source, assetValue, found := c.resolveClassification(in.Namespace, in.WorkloadName, in.WorkloadKind, in.Labels, in.NamespaceLabels)
 
 	var a Archetype
 	forceMulti := false
@@ -368,11 +399,11 @@ func (c *Config) Score(in Input) Result {
 // to asset-value (H/M/L mapped uniformly across CR/IR/AR), then the default
 // archetype/fail-safe path. The returned bool is false only for the fail-safe
 // path (no usable signal).
-func (c *Config) resolveClassification(namespace, name string, labels, nsLabels map[string]string) (string, string, string, bool) {
-	if arch, source, found := c.resolveArchetypeSignal(namespace, name, labels, nsLabels); found || source == "label-unknown" {
+func (c *Config) resolveClassification(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, string, bool) {
+	if arch, source, found := c.resolveArchetypeSignal(namespace, name, kind, labels, nsLabels); found || source == "label-unknown" {
 		return arch, source, "", found
 	}
-	if value, source, found := c.resolveAssetValueSignal(namespace, name, labels, nsLabels); found || source == "assetValueLabelUnknown" {
+	if value, source, found := c.resolveAssetValueSignal(namespace, name, kind, labels, nsLabels); found || source == "assetValueLabelUnknown" {
 		return "asset-value-" + strings.ToLower(value), source, value, found
 	}
 	if c.Defaults.AssetValue != "" {
@@ -388,7 +419,7 @@ func (c *Config) resolveClassification(namespace, name string, labels, nsLabels 
 	return "", "failsafe", "", false
 }
 
-func (c *Config) resolveArchetypeSignal(namespace, name string, labels, nsLabels map[string]string) (string, string, bool) {
+func (c *Config) resolveArchetypeSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
 	if v, ok := labels[c.LabelKeys.Archetype]; ok {
 		v = strings.TrimSpace(v)
 		if _, known := c.Archetypes[v]; known {
@@ -415,6 +446,14 @@ func (c *Config) resolveArchetypeSignal(namespace, name string, labels, nsLabels
 			}
 		}
 	}
+	for _, r := range c.KindRules {
+		if !kindRuleMatches(r, namespace, name, kind) {
+			continue
+		}
+		if _, known := c.Archetypes[r.Archetype]; known {
+			return r.Archetype, "kindRule", true
+		}
+	}
 	for _, r := range c.NamespaceRules {
 		if ok, _ := path.Match(r.Match, namespace); ok {
 			if _, known := c.Archetypes[r.Archetype]; known {
@@ -425,7 +464,29 @@ func (c *Config) resolveArchetypeSignal(namespace, name string, labels, nsLabels
 	return "", "", false
 }
 
-func (c *Config) resolveAssetValueSignal(namespace, name string, labels, nsLabels map[string]string) (string, string, bool) {
+// kindRuleMatches reports whether a kind rule applies to the workload. Kind is
+// required; namespace and name globs are optional (empty matches everything).
+func kindRuleMatches(r KindRule, namespace, name, kind string) bool {
+	if kind == "" {
+		return false
+	}
+	if ok, _ := path.Match(r.Kind, kind); !ok {
+		return false
+	}
+	if r.Namespace != "" {
+		if ok, _ := path.Match(r.Namespace, namespace); !ok {
+			return false
+		}
+	}
+	if r.Match != "" {
+		if ok, _ := path.Match(r.Match, name); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Config) resolveAssetValueSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
 	if v, ok := labels[c.LabelKeys.AssetValue]; ok {
 		if value := normalizeAssetValue(v); value != "" {
 			return value, "assetValueLabel", true
@@ -451,6 +512,17 @@ func (c *Config) resolveAssetValueSignal(namespace, name string, labels, nsLabel
 			if value := normalizeAssetValue(r.AssetValue); value != "" {
 				return value, "assetValueNameRule", true
 			}
+		}
+	}
+	for _, r := range c.KindRules {
+		if r.AssetValue == "" {
+			continue
+		}
+		if !kindRuleMatches(r, namespace, name, kind) {
+			continue
+		}
+		if value := normalizeAssetValue(r.AssetValue); value != "" {
+			return value, "assetValueKindRule", true
 		}
 	}
 	for _, r := range c.NamespaceRules {

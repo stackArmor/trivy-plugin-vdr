@@ -9,6 +9,7 @@ import (
 
 	"github.com/distribution/reference"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -283,10 +284,24 @@ func (c *Collector) collectJobs(ctx context.Context, namespace string, builder *
 		return err
 	}
 	for _, job := range jobs.Items {
+		// CronJob-spawned Jobs are covered by their CronJob's job template; only
+		// standalone Jobs (Helm hooks, one-shot migrations) are inventoried here.
+		if ownedByCronJob(job) {
+			continue
+		}
 		ref := workloadRef("batch/v1", "Job", job.Namespace, job.Name)
 		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations, job.Labels, job.Spec.Template.Labels, nil)
 	}
 	return nil
+}
+
+func ownedByCronJob(job batchv1.Job) bool {
+	for _, owner := range job.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && owner.Kind == "CronJob" {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Collector) collectCronJobs(ctx context.Context, namespace string, builder *inventoryBuilder) error {
