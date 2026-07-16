@@ -9,7 +9,9 @@
 // The remediation deadline is the FedRAMP VDR-TFR-PVR matrix entry selected by
 // the provider Certification Class, the PAIN rating, and the exploitability
 // column: LEV+IRV, LEV+NIRV, or NLEV. LEV (likely exploitable) is EPSS >=
-// threshold OR active exploitation; IRV is internet reachability.
+// threshold, active exploitation, or the FRD-LEV floor (internet-reachable via
+// direct exposure with a vector permitting low-complexity, unauthenticated
+// automation: AV:N/AC:L/PR:N/UI:N); IRV is internet reachability.
 //
 // The built-in Default() rubric is self-contained; an optional YAML or JSON
 // config file may be layered on top (deep-merged) to add tenant-specific rules
@@ -631,11 +633,33 @@ func (c *Config) resolveClass(labels, nsLabels map[string]string) (string, strin
 	return "B", "builtin"
 }
 
+// isLEV implements the method's LEV union — any one suffices, with no weighting
+// among them: EPSS at or above the governed threshold, observed exploitation,
+// or the FRD-LEV vector floor. The floor implements FedRAMP's note that "any
+// vulnerability that an automated unauthenticated system can exploit over the
+// internet is a likely exploitable vulnerability": the finding is
+// internet-reachable via direct exposure and its CVSS vector permits
+// low-complexity, unauthenticated automation (AV:N/AC:L/PR:N/UI:N). An AC:H
+// finding does not enter LEV through the floor alone; EPSS or observed
+// exploitation independently place it in LEV.
 func (c *Config) isLEV(in Input) bool {
 	if strings.EqualFold(strings.TrimSpace(in.Exploitation), "active") {
 		return true
 	}
-	return in.EPSS >= 0 && in.EPSS >= c.LEVEPSSThreshold
+	if in.EPSS >= 0 && in.EPSS >= c.LEVEPSSThreshold {
+		return true
+	}
+	return in.InternetReachable && permitsUnauthenticatedAutomation(in.CVSSVector)
+}
+
+// permitsUnauthenticatedAutomation reports whether the CVSS vector permits
+// low-complexity, unauthenticated automation: AV:N, AC:L, PR:N, UI:N. The
+// metric keys are shared by v3.x and v4.0 (v4's UI:P/UI:A count as interaction
+// required). A missing or unparsable vector never fires the floor, and CVSS v2
+// vectors (no PR/UI metrics) are treated the same conservative way.
+func permitsUnauthenticatedAutomation(vector string) bool {
+	m := parseVector(vector)
+	return m["AV"] == "N" && m["AC"] == "L" && m["PR"] == "N" && m["UI"] == "N"
 }
 
 func parseBoolLabel(v string) (bool, bool) {

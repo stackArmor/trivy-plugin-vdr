@@ -27,8 +27,11 @@ func TestRemediationColumnsAndMatrix(t *testing.T) {
 		wantLEV   bool
 	}{
 		{"LEV+IRV via EPSS", dataSensitiveN5(0.8, "none", true), "LEV+IRV", 2, "2 days", true},
-		{"NLEV (low EPSS, no active)", dataSensitiveN5(0.49, "none", true), "NLEV", 16, "16 days", false},
+		{"NLEV (low EPSS, no active, not reachable)", dataSensitiveN5(0.49, "none", false), "NLEV", 16, "16 days", false},
 		{"LEV+NIRV via active exploitation", dataSensitiveN5(0.49, "active", false), "LEV+NIRV", 4, "4 days", true},
+		// vecCIAHigh is AV:N/AC:L/PR:N/UI:N: directly reachable, it fires the
+		// FRD-LEV unauthenticated-automation floor even below the EPSS threshold.
+		{"LEV+IRV via FRD-LEV floor", dataSensitiveN5(0.49, "none", true), "LEV+IRV", 2, "2 days", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,6 +108,27 @@ func TestLEVThresholdBoundary(t *testing.T) {
 	}
 	if cfg.isLEV(Input{EPSS: -1, Exploitation: "none"}) {
 		t.Error("no EPSS and not active should not be LEV")
+	}
+
+	// FRD-LEV unauthenticated-automation floor: direct reachability AND
+	// AV:N/AC:L/PR:N/UI:N, independent of EPSS and exploitation.
+	if !cfg.isLEV(Input{EPSS: -1, Exploitation: "none", InternetReachable: true, CVSSVector: vecCIAHigh}) {
+		t.Error("directly reachable AV:N/AC:L/PR:N/UI:N should be LEV via the FRD-LEV floor")
+	}
+	if cfg.isLEV(Input{EPSS: -1, InternetReachable: false, CVSSVector: vecCIAHigh}) {
+		t.Error("the floor requires direct internet reachability")
+	}
+	if cfg.isLEV(Input{EPSS: -1, InternetReachable: true, CVSSVector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"}) {
+		t.Error("AC:H must not enter LEV through the vector floor alone")
+	}
+	if cfg.isLEV(Input{EPSS: -1, InternetReachable: true, CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"}) {
+		t.Error("PR:L must not fire the unauthenticated-automation floor")
+	}
+	if cfg.isLEV(Input{EPSS: -1, InternetReachable: true, CVSSVector: "AV:N/AC:L/Au:N/C:C/I:C/A:C"}) {
+		t.Error("a CVSS v2 vector (no PR/UI metrics) must not fire the floor")
+	}
+	if cfg.isLEV(Input{EPSS: -1, InternetReachable: true}) {
+		t.Error("a missing vector must not fire the floor")
 	}
 }
 

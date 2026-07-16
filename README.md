@@ -436,10 +436,11 @@ Every scored finding records where each classification input came from, so defau
 deadline = matrix[ Certification Class ][ PAIN ][ column ]
   column = LEV+IRV | LEV+NIRV | NLEV
   LEV (likely exploitable) = EPSS >= 0.50  OR  exploitation = active
+                             OR  internet-reachable AND AV:N/AC:L/PR:N/UI:N   (FRD-LEV floor)
   IRV (internet reachable) = the affected resource is internet-reachable
 ```
 
-So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively exploited asset. The EPSS LEV cutoff (0.50) is built into the plugin. PAIN-1 findings have no FedRAMP deadline. In the findings view the finding-level PAIN/deadline is the most urgent across all affected resources.
+So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively exploited asset. The EPSS LEV cutoff (0.50) is built into the plugin. The third LEV disjunct is FedRAMP's FRD-LEV floor — "any vulnerability that an automated unauthenticated system can exploit over the internet is a likely exploitable vulnerability" — mapped deterministically to a directly internet-reachable finding whose vector permits low-complexity, unauthenticated automation; an AC:H finding does not enter LEV through the floor alone. PAIN-1 findings have no FedRAMP deadline. In the findings view the finding-level PAIN/deadline is the most urgent across all affected resources.
 
 ### Cluster configuration
 
