@@ -173,7 +173,7 @@ type Result struct {
 	RemediationLabel string  // human-readable deadline (e.g. "12 hours", "32 days")
 }
 
-// Default returns the built-in rubric: the archetype catalog (14 named archetypes
+// Default returns the built-in rubric: the archetype catalog (16 named archetypes
 // plus the H/H/H "unclassified" cluster-default for new/unclassified resources),
 // standard label keys, an EPSS LEV threshold of 0.50, and a default Certification
 // Class of B. It carries no namespace/name rules (those are tenant-specific) and
@@ -194,12 +194,32 @@ func Default() *Config {
 			// only — TLS-terminating / payload-handling proxies belong in app-tier.
 			"platform-foundation": {Lens: "control", CR: "L", IR: "H", AR: "H"},
 			"data-sensitive":      {Lens: "data", CR: "H", IR: "H", AR: "H"},
-			"data-backbone":       {Lens: "data", CR: "H", IR: "H", AR: "H"},
-			"app-tier":            {Lens: "data", CR: "M", IR: "M", AR: "H"},
-			"batch-analytics":     {Lens: "data", CR: "M", IR: "M", AR: "L"},
-			"public-edge":         {Lens: "data", CR: "L", IR: "L", AR: "H"},
-			"internal-tooling":    {Lens: "data", CR: "L", IR: "L", AR: "L"},
-			"dev-test":            {Lens: "data", CR: "L", IR: "L", AR: "L"},
+			// data-backbone is reserved for components carrying agency payload
+			// (payload queues/brokers, the system-of-record DB). A bus that moves
+			// only metrics, traces, and heartbeats is telemetry-backbone, one grade
+			// lower on every dimension; routing payload through a telemetry bus is
+			// a misclassification finding, not a reason to keep every bus at High.
+			"data-backbone":      {Lens: "data", CR: "H", IR: "H", AR: "H"},
+			"telemetry-backbone": {Lens: "data", CR: "M", IR: "M", AR: "M"},
+			// app-tier availability is Medium, not High: its blast radius is one
+			// service degrading — in deliberate contrast to public-edge, where an
+			// edge-class outage closes the front door for every user.
+			"app-tier":        {Lens: "data", CR: "M", IR: "M", AR: "M"},
+			"batch-analytics": {Lens: "data", CR: "M", IR: "M", AR: "L"},
+			// public-edge is the TLS-terminating L7 edge — in practice almost every
+			// modern ingress, gateway, or public web front. CR/IR Medium because a
+			// terminating edge holds private keys and session material and sees
+			// every payload in flight; AR High because a CVE-grade DoS hits every
+			// replica at once and closes the front door for every user. The
+			// stronger values sit on the default-sounding name on purpose: an edge
+			// tagged public-edge out of habit should overrate, not underrate.
+			"public-edge": {Lens: "data", CR: "M", IR: "M", AR: "H"},
+			// passthrough-edge is the deliberate opt-in for an edge that never
+			// terminates (L4/SNI passthrough, or a managed cloud LB whose keys
+			// never enter the boundary): it routes payload but holds none.
+			"passthrough-edge": {Lens: "data", CR: "L", IR: "L", AR: "H"},
+			"internal-tooling": {Lens: "data", CR: "L", IR: "L", AR: "L"},
+			"dev-test":         {Lens: "data", CR: "L", IR: "L", AR: "L"},
 			// unclassified is the built-in cluster-default archetype for new or
 			// otherwise-unclassified resources: CR/IR/AR=High so they score loudly
 			// (single-agency H/H/H lands at PAIN-4 on a high-impact CVE) and surface

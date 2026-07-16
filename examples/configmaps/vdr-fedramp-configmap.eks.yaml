@@ -59,10 +59,16 @@ data:
       - {namespace: kube-system, match: "karpenter*", archetype: orchestrator}
       # Cluster DNS. platform-foundation is for METADATA-ONLY foundation services
       # (DNS/NTP/discovery/plain L4 LBs): CR:L (recon only), IR:H, AR:H. Anything
-      # that terminates TLS or sees payload belongs in app-tier instead.
+      # that terminates TLS or sees payload belongs in public-edge (internet-
+      # facing) or app-tier (internal) instead.
       - {namespace: kube-system, match: "coredns*", archetype: platform-foundation}
-      # Ingress / load-balancer controller (provisions public ALBs/NLBs).
-      - {namespace: kube-system, match: "aws-load-balancer-controller*", archetype: public-edge}
+      # Ingress / load-balancer controller. It carries no traffic — it holds AWS
+      # credentials that provision and reshape the public ALBs/NLBs, so the
+      # control-plane lens applies: config-actuation. (The ALB itself terminates
+      # TLS on AWS's side; an in-cluster terminating proxy such as nginx-ingress
+      # would be public-edge, and a pure L4/SNI passthrough would be
+      # passthrough-edge.)
+      - {namespace: kube-system, match: "aws-load-balancer-controller*", archetype: config-actuation}
 
     namespaceRules:
       # CloudWatch agent / Fluent Bit observability.

@@ -407,7 +407,7 @@ Every finding is scored against the FedRAMP Rev5 VDR model: a **PAIN** rating (P
 
 ### Asset classification
 
-An archetype assigns the `CR/IR/AR` requirements (e.g. `identity-secrets` and `data-backbone` are H/H/H, `app-tier` is M/M/H, `platform-foundation` — DNS/NTP/discovery, metadata-only — is L/H/H, `internal-tooling` is L/L/L). It is resolved most-specific-first. If no archetype signal is present, `asset-value` can be used as a simpler fallback: `H`/`High` maps to CR:H/IR:H/AR:H, `M`/`Medium`/`Moderate` maps to CR:M/IR:M/AR:M, and `L`/`Low` maps to CR:L/IR:L/AR:L.
+An archetype assigns the `CR/IR/AR` requirements (e.g. `identity-secrets` and `data-backbone` are H/H/H, `app-tier` and `telemetry-backbone` are M/M/M, `platform-foundation` — DNS/NTP/discovery, metadata-only — is L/H/H, `internal-tooling` is L/L/L). It is resolved most-specific-first. If no archetype signal is present, `asset-value` can be used as a simpler fallback: `H`/`High` maps to CR:H/IR:H/AR:H, `M`/`Medium`/`Moderate` maps to CR:M/IR:M/AR:M, and `L`/`Low` maps to CR:L/IR:L/AR:L.
 
 ```
 workload label vdr.fedramp.io/asset-archetype

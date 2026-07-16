@@ -103,8 +103,8 @@ rules before broad globs. Valid archetype names:
 
 `cicd-pipeline`, `orchestrator`, `config-actuation`, `identity-secrets`,
 `security-tooling`, `change-record`, `platform-foundation`, `data-sensitive`,
-`data-backbone`, `app-tier`, `batch-analytics`, `public-edge`, `internal-tooling`,
-`dev-test`.
+`data-backbone`, `telemetry-backbone`, `app-tier`, `batch-analytics`, `public-edge`,
+`passthrough-edge`, `internal-tooling`, `dev-test`.
 
 > **Note:** `platform-foundation` (CR:L, IR:H, AR:H) is for **metadata-only**
 > foundation services the whole estate depends on — DNS, NTP, service discovery,

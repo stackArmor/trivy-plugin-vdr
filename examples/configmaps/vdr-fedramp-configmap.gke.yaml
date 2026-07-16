@@ -59,15 +59,17 @@ data:
       - {namespace: kube-system, match: "pdcsi*", archetype: orchestrator}
       # Cluster DNS. platform-foundation is for METADATA-ONLY foundation services
       # (DNS/NTP/discovery/plain L4 LBs): CR:L (recon only), IR:H, AR:H. Anything
-      # that terminates TLS or sees payload belongs in app-tier instead.
+      # that terminates TLS or sees payload belongs in public-edge (internet-
+      # facing) or app-tier (internal) instead.
       - {namespace: kube-system, match: "kube-dns*", archetype: platform-foundation}
       # Runtime security / image inspection / CIS hardening.
       - {namespace: kube-system, match: container-watcher, archetype: security-tooling}
       - {namespace: kube-system, match: image-package-extractor, archetype: security-tooling}
       - {namespace: kube-system, match: configure-cis-level-2, archetype: security-tooling}
       - {namespace: kube-system, match: runsc-metric-server, archetype: security-tooling}
-      # Ingress default backend.
-      - {namespace: kube-system, match: l7-default-backend, archetype: public-edge}
+      # Ingress default backend (behind the provider-terminated GCLB, so
+      # passthrough; an in-cluster terminating proxy would be public-edge).
+      - {namespace: kube-system, match: l7-default-backend, archetype: passthrough-edge}
 
     namespaceRules:
       # Specific gke-managed namespaces first, then the catch-all.
