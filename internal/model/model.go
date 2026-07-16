@@ -354,8 +354,8 @@ type RouteRewrite struct {
 }
 
 type AccessProtection struct {
-	Type           string          `json:"type,omitempty"`
-	Enabled        bool            `json:"enabled"`
+	Type           string          `json:"authProxyType,omitempty"`
+	Enabled        bool            `json:"authProxyEnabled"`
 	Provider       string          `json:"provider,omitempty"`
 	Evidence       string          `json:"evidence,omitempty"`
 	SecurityPolicy *SecurityPolicy `json:"securityPolicy,omitempty"`
