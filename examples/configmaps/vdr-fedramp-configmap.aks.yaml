@@ -45,9 +45,10 @@ data:
     # First match wins. nameRules win over namespaceRules. namespace is an optional
     # glob on the workload namespace; match is a glob on the workload name.
     nameRules:
-      # Microsoft Entra Workload Identity / AAD pod identity credential broker.
-      - {namespace: kube-system, match: "azure-wi-webhook*", archetype: identity-secrets}
-      - {namespace: kube-system, match: "aad-pod-identity*", archetype: identity-secrets}
+      # Microsoft Entra Workload Identity / AAD pod identity credential broker:
+      # privileged because it can mint or forward workload credentials.
+      - {namespace: kube-system, match: "azure-wi-webhook*", archetype: privileged-identity}
+      - {namespace: kube-system, match: "aad-pod-identity*", archetype: privileged-identity}
       # Azure CNI dataplane, network policy, masq, and kube-proxy.
       - {namespace: kube-system, match: "azure-cns*", archetype: orchestrator}
       - {namespace: kube-system, match: "azure-npm*", archetype: orchestrator}

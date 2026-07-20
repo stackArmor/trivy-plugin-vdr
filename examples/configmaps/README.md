@@ -99,12 +99,8 @@ built-in defaults — a missing ConfigMap is visible, not silent.
 
 Edit the `nameRules` / `namespaceRules` to match the add-ons actually installed in
 your cluster (the lists here cover the common managed components). Put specific
-rules before broad globs. Valid archetype names:
-
-`cicd-pipeline`, `orchestrator`, `config-actuation`, `identity-secrets`,
-`security-tooling`, `change-record`, `platform-foundation`, `data-sensitive`,
-`data-backbone`, `telemetry-backbone`, `app-tier`, `batch-analytics`, `public-edge`,
-`passthrough-edge`, `internal-tooling`, `dev-test`.
+rules before broad globs. The authoritative names and CR/IR/AR values are in
+[`policy/vdr-policy.yaml`](../../policy/vdr-policy.yaml).
 
 > **Note:** `platform-foundation` (CR:L, IR:H, AR:H) is for **metadata-only**
 > foundation services the whole estate depends on — DNS, NTP, service discovery,
