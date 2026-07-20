@@ -407,7 +407,9 @@ Every finding is scored against the FedRAMP Rev5 VDR model: a **PAIN** rating (P
 
 ### Asset classification
 
-An archetype assigns the `CR/IR/AR` requirements (e.g. `identity-secrets` and `data-backbone` are H/H/H, `app-tier` and `telemetry-backbone` are M/M/M, `platform-foundation` — DNS/NTP/discovery, metadata-only — is L/H/H, `internal-tooling` is L/L/L). It is resolved most-specific-first. If no archetype signal is present, `asset-value` can be used as a simpler fallback: `H`/`High` maps to CR:H/IR:H/AR:H, `M`/`Medium`/`Moderate` maps to CR:M/IR:M/AR:M, and `L`/`Low` maps to CR:L/IR:L/AR:L.
+An archetype assigns the `CR/IR/AR` requirements (e.g. `privileged-identity` and `data-backbone` are H/H/H, `app-tier`, `telemetry-backbone`, and `telemetry-data` are M/M/M, `platform-foundation` — DNS/NTP/discovery, metadata-only — is L/H/H, and `public-data` is L/M/M). The authoritative catalog is [`policy/vdr-policy.yaml`](policy/vdr-policy.yaml). It is resolved most-specific-first. If no archetype signal is present, `asset-value` can be used as a simpler fallback: `H`/`High` maps to CR:H/IR:H/AR:H, `M`/`Medium`/`Moderate` maps to CR:M/IR:M/AR:M, and `L`/`Low` maps to CR:L/IR:L/AR:L.
+
+For cloud compliance findings, classify IAM roles and service accounts by privilege: `privileged-identity` for IAM mutation, deployment, impersonation, or broad administrative access, and `scoped-identity` for identities constrained to one workload or service. Keep `identity-secrets` for IdP, KMS, secrets managers, and token/session stores. For storage, use `data-sensitive` for regulated payloads, `public-data` for intentionally public objects, and `telemetry-data` for logs, metrics, and traces. Use `generic-high`, `generic-medium`, or `generic-low` only when the role-specific archetype is unknown but the impact level is attested.
 
 ```
 workload label vdr.fedramp.io/asset-archetype

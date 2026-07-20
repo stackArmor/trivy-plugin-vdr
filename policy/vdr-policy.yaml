@@ -1,0 +1,229 @@
+# Canonical VDR asset-archetype policy.
+#
+# This file is embedded into trivy-plugin-vdr at build time. Downstream copies
+# in TSW and trivy-plugin-vdr-skills are generated from it; do not maintain
+# separate scoring catalogs in consumer repositories.
+schemaVersion: 1
+
+archetypes:
+  cicd-pipeline:
+    lens: control
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - build and deployment runners
+      - artifact signing services
+      - artifact registries
+
+  orchestrator:
+    lens: control
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - control planes
+      - etcd and schedulers
+      - coordination services
+      - CNI and CSI controllers
+
+  config-actuation:
+    lens: control
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - IaC and GitOps controllers
+      - schema registries
+      - administrative and migration jobs
+
+  identity-secrets:
+    lens: control
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - identity providers and SSO
+      - KMS and secrets managers
+      - session and token stores
+
+  privileged-identity:
+    lens: control
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - organization, account, subscription, and project administrators
+      - IAM roles and service accounts that can mutate IAM policy
+      - identities with deployment, impersonation, or broad cross-service access
+
+  scoped-identity:
+    lens: control
+    cr: M
+    ir: H
+    ar: M
+    typicalMembers:
+      - workload service accounts
+      - IAM roles constrained to one application or service
+      - identities without privilege escalation or broad administrative access
+
+  security-tooling:
+    lens: control
+    cr: H
+    ir: H
+    ar: M
+    typicalMembers:
+      - scanners and SIEM
+      - EDR and runtime security
+      - admission policy
+
+  change-record:
+    lens: control
+    cr: M
+    ir: M
+    ar: M
+    typicalMembers:
+      - ITSM and ticketing systems that record but do not actuate changes
+
+  platform-foundation:
+    lens: control
+    cr: L
+    ir: H
+    ar: H
+    typicalMembers:
+      - DNS and NTP
+      - service discovery
+      - metadata-only L4 internal load balancers
+
+  data-sensitive:
+    lens: data
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - PII and CUI datastores
+
+  public-data:
+    lens: data
+    cr: L
+    ir: M
+    ar: M
+    typicalMembers:
+      - intentionally public storage buckets
+      - public datasets and static downloads
+
+  telemetry-data:
+    lens: data
+    cr: M
+    ir: M
+    ar: M
+    typicalMembers:
+      - log archives
+      - metrics and trace storage
+      - operational audit data without regulated payloads
+
+  data-backbone:
+    lens: data
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - payload queues and brokers
+      - system-of-record databases
+
+  telemetry-backbone:
+    lens: data
+    cr: M
+    ir: M
+    ar: M
+    typicalMembers:
+      - metrics and trace pipelines
+      - telemetry queues
+      - event buses carrying no agency payload
+
+  app-tier:
+    lens: data
+    cr: M
+    ir: M
+    ar: M
+    typicalMembers:
+      - stateless services and APIs
+      - user interfaces
+      - caches
+
+  batch-analytics:
+    lens: data
+    cr: M
+    ir: M
+    ar: L
+    typicalMembers:
+      - ETL
+      - reporting
+      - analytics jobs
+
+  public-edge:
+    lens: data
+    cr: M
+    ir: M
+    ar: H
+    typicalMembers:
+      - TLS-terminating ingress and gateways
+      - public web front doors
+
+  passthrough-edge:
+    lens: data
+    cr: L
+    ir: L
+    ar: H
+    typicalMembers:
+      - L4 and SNI passthrough
+      - managed load balancers whose keys remain outside the boundary
+
+  internal-tooling:
+    lens: data
+    cr: L
+    ir: L
+    ar: L
+    typicalMembers:
+      - dashboards
+      - metrics and log agents
+
+  dev-test:
+    lens: data
+    cr: L
+    ir: L
+    ar: L
+    typicalMembers:
+      - non-production workloads
+
+  generic-high:
+    lens: generic
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - coarsely classified high-impact assets
+
+  generic-medium:
+    lens: generic
+    cr: M
+    ir: M
+    ar: M
+    typicalMembers:
+      - coarsely classified moderate-impact assets
+
+  generic-low:
+    lens: generic
+    cr: L
+    ir: L
+    ar: L
+    typicalMembers:
+      - coarsely classified low-impact assets
+
+  unclassified:
+    lens: control
+    cr: H
+    ir: H
+    ar: H
+    typicalMembers:
+      - fail-safe default for untagged assets

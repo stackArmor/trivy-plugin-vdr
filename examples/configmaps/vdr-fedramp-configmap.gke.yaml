@@ -45,9 +45,10 @@ data:
     # First match wins. nameRules win over namespaceRules. namespace is an optional
     # glob on the workload namespace; match is a glob on the workload name.
     nameRules:
-      # GCP workload-identity / metadata credential broker.
-      - {namespace: kube-system, match: gke-metadata-server, archetype: identity-secrets}
-      - {namespace: kube-system, match: "metadata-proxy*", archetype: identity-secrets}
+      # GCP workload-identity / metadata credential broker: privileged because
+      # it can mint or forward workload credentials, not because the account is a secret.
+      - {namespace: kube-system, match: gke-metadata-server, archetype: privileged-identity}
+      - {namespace: kube-system, match: "metadata-proxy*", archetype: privileged-identity}
       # Cluster networking dataplane / API control tunnel.
       - {namespace: kube-system, match: "calico*", archetype: orchestrator}
       - {namespace: kube-system, match: kube-proxy, archetype: orchestrator}

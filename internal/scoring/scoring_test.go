@@ -228,7 +228,7 @@ namespaceRules:
 nameRules:
   - namespace: kube-system
     match: "gke-metadata-server"
-    archetype: identity-secrets
+    archetype: privileged-identity
 `
 	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -247,8 +247,8 @@ nameRules:
 	}
 	// File rules are applied.
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "gke-metadata-server"})
-	if r.Archetype != "identity-secrets" {
-		t.Errorf("Archetype = %s, want identity-secrets from nameRule", r.Archetype)
+	if r.Archetype != "privileged-identity" {
+		t.Errorf("Archetype = %s, want privileged-identity from nameRule", r.Archetype)
 	}
 }
 
@@ -404,6 +404,29 @@ func TestPlatformFoundationArchetype(t *testing.T) {
 	// Confidentiality-only High (C:H) => N2 (metadata recon only, CR:L).
 	if got := cfg.Score(Input{CVSSVector: vecConfHi, Labels: lbl}).Tier; got != "N2" {
 		t.Errorf("C:H Tier = %s, want N2 (CR:L)", got)
+	}
+}
+
+func TestCloudAndGenericArchetypes(t *testing.T) {
+	cfg := Default()
+	want := map[string]Archetype{
+		"privileged-identity": {Lens: "control", CR: "H", IR: "H", AR: "H"},
+		"scoped-identity":     {Lens: "control", CR: "M", IR: "H", AR: "M"},
+		"public-data":         {Lens: "data", CR: "L", IR: "M", AR: "M"},
+		"telemetry-data":      {Lens: "data", CR: "M", IR: "M", AR: "M"},
+		"generic-high":        {Lens: "generic", CR: "H", IR: "H", AR: "H"},
+		"generic-medium":      {Lens: "generic", CR: "M", IR: "M", AR: "M"},
+		"generic-low":         {Lens: "generic", CR: "L", IR: "L", AR: "L"},
+	}
+	for name, expected := range want {
+		actual, ok := cfg.Archetypes[name]
+		if !ok {
+			t.Errorf("archetype %q missing from built-in catalog", name)
+			continue
+		}
+		if actual != expected {
+			t.Errorf("archetype %q = %+v, want %+v", name, actual, expected)
+		}
 	}
 }
 
