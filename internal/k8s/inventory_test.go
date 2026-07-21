@@ -419,9 +419,11 @@ func TestIncludesZeroDesiredDaemonSetsWhenEnabled(t *testing.T) {
 }
 
 func TestCollectsJobAndCronJobImages(t *testing.T) {
+	cron := cronJob("batch", "nightly", podSpec(container("runner", "example.com/cron:v2")))
+	cron.Labels = map[string]string{"app": "controller-label-only"}
 	client := fake.NewSimpleClientset(
 		job("batch", "once", podSpec(container("runner", "example.com/job:v1"))),
-		cronJob("batch", "nightly", podSpec(container("runner", "example.com/cron:v2"))),
+		cron,
 	)
 
 	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
@@ -445,6 +447,19 @@ func TestCollectsJobAndCronJobImages(t *testing.T) {
 		ContainerType: "container",
 		ContainerName: "runner",
 	})
+	for _, resource := range inv.Resources {
+		if resource.Resource.Kind != "CronJob" || resource.Resource.Name != "nightly" {
+			continue
+		}
+		if resource.PodLabels == nil || len(resource.PodLabels) != 0 {
+			t.Fatalf("CronJob PodLabels = %#v, want known-empty pod-template labels", resource.PodLabels)
+		}
+		if resource.Labels["app"] != "controller-label-only" {
+			t.Fatalf("CronJob Labels = %#v, want controller label retained for scoring", resource.Labels)
+		}
+		return
+	}
+	t.Fatal("CronJob resource inventory not found")
 }
 
 func TestNamespaceFilterCollectsOnlyRequestedNamespace(t *testing.T) {

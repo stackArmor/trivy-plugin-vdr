@@ -97,7 +97,7 @@ func TestBuildFindingsViewDedupeKeepsHighestChainableEntrypointStatus(t *testing
 	if len(got.Findings) != 1 || got.Findings[0].ChainableEntrypoint == nil {
 		t.Fatalf("Findings = %#v, want one finding with entrypoint metadata", got.Findings)
 	}
-	if got.Findings[0].ChainableEntrypoint.CandidateStatus != "high-confidence" {
+	if got.Findings[0].ChainableEntrypoint.CandidateStatus != "high_confidence" {
 		t.Fatalf("ChainableEntrypoint = %#v, want conservative high-confidence status", got.Findings[0].ChainableEntrypoint)
 	}
 }

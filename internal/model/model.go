@@ -27,8 +27,12 @@ type ImageInventory struct {
 }
 
 type ResourceInventory struct {
-	Resource         ResourceRef       `json:"resource"`
-	Labels           map[string]string `json:"labels,omitempty"`
+	Resource ResourceRef       `json:"resource"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	// PodLabels are the labels on the actual pod or pod template. Kubernetes
+	// Service selectors are evaluated against these labels, never controller
+	// metadata labels. A non-nil empty map means the pod template has no labels.
+	PodLabels        map[string]string `json:"podLabels,omitempty"`
 	ProviderMetadata map[string]string `json:"providerMetadata,omitempty"`
 	Images           []ContainerImage  `json:"images"`
 	Conditions       []string          `json:"conditions,omitempty"`
@@ -296,24 +300,24 @@ type Vulnrichment struct {
 }
 
 // ChainableEntrypoint records the governed CVE-level E0 candidate classification
-// and its deployed-finding qualification using active state and asset internet
+// and its deployed-finding classification using active state and asset internet
 // exposure. Execution-boundary joins and downstream G0 promotion remain outside
 // this informational record.
 type ChainableEntrypoint struct {
-	// Qualification is the deployed-finding result: qualifying | review |
-	// not-qualifying. A finding qualifies only when it is active, its affected
-	// asset is internet-accessible, and CandidateStatus is high-confidence.
-	Qualification            string                         `json:"qualification"`
-	Qualifies                bool                           `json:"qualifies"`
-	ActiveFinding            bool                           `json:"activeFinding"`
-	InternetAccessible       bool                           `json:"internetAccessible"`
-	CandidateStatus          string                         `json:"candidateStatus"` // high-confidence|possible|none
-	ReasonCodes              []string                       `json:"reasonCodes"`
-	QualificationReasonCodes []string                       `json:"qualificationReasonCodes"`
-	PolicyVersion            string                         `json:"policyVersion"`
-	SourceFacts              ChainableEntrypointSourceFacts `json:"sourceFacts"`
-	ExecutionContext         string                         `json:"executionContext,omitempty"` // server-runtime|client|unknown
-	ExecutionContextSource   string                         `json:"executionContextSource,omitempty"`
+	// Classification is the deployed-finding result: high_confidence | possible |
+	// none. HighConfidence is true only when the finding is active, its affected
+	// asset is internet-accessible, and CandidateStatus is high_confidence.
+	Classification            string                         `json:"classification"`
+	HighConfidence            bool                           `json:"highConfidence"`
+	ActiveFinding             bool                           `json:"activeFinding"`
+	InternetAccessible        bool                           `json:"internetAccessible"`
+	CandidateStatus           string                         `json:"candidateStatus"` // high_confidence|possible|none
+	ReasonCodes               []string                       `json:"reasonCodes"`
+	ClassificationReasonCodes []string                       `json:"classificationReasonCodes"`
+	PolicyVersion             string                         `json:"policyVersion"`
+	SourceFacts               ChainableEntrypointSourceFacts `json:"sourceFacts"`
+	ExecutionContext          string                         `json:"executionContext,omitempty"` // server-runtime|client|unknown
+	ExecutionContextSource    string                         `json:"executionContextSource,omitempty"`
 }
 
 // ChainableEntrypointSourceFacts preserves the scanner and enrichment facts

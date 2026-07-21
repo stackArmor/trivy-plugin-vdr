@@ -95,7 +95,7 @@ func chainableEntrypointRank(value *model.ChainableEntrypoint) int {
 		return 0
 	}
 	switch value.CandidateStatus {
-	case "high-confidence":
+	case "high_confidence":
 		return 3
 	case "possible":
 		return 2

@@ -269,6 +269,9 @@ func TestRenderHTMLIncludesPainColumnAndData(t *testing.T) {
 	if !strings.Contains(out, "EPSS ≥ 0.50") || strings.Contains(out, "EPSS ≥ 0.70") {
 		t.Error("HTML legend does not use the built-in EPSS LEV threshold of 0.50")
 	}
+	if !strings.Contains(out, "FRD-LEV floor") || !strings.Contains(out, "AV:N/AC:L/PR:N/UI:N") {
+		t.Error("HTML does not explain the FedRAMP unauthenticated-automation LEV floor")
+	}
 }
 
 func TestBuildUntaggedUsesDefaultArchetype(t *testing.T) {

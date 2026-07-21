@@ -69,8 +69,8 @@ func TestBuildAndRenderJSONIncludeChainableEntrypointMetadata(t *testing.T) {
 		t.Fatalf("Findings = %#v, want chainable-entrypoint metadata", got.Findings)
 	}
 	entrypoint := got.Findings[0].ChainableEntrypoint
-	if entrypoint.CandidateStatus != "high-confidence" || entrypoint.Qualification != "not-qualifying" || entrypoint.Qualifies || entrypoint.PolicyVersion != "chainable-entrypoint-v1" {
-		t.Fatalf("ChainableEntrypoint = %#v, want unexposed high-confidence candidate not to qualify", entrypoint)
+	if entrypoint.CandidateStatus != "high_confidence" || entrypoint.Classification != "none" || entrypoint.HighConfidence || entrypoint.PolicyVersion != "chainable-entrypoint-v2" {
+		t.Fatalf("ChainableEntrypoint = %#v, want unexposed high-confidence candidate classified as none", entrypoint)
 	}
 	if got.Findings[0].Remediation == nil || got.Findings[0].Remediation.IRV {
 		t.Fatalf("Remediation = %#v, want chainable-entrypoint metadata to leave IRV false", got.Findings[0].Remediation)
@@ -80,7 +80,7 @@ func TestBuildAndRenderJSONIncludeChainableEntrypointMetadata(t *testing.T) {
 	if err := RenderJSON(&output, got); err != nil {
 		t.Fatalf("RenderJSON returned error: %v", err)
 	}
-	for _, want := range []string{`"chainableEntrypoint"`, `"qualification": "not-qualifying"`, `"candidateStatus": "high-confidence"`, `"strict-execution-cwe"`, `"policyVersion": "chainable-entrypoint-v1"`} {
+	for _, want := range []string{`"chainableEntrypoint"`, `"classification": "none"`, `"candidateStatus": "high_confidence"`, `"strict-execution-cwe"`, `"policyVersion": "chainable-entrypoint-v2"`} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("rendered JSON missing %q:\n%s", want, output.String())
 		}
@@ -89,11 +89,11 @@ func TestBuildAndRenderJSONIncludeChainableEntrypointMetadata(t *testing.T) {
 	exposed := Build(sampleInventory(), []model.Finding{finding}, map[model.ResourceRef]model.Exposure{
 		sampleContainerRef(): {InternetAccessible: true},
 	}, Options{GeneratedAt: fixedTime(), View: ViewFindings})
-	if len(exposed.Findings) != 1 || exposed.Findings[0].ChainableEntrypoint == nil || !exposed.Findings[0].ChainableEntrypoint.Qualifies {
-		t.Fatalf("exposed Findings = %#v, want qualifying chainable entrypoint", exposed.Findings)
+	if len(exposed.Findings) != 1 || exposed.Findings[0].ChainableEntrypoint == nil || !exposed.Findings[0].ChainableEntrypoint.HighConfidence {
+		t.Fatalf("exposed Findings = %#v, want high-confidence chainable entrypoint", exposed.Findings)
 	}
-	if len(exposed.Findings[0].Affected) != 1 || exposed.Findings[0].Affected[0].ChainableEntrypoint == nil || !exposed.Findings[0].Affected[0].ChainableEntrypoint.Qualifies {
-		t.Fatalf("exposed Affected = %#v, want per-asset qualifying chainable entrypoint", exposed.Findings[0].Affected)
+	if len(exposed.Findings[0].Affected) != 1 || exposed.Findings[0].Affected[0].ChainableEntrypoint == nil || !exposed.Findings[0].Affected[0].ChainableEntrypoint.HighConfidence {
+		t.Fatalf("exposed Affected = %#v, want per-asset high-confidence chainable entrypoint", exposed.Findings[0].Affected)
 	}
 }
 
@@ -118,18 +118,18 @@ func TestBuildFindingViewIncludesPerAffectedResourceExposure(t *testing.T) {
 		if affected.Resource == exposed && (affected.Exposure == nil || !affected.Exposure.InternetAccessible) {
 			t.Fatalf("Affected exposed entry = %#v, want internet exposure", affected)
 		}
-		if affected.Resource == exposed && (affected.ChainableEntrypoint == nil || !affected.ChainableEntrypoint.Qualifies) {
-			t.Fatalf("Affected exposed entry = %#v, want qualifying chainable entrypoint", affected)
+		if affected.Resource == exposed && (affected.ChainableEntrypoint == nil || !affected.ChainableEntrypoint.HighConfidence) {
+			t.Fatalf("Affected exposed entry = %#v, want high-confidence chainable entrypoint", affected)
 		}
 		if affected.Resource == internal && affected.Exposure != nil {
 			t.Fatalf("Affected internal entry = %#v, want no exposure", affected)
 		}
-		if affected.Resource == internal && (affected.ChainableEntrypoint == nil || affected.ChainableEntrypoint.Qualifies || affected.ChainableEntrypoint.Qualification != "not-qualifying") {
-			t.Fatalf("Affected internal entry = %#v, want non-qualifying chainable candidate", affected)
+		if affected.Resource == internal && (affected.ChainableEntrypoint == nil || affected.ChainableEntrypoint.HighConfidence || affected.ChainableEntrypoint.Classification != "none") {
+			t.Fatalf("Affected internal entry = %#v, want chainable candidate classified as none", affected)
 		}
 	}
-	if got.Findings[0].ChainableEntrypoint == nil || !got.Findings[0].ChainableEntrypoint.Qualifies {
-		t.Fatalf("top-level ChainableEntrypoint = %#v, want strongest affected-asset qualification", got.Findings[0].ChainableEntrypoint)
+	if got.Findings[0].ChainableEntrypoint == nil || !got.Findings[0].ChainableEntrypoint.HighConfidence {
+		t.Fatalf("top-level ChainableEntrypoint = %#v, want strongest affected-asset classification", got.Findings[0].ChainableEntrypoint)
 	}
 }
 

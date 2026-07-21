@@ -138,7 +138,14 @@ func selectWorkloadsByService(inventory *model.Inventory, services map[serviceKe
 			if resource.Resource.Namespace != key.namespace {
 				continue
 			}
-			if labelsMatchSelector(resource.Labels, service.Spec.Selector) {
+			if !serviceSelectableWorkloadKind(resource.Resource.Kind) {
+				continue
+			}
+			labels := resource.Labels
+			if resource.PodLabels != nil {
+				labels = resource.PodLabels
+			}
+			if labelsMatchSelector(labels, service.Spec.Selector) {
 				selected[key] = append(selected[key], resource)
 			}
 		}
@@ -147,6 +154,19 @@ func selectWorkloadsByService(inventory *model.Inventory, services map[serviceKe
 		})
 	}
 	return selected
+}
+
+// serviceSelectableWorkloadKind limits stable Service-backed exposure to pod
+// and serving-controller inventories. Batch controllers are not treated as
+// public services even when their metadata or ephemeral pod labels collide with
+// a Service selector.
+func serviceSelectableWorkloadKind(kind string) bool {
+	switch kind {
+	case "Pod", "Deployment", "StatefulSet", "DaemonSet":
+		return true
+	default:
+		return false
+	}
 }
 
 func labelsMatchSelector(labels, selector map[string]string) bool {

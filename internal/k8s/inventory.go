@@ -337,9 +337,10 @@ type inventoryBuilder struct {
 // (Helm values.labels render to the workload object) are visible to scoring.
 func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string, replicas *int32) {
 	resourceInventory := model.ResourceInventory{
-		Resource: resource,
-		Labels:   mergeLabels(workloadLabels, templateLabels),
-		Posture:  workloadPosture(spec, replicas),
+		Resource:  resource,
+		Labels:    mergeLabels(workloadLabels, templateLabels),
+		PodLabels: copyPodLabels(templateLabels),
+		Posture:   workloadPosture(spec, replicas),
 	}
 	for _, c := range spec.Containers {
 		b.addContainer(&resourceInventory, resource, spec, annotations, c, "container")
@@ -390,6 +391,17 @@ func copyStringMap(values map[string]string) map[string]string {
 	if len(values) == 0 {
 		return nil
 	}
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
+}
+
+// copyPodLabels deliberately returns a non-nil map even when the pod template
+// has no labels. Exposure analysis uses nil to distinguish legacy inventories,
+// which predate PodLabels, from a currently collected template known to be empty.
+func copyPodLabels(values map[string]string) map[string]string {
 	copied := make(map[string]string, len(values))
 	for key, value := range values {
 		copied[key] = value

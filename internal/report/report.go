@@ -483,7 +483,7 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 				scoped.Affected[0].Exposure = &value
 			}
 			assetInternetAccessible := internetReachable(scoped.Exposure)
-			scoped.ChainableEntrypoint = reachability.QualifyChainableEntrypoint(scoped.ChainableEntrypoint, assetInternetAccessible)
+			scoped.ChainableEntrypoint = reachability.ClassifyChainableEntrypoint(scoped.ChainableEntrypoint, assetInternetAccessible)
 			scoped.Affected[0].ChainableEntrypoint = cloneChainableEntrypoint(scoped.ChainableEntrypoint)
 			pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, assetInternetAccessible)
 			if classificationOnly {
@@ -631,7 +631,7 @@ func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]mode
 			detail.Exposure = &value
 		}
 		assetInternetAccessible := internetReachable(detail.Exposure)
-		detail.ChainableEntrypoint = reachability.QualifyChainableEntrypoint(finding.ChainableEntrypoint, assetInternetAccessible)
+		detail.ChainableEntrypoint = reachability.ClassifyChainableEntrypoint(finding.ChainableEntrypoint, assetInternetAccessible)
 		pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, assetInternetAccessible)
 		if classificationOnly {
 			detail.Classification = classificationFromScore(pain, rem)
@@ -646,26 +646,26 @@ func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]mode
 func bestChainableEntrypoint(affected []model.Affected, fallback *model.ChainableEntrypoint) *model.ChainableEntrypoint {
 	var best *model.ChainableEntrypoint
 	for _, item := range affected {
-		if chainableQualificationRank(item.ChainableEntrypoint) > chainableQualificationRank(best) {
+		if chainableClassificationRank(item.ChainableEntrypoint) > chainableClassificationRank(best) {
 			best = item.ChainableEntrypoint
 		}
 	}
 	if best != nil {
 		return cloneChainableEntrypoint(best)
 	}
-	return reachability.QualifyChainableEntrypoint(fallback, false)
+	return reachability.ClassifyChainableEntrypoint(fallback, false)
 }
 
-func chainableQualificationRank(value *model.ChainableEntrypoint) int {
+func chainableClassificationRank(value *model.ChainableEntrypoint) int {
 	if value == nil {
 		return 0
 	}
-	switch value.Qualification {
-	case "qualifying":
+	switch value.Classification {
+	case "high_confidence":
 		return 3
-	case "review":
+	case "possible":
 		return 2
-	case "not-qualifying":
+	case "none":
 		return 1
 	default:
 		return 0
@@ -892,7 +892,7 @@ func cloneChainableEntrypoint(in *model.ChainableEntrypoint) *model.ChainableEnt
 	}
 	out := *in
 	out.ReasonCodes = append([]string(nil), in.ReasonCodes...)
-	out.QualificationReasonCodes = append([]string(nil), in.QualificationReasonCodes...)
+	out.ClassificationReasonCodes = append([]string(nil), in.ClassificationReasonCodes...)
 	out.SourceFacts.CWEs = append([]string(nil), in.SourceFacts.CWEs...)
 	return &out
 }

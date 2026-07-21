@@ -10,15 +10,11 @@ import (
 )
 
 const (
-	ChainableEntrypointPolicyVersion = "chainable-entrypoint-v1"
+	ChainableEntrypointPolicyVersion = "chainable-entrypoint-v2"
 
-	ChainableEntrypointHighConfidence = "high-confidence"
+	ChainableEntrypointHighConfidence = "high_confidence"
 	ChainableEntrypointPossible       = "possible"
 	ChainableEntrypointNone           = "none"
-
-	ChainableEntrypointQualifying    = "qualifying"
-	ChainableEntrypointReview        = "review"
-	ChainableEntrypointNotQualifying = "not-qualifying"
 )
 
 var strictExecutionCWEs = map[string]struct{}{
@@ -76,7 +72,7 @@ func EvaluateChainableEntrypoint(finding model.Finding) *model.ChainableEntrypoi
 	}
 
 	result := &model.ChainableEntrypoint{
-		Qualification:   ChainableEntrypointNotQualifying,
+		Classification:  ChainableEntrypointNone,
 		ActiveFinding:   !finding.Suppressed,
 		CandidateStatus: ChainableEntrypointNone,
 		PolicyVersion:   ChainableEntrypointPolicyVersion,
@@ -103,7 +99,7 @@ func EvaluateChainableEntrypoint(finding model.Finding) *model.ChainableEntrypoi
 		return result
 	}
 
-	if fullImpact || (attackVector == "N" && intersects(cwes, possibleExecutionCWEs)) {
+	if attackVector == "N" && (fullImpact || intersects(cwes, possibleExecutionCWEs)) {
 		result.CandidateStatus = ChainableEntrypointPossible
 		if fullImpact {
 			result.ReasonCodes = append(result.ReasonCodes, "full-impact-without-execution-signal")
@@ -132,11 +128,11 @@ func EvaluateChainableEntrypoint(finding model.Finding) *model.ChainableEntrypoi
 	return result
 }
 
-// QualifyChainableEntrypoint joins the CVE-level E0 candidate classification to
+// ClassifyChainableEntrypoint joins the CVE-level E0 candidate classification to
 // the deployed finding's active state and the affected asset's internet exposure.
 // It deliberately stops at the upstream entry-point flag and performs no G0 join
 // or downstream vulnerability promotion.
-func QualifyChainableEntrypoint(value *model.ChainableEntrypoint, internetAccessible bool) *model.ChainableEntrypoint {
+func ClassifyChainableEntrypoint(value *model.ChainableEntrypoint, internetAccessible bool) *model.ChainableEntrypoint {
 	if value == nil {
 		return nil
 	}
@@ -144,15 +140,15 @@ func QualifyChainableEntrypoint(value *model.ChainableEntrypoint, internetAccess
 	result.ReasonCodes = append([]string(nil), value.ReasonCodes...)
 	result.SourceFacts.CWEs = append([]string(nil), value.SourceFacts.CWEs...)
 	result.InternetAccessible = internetAccessible
-	result.Qualifies = false
-	result.Qualification = ChainableEntrypointNotQualifying
-	result.QualificationReasonCodes = nil
+	result.HighConfidence = false
+	result.Classification = ChainableEntrypointNone
+	result.ClassificationReasonCodes = nil
 
 	if !result.ActiveFinding {
-		result.QualificationReasonCodes = append(result.QualificationReasonCodes, "finding-not-active")
+		result.ClassificationReasonCodes = append(result.ClassificationReasonCodes, "finding-not-active")
 	}
 	if !result.InternetAccessible {
-		result.QualificationReasonCodes = append(result.QualificationReasonCodes, "asset-not-internet-accessible")
+		result.ClassificationReasonCodes = append(result.ClassificationReasonCodes, "asset-not-internet-accessible")
 	}
 	if !result.ActiveFinding || !result.InternetAccessible {
 		return &result
@@ -160,14 +156,14 @@ func QualifyChainableEntrypoint(value *model.ChainableEntrypoint, internetAccess
 
 	switch result.CandidateStatus {
 	case ChainableEntrypointHighConfidence:
-		result.Qualification = ChainableEntrypointQualifying
-		result.Qualifies = true
-		result.QualificationReasonCodes = []string{"active-finding", "asset-internet-accessible", "high-confidence-candidate"}
+		result.Classification = ChainableEntrypointHighConfidence
+		result.HighConfidence = true
+		result.ClassificationReasonCodes = []string{"active-finding", "asset-internet-accessible", "high-confidence-candidate"}
 	case ChainableEntrypointPossible:
-		result.Qualification = ChainableEntrypointReview
-		result.QualificationReasonCodes = []string{"active-finding", "asset-internet-accessible", "possible-candidate"}
+		result.Classification = ChainableEntrypointPossible
+		result.ClassificationReasonCodes = []string{"active-finding", "asset-internet-accessible", "possible-candidate"}
 	default:
-		result.QualificationReasonCodes = []string{"active-finding", "asset-internet-accessible", "no-chainable-candidate"}
+		result.ClassificationReasonCodes = []string{"active-finding", "asset-internet-accessible", "no-chainable-candidate"}
 	}
 	return &result
 }

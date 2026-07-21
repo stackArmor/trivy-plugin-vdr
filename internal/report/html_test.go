@@ -45,14 +45,16 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Chainable entrypoint",
 		`id="chainable-entrypoint"`,
 		`"chainableEntrypoint"`,
-		`"high-confidence"`,
-		`"qualification":"qualifying"`,
+		`"high_confidence"`,
+		`"classification":"high_confidence"`,
 		"chainableEntrypointTooltip",
 		"entrypoint-badge",
-		"test-context",        // kubectx in the header
-		"Certification Class", // class chip/subtitle in the header
-		"privileged",          // security posture moved into the resource-name tooltip
-		"image-cell",          // long image references are constrained in the table
+		"entry.exposure || null", // finding rows must not inherit another affected resource's exposure
+		"scopedRemediation",      // finding rows use their own affected-resource deadline
+		"test-context",           // kubectx in the header
+		"Certification Class",    // class chip/subtitle in the header
+		"privileged",             // security posture moved into the resource-name tooltip
+		"image-cell",             // long image references are constrained in the table
 		"text-overflow: ellipsis",
 	} {
 		if !strings.Contains(output, want) {
@@ -65,6 +67,9 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	}
 	if strings.Contains(output, "<th>Chainable entrypoint</th>") {
 		t.Fatalf("HTML output should not have a Chainable entrypoint column header")
+	}
+	if strings.Contains(output, "entry.exposure || finding.exposure") {
+		t.Fatalf("HTML finding rows must not inherit top-level best exposure")
 	}
 	if strings.Contains(output, "VDR Kubernetes Report") {
 		t.Fatalf("HTML output should use source-neutral report title")

@@ -12,6 +12,7 @@ func TestEvaluateChainableEntrypoint(t *testing.T) {
 		v3NetworkPartial = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
 		v3NetworkFull    = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 		v3LocalPartial   = "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L"
+		v3LocalFull      = "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
 		v4NetworkFull    = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
 	)
 
@@ -46,10 +47,17 @@ func TestEvaluateChainableEntrypoint(t *testing.T) {
 			wantReasons: []string{"network-attack-vector", "full-vulnerable-system-impact", "combined-execution-cwe"},
 		},
 		{
-			name:        "full impact alone is possible",
+			name:        "network attack vector plus full impact is possible",
 			vector:      v3NetworkFull,
 			wantStatus:  ChainableEntrypointPossible,
 			wantReasons: []string{"full-impact-without-execution-signal"},
+		},
+		{
+			name:        "full impact still requires network attack vector",
+			vector:      v3LocalFull,
+			cwes:        []string{"CWE-120"},
+			wantStatus:  ChainableEntrypointNone,
+			wantReasons: []string{"attack-vector-not-network"},
 		},
 		{
 			name:        "loose execution CWE without full impact is possible",
@@ -104,14 +112,14 @@ func TestEvaluateChainableEntrypoint(t *testing.T) {
 			if got.PolicyVersion != ChainableEntrypointPolicyVersion {
 				t.Fatalf("PolicyVersion = %q, want %q", got.PolicyVersion, ChainableEntrypointPolicyVersion)
 			}
-			if got.Qualification != ChainableEntrypointNotQualifying || got.Qualifies || !got.ActiveFinding || got.InternetAccessible {
-				t.Fatalf("unjoined qualification = %#v, want active candidate not yet qualified by exposure", got)
+			if got.Classification != ChainableEntrypointNone || got.HighConfidence || !got.ActiveFinding || got.InternetAccessible {
+				t.Fatalf("unjoined classification = %#v, want active candidate not yet classified by exposure", got)
 			}
 		})
 	}
 }
 
-func TestQualifyChainableEntrypointRequiresActiveFindingExposureAndHighConfidence(t *testing.T) {
+func TestClassifyChainableEntrypointRequiresActiveFindingExposureAndHighConfidence(t *testing.T) {
 	high := EvaluateChainableEntrypoint(model.Finding{
 		CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L",
 		CWEs:       []string{"CWE-94"},
@@ -129,20 +137,20 @@ func TestQualifyChainableEntrypointRequiresActiveFindingExposureAndHighConfidenc
 		name               string
 		value              *model.ChainableEntrypoint
 		internetAccessible bool
-		wantQualification  string
-		wantQualifies      bool
+		wantClassification string
+		wantHighConfidence bool
 	}{
-		{name: "active exposed high-confidence candidate qualifies", value: high, internetAccessible: true, wantQualification: ChainableEntrypointQualifying, wantQualifies: true},
-		{name: "unexposed high-confidence candidate does not qualify", value: high, wantQualification: ChainableEntrypointNotQualifying},
-		{name: "active exposed possible candidate stays review", value: possible, internetAccessible: true, wantQualification: ChainableEntrypointReview},
-		{name: "suppressed exposed high-confidence candidate does not qualify", value: suppressed, internetAccessible: true, wantQualification: ChainableEntrypointNotQualifying},
+		{name: "active exposed high-confidence candidate is high confidence", value: high, internetAccessible: true, wantClassification: ChainableEntrypointHighConfidence, wantHighConfidence: true},
+		{name: "unexposed high-confidence candidate is none", value: high, wantClassification: ChainableEntrypointNone},
+		{name: "active exposed possible candidate stays possible", value: possible, internetAccessible: true, wantClassification: ChainableEntrypointPossible},
+		{name: "suppressed exposed high-confidence candidate is none", value: suppressed, internetAccessible: true, wantClassification: ChainableEntrypointNone},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := QualifyChainableEntrypoint(tt.value, tt.internetAccessible)
-			if got.Qualification != tt.wantQualification || got.Qualifies != tt.wantQualifies {
-				t.Fatalf("qualification = %q/%t, want %q/%t: %#v", got.Qualification, got.Qualifies, tt.wantQualification, tt.wantQualifies, got)
+			got := ClassifyChainableEntrypoint(tt.value, tt.internetAccessible)
+			if got.Classification != tt.wantClassification || got.HighConfidence != tt.wantHighConfidence {
+				t.Fatalf("classification = %q/%t, want %q/%t: %#v", got.Classification, got.HighConfidence, tt.wantClassification, tt.wantHighConfidence, got)
 			}
 			if got.InternetAccessible != tt.internetAccessible {
 				t.Fatalf("InternetAccessible = %t, want %t", got.InternetAccessible, tt.internetAccessible)

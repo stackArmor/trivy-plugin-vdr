@@ -812,6 +812,42 @@ func TestResourceInventoryRequiresLabelsForSelectorResolution(t *testing.T) {
 	}
 }
 
+func TestAnalyzeUsesPodTemplateLabelsAndExcludesBatchControllers(t *testing.T) {
+	selector := map[string]string{"app": "teller"}
+	images := []model.ContainerImage{containerImage("app", "example.com/app:v1")}
+	inv := &model.Inventory{Resources: []model.ResourceInventory{
+		{
+			Resource:  model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "rally", Name: "api"},
+			Labels:    selector,
+			PodLabels: map[string]string{},
+			Images:    images,
+		},
+		{
+			Resource:  model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "rally", Name: "teller"},
+			Labels:    map[string]string{"name": "teller"},
+			PodLabels: selector,
+			Images:    images,
+		},
+		{
+			Resource:  model.ResourceRef{APIVersion: "batch/v1", Kind: "CronJob", Namespace: "rally", Name: "voltron-db-utilities"},
+			Labels:    selector,
+			PodLabels: selector,
+			Images:    images,
+		},
+	}}
+	objects := Objects{
+		Services:  []corev1.Service{service("rally", "teller", selector)},
+		Ingresses: []networkingv1.Ingress{ingress("rally", "public-ing", "gce", "teller", nil)},
+	}
+
+	got := Analyze(inv, objects)
+
+	want := model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "rally", Name: "teller", ContainerName: "app", ContainerType: "container"}
+	if len(got) != 1 || !got[want].InternetAccessible {
+		t.Fatalf("Analyze() = %#v, want only the pod-template-selected Deployment exposed", got)
+	}
+}
+
 func TestAnalyzeLoadBalancerServiceExposesControllerPods(t *testing.T) {
 	// An ingress-nginx controller is reached via its own type=LoadBalancer Service,
 	// not via any Ingress backend. The LB Service should mark the controller pods

@@ -4,21 +4,21 @@
 
 ## Chainable entry-point flag
 
-Each vulnerability finding carries informational `chainableEntrypoint` metadata that joins the CVE-level execution classification to the affected asset's internet exposure. It flags an upstream finding as `qualifying` only when all three conditions hold:
+Each vulnerability finding carries informational `chainableEntrypoint` metadata that joins the CVE-level execution classification to the affected asset's internet exposure. Its deployed `classification` is `high_confidence` only when all three conditions hold:
 
 1. The finding is active (not suppressed).
 2. The affected asset is `internetAccessible` under the collected exposure evidence.
-3. The CVE-level `candidateStatus` is `high-confidence`.
+3. The CVE-level `candidateStatus` is `high_confidence`.
 
-An active, internet-accessible `possible` candidate is retained as `review`. Every other combination is `not-qualifying`. This stops at the upstream signal: it does not join findings across an execution boundary, promote AV:L vulnerabilities to IRV, or change a remediation deadline.
+An active, internet-accessible `possible` candidate retains the deployed classification `possible`. Every other combination is `none`. This stops at the upstream signal: it does not join findings across an execution boundary, promote AV:L vulnerabilities to IRV, or change a remediation deadline.
 
-Policy `chainable-entrypoint-v1` produces three CVE-level candidate statuses:
+Policy `chainable-entrypoint-v2` produces three CVE-level candidate statuses. Every heuristic branch requires `AV:N`:
 
-- `high-confidence` for `AV:N` findings mapped to the strict execution-semantics set (`CWE-78`, `CWE-94`, `CWE-95`, `CWE-96`, `CWE-98`, `CWE-553`, `CWE-624`, or `CWE-917`), or for `AV:N` findings with full vulnerable-system C/I/A impact and `CWE-97` or `CWE-494`.
-- `possible` for full vulnerable-system impact without a corroborating execution signal, or for `AV:N` findings mapped to `CWE-97`, `CWE-470`, `CWE-494`, `CWE-829`, or `CWE-1336` that do not meet the high-confidence rule. Context-dependent `CWE-829` and `CWE-1336` cases remain possible because server/runtime execution context is not currently collected.
+- `high_confidence` for `AV:N` findings mapped to the high-signal strict execution-semantics set (`CWE-78`, `CWE-94`, `CWE-95`, `CWE-96`, `CWE-98`, `CWE-553`, `CWE-624`, or `CWE-917`), or for `AV:N` findings with full vulnerable-system C/I/A impact and the moderate-signal `CWE-97` or `CWE-494`.
+- `possible` for `AV:N` plus full vulnerable-system impact without a corroborating execution signal, or for `AV:N` findings mapped to the moderate/context-dependent `CWE-97`, `CWE-470`, `CWE-494`, `CWE-829`, or `CWE-1336` that do not meet the high-confidence conjunction. Context-dependent `CWE-829` and `CWE-1336` cases remain possible because server/runtime execution context is not currently collected.
 - `none` when no rule matches.
 
-The record retains the deployed qualification and its inputs (`activeFinding`, `internetAccessible`, and `candidateStatus`), machine-readable reason codes, policy version, normalized CWEs, the CVSS vector and attack vector, the full-impact result, and execution-context status when relevant. Finding-centric JSON records the result on every `affected[]` asset and surfaces the strongest qualification at the finding level. The HTML report filters on `qualifying`, `review`, and `not-qualifying`, and displays qualifying/review results as a tooltip badge beside the CVE.
+The record retains the deployed classification and its inputs (`activeFinding`, `internetAccessible`, and `candidateStatus`), the `highConfidence` flag, machine-readable reason codes, policy version, normalized CWEs, the CVSS vector and attack vector, the full-impact result, and execution-context status when relevant. Finding-centric JSON records the result on every `affected[]` asset and surfaces the strongest classification at the finding level. The HTML report filters on `high_confidence`, `possible`, and `none`, and displays high-confidence/possible results as a tooltip badge beside the CVE.
 
 The evaluator uses only source facts present in the report. When enrichment is skipped or a CVE has no specific CWE assignment, the record preserves that absence and the classifier falls back to the available CVSS signals.
 
@@ -74,6 +74,8 @@ ECS task-definition `repositoryCredentials` Secrets Manager values are used only
 ## Kubernetes Ingress And Gateway
 
 Kubernetes route evaluation starts from Ingress and Gateway API objects, resolves their backend Services, then maps those Services to selected workload pods and containers. Provider-specific public/private class and scheme metadata decides whether the route represents a public path.
+
+Service selectors are matched against actual pod or pod-template labels, never workload-controller metadata labels. Batch `Job` and `CronJob` resources are excluded from stable Service-backed internet exposure; a matching label on a batch controller does not make that resource IRV.
 
 ```mermaid
 flowchart TD
