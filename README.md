@@ -382,6 +382,8 @@ JSON output defaults to a finding-centric report. Each finding includes `affecte
 
 The top-level JSON metadata includes `scannerVersion` for the Trivy binary used by the plugin and `pluginVersion` for the VDR plugin build.
 
+Every vulnerability finding also includes informational `chainableEntrypoint` metadata. `candidateStatus` (`high-confidence`, `possible`, or `none`) records the CVE-level execution classification; the deployed `qualification` is `qualifying` only when the finding is active, the affected asset is internet-accessible, and the candidate status is high-confidence. An active, exposed possible candidate is `review`; every other combination is `not-qualifying`. Finding-centric output retains the result per `affected[]` asset and surfaces the strongest result at the finding level. The metadata does not promote downstream vulnerabilities or alter IRV, PAIN, or remediation deadlines. The evaluator uses only metadata present in the scan, so `--skip-enrichment` can remove CWE signals and produce a less specific candidate result. CycloneDX output carries the qualification inputs and result as `vdr:chainableEntrypoint*` properties.
+
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
 Container security metadata (`images[].security`) is collected from every source (since v2.3.0): Kubernetes and Helm report the pod/container securityContext (privileged, capability add/drop, read-only root filesystem, seccomp/AppArmor profiles); ECS reports `privileged`, `readonlyRootFilesystem`, capability add/drop, and seccomp/AppArmor profiles from `dockerSecurityOptions` (EC2 launch type); Cloud Run reports the platform-enforced posture — never privileged, writable in-memory root filesystem — plus `sandbox` (`gVisor` for gen1, `microVM` for gen2) when the execution environment is explicit.
@@ -395,6 +397,8 @@ Use `--scan-reachability-only` with `k8s`, `cloudrun`, or `ecs` to run Trivy vul
 Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a Trivy fix-status filter (including `will_not_fix`), a PAIN filter, a multi-select remediation-deadline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
 
 Each finding shows its **PAIN** tier and a FedRAMP **Remediation** deadline (see [PAIN scoring and remediation](#pain-scoring-and-remediation)). Automatable, Exploitation, and Technical impact from CISA Vulnrichment are also shown for context; CVSS-derived Automatable and Technical impact values are rendered in italics with a `†` marker so they are distinguishable from authoritative Vulnrichment values. Hover any value or column header for an in-report explanation. Use `--html-template <path>` to override the template with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
+
+The HTML report provides a **Chainable entrypoint** filter without adding another table column. Qualifying and exposed-review findings appear as a small badge beside the CVE; hover or focus the badge to see the finding's active state, asset exposure, CVE candidate classification, reasons, source facts, execution context, and policy version.
 
 ## PAIN scoring and remediation
 

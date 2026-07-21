@@ -55,12 +55,56 @@ func TestBuildAndRenderJSONIncludeVersionMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildAndRenderJSONIncludeChainableEntrypointMetadata(t *testing.T) {
+	finding := sampleFinding("CVE-2026-0094", "HIGH", 0.7)
+	finding.CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:L"
+	finding.CWEs = []string{"CWE-94"}
+
+	got := Build(sampleInventory(), []model.Finding{finding}, nil, Options{
+		GeneratedAt: fixedTime(),
+		View:        ViewFindings,
+	})
+
+	if len(got.Findings) != 1 || got.Findings[0].ChainableEntrypoint == nil {
+		t.Fatalf("Findings = %#v, want chainable-entrypoint metadata", got.Findings)
+	}
+	entrypoint := got.Findings[0].ChainableEntrypoint
+	if entrypoint.CandidateStatus != "high-confidence" || entrypoint.Qualification != "not-qualifying" || entrypoint.Qualifies || entrypoint.PolicyVersion != "chainable-entrypoint-v1" {
+		t.Fatalf("ChainableEntrypoint = %#v, want unexposed high-confidence candidate not to qualify", entrypoint)
+	}
+	if got.Findings[0].Remediation == nil || got.Findings[0].Remediation.IRV {
+		t.Fatalf("Remediation = %#v, want chainable-entrypoint metadata to leave IRV false", got.Findings[0].Remediation)
+	}
+
+	var output bytes.Buffer
+	if err := RenderJSON(&output, got); err != nil {
+		t.Fatalf("RenderJSON returned error: %v", err)
+	}
+	for _, want := range []string{`"chainableEntrypoint"`, `"qualification": "not-qualifying"`, `"candidateStatus": "high-confidence"`, `"strict-execution-cwe"`, `"policyVersion": "chainable-entrypoint-v1"`} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("rendered JSON missing %q:\n%s", want, output.String())
+		}
+	}
+
+	exposed := Build(sampleInventory(), []model.Finding{finding}, map[model.ResourceRef]model.Exposure{
+		sampleContainerRef(): {InternetAccessible: true},
+	}, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+	if len(exposed.Findings) != 1 || exposed.Findings[0].ChainableEntrypoint == nil || !exposed.Findings[0].ChainableEntrypoint.Qualifies {
+		t.Fatalf("exposed Findings = %#v, want qualifying chainable entrypoint", exposed.Findings)
+	}
+	if len(exposed.Findings[0].Affected) != 1 || exposed.Findings[0].Affected[0].ChainableEntrypoint == nil || !exposed.Findings[0].Affected[0].ChainableEntrypoint.Qualifies {
+		t.Fatalf("exposed Affected = %#v, want per-asset qualifying chainable entrypoint", exposed.Findings[0].Affected)
+	}
+}
+
 func TestBuildFindingViewIncludesPerAffectedResourceExposure(t *testing.T) {
 	inv := sampleInventory()
 	exposed := sampleContainerRef()
 	internal := model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "internal", ContainerName: "app", ContainerType: "container"}
 	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
 	finding.AffectedResources = []model.ResourceRef{exposed, internal}
+	finding.CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
+	finding.CWEs = []string{"CWE-94"}
 	exposures := map[model.ResourceRef]model.Exposure{
 		exposed: {InternetAccessible: true, Provider: "gke", RouteKind: "Ingress", RouteName: "web"},
 	}
@@ -74,9 +118,18 @@ func TestBuildFindingViewIncludesPerAffectedResourceExposure(t *testing.T) {
 		if affected.Resource == exposed && (affected.Exposure == nil || !affected.Exposure.InternetAccessible) {
 			t.Fatalf("Affected exposed entry = %#v, want internet exposure", affected)
 		}
+		if affected.Resource == exposed && (affected.ChainableEntrypoint == nil || !affected.ChainableEntrypoint.Qualifies) {
+			t.Fatalf("Affected exposed entry = %#v, want qualifying chainable entrypoint", affected)
+		}
 		if affected.Resource == internal && affected.Exposure != nil {
 			t.Fatalf("Affected internal entry = %#v, want no exposure", affected)
 		}
+		if affected.Resource == internal && (affected.ChainableEntrypoint == nil || affected.ChainableEntrypoint.Qualifies || affected.ChainableEntrypoint.Qualification != "not-qualifying") {
+			t.Fatalf("Affected internal entry = %#v, want non-qualifying chainable candidate", affected)
+		}
+	}
+	if got.Findings[0].ChainableEntrypoint == nil || !got.Findings[0].ChainableEntrypoint.Qualifies {
+		t.Fatalf("top-level ChainableEntrypoint = %#v, want strongest affected-asset qualification", got.Findings[0].ChainableEntrypoint)
 	}
 }
 

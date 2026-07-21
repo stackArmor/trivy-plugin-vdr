@@ -66,6 +66,9 @@ func dedupeFindings(findings []model.Finding) []model.Finding {
 			continue
 		}
 		merged[at].AffectedResources = append(merged[at].AffectedResources, finding.AffectedResources...)
+		if chainableEntrypointRank(finding.ChainableEntrypoint) > chainableEntrypointRank(merged[at].ChainableEntrypoint) {
+			merged[at].ChainableEntrypoint = cloneChainableEntrypoint(finding.ChainableEntrypoint)
+		}
 		if finding.ImageRef != "" {
 			images[at][finding.ImageRef] = struct{}{}
 		}
@@ -83,4 +86,22 @@ func dedupeFindings(findings []model.Finding) []model.Finding {
 		merged[i].ImageRefs = refs
 	}
 	return merged
+}
+
+// chainableEntrypointRank makes deduplication conservative when two scanner
+// records for the same CVE/package version carry different source metadata.
+func chainableEntrypointRank(value *model.ChainableEntrypoint) int {
+	if value == nil {
+		return 0
+	}
+	switch value.CandidateStatus {
+	case "high-confidence":
+		return 3
+	case "possible":
+		return 2
+	case "none":
+		return 1
+	default:
+		return 0
+	}
 }

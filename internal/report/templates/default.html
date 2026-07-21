@@ -67,6 +67,10 @@
     .suppressed-table { margin-top: 18px; }
     td.derived { font-style: italic; }
     .pkg-line { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+    .entrypoint-badge { display: inline-block; margin-left: 6px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 999px; font-size: 10px; line-height: 1.4; font-weight: 650; vertical-align: 1px; cursor: help; }
+    .entrypoint-badge:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .entrypoint-qualifying { color: var(--danger); border-color: currentColor; }
+    .entrypoint-review { color: var(--warn); border-color: currentColor; }
     .image-column { width: 22%; }
     .image-cell { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .resource-column { width: 13%; }
@@ -105,6 +109,7 @@
       <label>Namespace<select id="namespace"><option value="">All</option></select></label>
       {{ end }}
       <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
+      <label>Chainable entrypoint<select id="chainable-entrypoint"><option value="">All</option><option value="qualifying">Qualifying</option><option value="review">Possible / review</option><option value="not-qualifying">Not qualifying</option></select></label>
       <label>Automatable<select id="automatable"><option value="">All</option></select></label>
       <label>Exploitation<select id="exploitation"><option value="">All</option></select></label>
       <label>EPSS score<input id="epss" type="number" min="0" max="1" step="0.01" placeholder="Minimum"></label>
@@ -135,7 +140,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset archetype's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50 or active exploitation and IRV = internet-reachable. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
+    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset archetype's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50 or active exploitation and IRV = internet-reachable. A chainable-entrypoint badge requires an active finding on an internet-accessible asset plus a high-confidence CVE execution classification; exposed possible candidates are marked for review. The flag is informational and does not alter IRV or downstream findings. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
     {{ if .Report.SuppressedFindings }}
     <table class="suppressed-table" id="suppressed-findings">
       <thead>
@@ -192,6 +197,7 @@
     function addFinding(finding, resource, exposure, resourceReport) {
       const vuln = finding.vulnrichment || {};
       const epss = finding.epss || {};
+      const chainableEntrypoint = finding.chainableEntrypoint || null;
       const ref = resource || (finding.affected && finding.affected[0] && finding.affected[0].resource) || {};
       const images = resourceReport && resourceReport.images ? resourceReport.images : [];
       const row = {
@@ -217,6 +223,8 @@
         automatable: vuln.automatable || "",
         exploitation: vuln.exploitation || "",
         impact: vuln.technicalImpact || "",
+        chainableEntrypoint: chainableEntrypoint,
+        chainableEntrypointQualification: chainableEntrypoint ? (chainableEntrypoint.qualification || "") : "",
         pain: (finding.pain && finding.pain.tier) || "",
         painObj: finding.pain || null,
         painRank: finding.pain ? (PAIN_RANK[finding.pain.tier] || 0) : -1
@@ -330,6 +338,64 @@
         "Internet reachable (IRV): " + (rem.irv ? "yes" : "no")
       ].join("\n");
     }
+    function chainableEntrypointTooltip(entrypoint) {
+      if (!entrypoint) return "";
+      const candidateStatusLabel = {
+        "high-confidence": "high confidence",
+        "possible": "possible / review",
+        "none": "none"
+      }[entrypoint.candidateStatus] || entrypoint.candidateStatus;
+      const qualificationLabel = {
+        "qualifying": "yes",
+        "review": "possible / review",
+        "not-qualifying": "no"
+      }[entrypoint.qualification] || entrypoint.qualification;
+      const reasonLabels = {
+        "network-attack-vector": "CVSS attack vector is Network",
+        "strict-execution-cwe": "strict execution-semantics CWE",
+        "full-vulnerable-system-impact": "full vulnerable-system C/I/A impact",
+        "combined-execution-cwe": "corroborating execution CWE",
+        "execution-context-required": "server/runtime execution context is required",
+        "full-impact-without-execution-signal": "full impact without a corroborating execution signal",
+        "possible-execution-cwe": "CWE requires review for local execution capability",
+        "attack-vector-unavailable": "CVSS attack vector is unavailable",
+        "attack-vector-not-network": "CVSS attack vector is not Network",
+        "execution-signal-unavailable": "no specific execution CWE is available",
+        "no-chainable-execution-signal": "no chainable execution signal matched"
+      };
+      const qualificationReasonLabels = {
+        "active-finding": "the upstream finding is active",
+        "finding-not-active": "the upstream finding is not active",
+        "asset-internet-accessible": "the affected asset is internet-accessible",
+        "asset-not-internet-accessible": "the affected asset is not internet-accessible",
+        "high-confidence-candidate": "the CVE has a high-confidence execution classification",
+        "possible-candidate": "the CVE has a possible execution classification",
+        "no-chainable-candidate": "the CVE has no chainable execution classification"
+      };
+      const facts = entrypoint.sourceFacts || {};
+      const lines = [
+        "Qualifying chainable entrypoint: " + qualificationLabel,
+        "Active finding: " + (entrypoint.activeFinding ? "yes" : "no"),
+        "Internet-accessible asset: " + (entrypoint.internetAccessible ? "yes" : "no"),
+        "CVE execution classification: " + candidateStatusLabel
+      ];
+      if (entrypoint.qualificationReasonCodes && entrypoint.qualificationReasonCodes.length) {
+        lines.push("Qualification: " + entrypoint.qualificationReasonCodes.map(code => qualificationReasonLabels[code] || code).join("; "));
+      }
+      if (entrypoint.reasonCodes && entrypoint.reasonCodes.length) {
+        lines.push("CVE classification: " + entrypoint.reasonCodes.map(code => reasonLabels[code] || code).join("; "));
+      }
+      if (facts.attackVector) lines.push("Attack vector: " + facts.attackVector);
+      lines.push("Full vulnerable-system impact: " + (facts.fullVulnerableSystemImpact ? "yes" : "no"));
+      if (facts.cwes && facts.cwes.length) lines.push("CWEs: " + facts.cwes.join(", "));
+      if (entrypoint.executionContext) {
+        const source = entrypoint.executionContextSource ? " (" + entrypoint.executionContextSource + ")" : "";
+        lines.push("Execution context: " + entrypoint.executionContext + source);
+      }
+      if (entrypoint.policyVersion) lines.push("Policy: " + entrypoint.policyVersion);
+      lines.push("", "Informational only: this flag does not alter IRV or downstream findings.");
+      return lines.join("\n");
+    }
     function securitySummary(images) {
       const values = [];
       images.forEach(image => {
@@ -401,7 +467,7 @@
     fillSelect("impact", rows.map(row => row.impact));
     const controlIDs = ["pain", "status", "resource-type"];
     if (!isCloudRun) controlIDs.push("namespace");
-    controlIDs.push("fix-available", "exposed", "automatable", "exploitation", "epss", "impact");
+    controlIDs.push("fix-available", "exposed", "chainable-entrypoint", "automatable", "exploitation", "epss", "impact");
     const controls = controlIDs.map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
@@ -639,6 +705,7 @@
         (!filters["resource-type"] || row.resourceType === filters["resource-type"]) &&
         (isCloudRun || !filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&
+        (!filters["chainable-entrypoint"] || row.chainableEntrypointQualification === filters["chainable-entrypoint"]) &&
         (!filters.automatable || row.automatable === filters.automatable) &&
         (!filters.exploitation || row.exploitation === filters.exploitation) &&
         (!filters.impact || row.impact === filters.impact) &&
@@ -675,6 +742,15 @@
           const td = document.createElement("td");
           td.textContent = value;
           if (cell.key === "id") {
+            if (row.chainableEntrypoint && (row.chainableEntrypointQualification === "qualifying" || row.chainableEntrypointQualification === "review")) {
+              const badge = document.createElement("span");
+              badge.className = "entrypoint-badge entrypoint-" + row.chainableEntrypointQualification;
+              badge.textContent = row.chainableEntrypointQualification === "qualifying" ? "EP active" : "EP review";
+              badge.title = chainableEntrypointTooltip(row.chainableEntrypoint);
+              badge.tabIndex = 0;
+              badge.setAttribute("aria-label", badge.title);
+              td.appendChild(badge);
+            }
             if (row.package) {
               const pkg = document.createElement("span");
               pkg.className = "pkg-line";

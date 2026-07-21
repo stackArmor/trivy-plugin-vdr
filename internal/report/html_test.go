@@ -13,7 +13,11 @@ import (
 func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
 	finding.Status = "will_not_fix"
-	scanReport := Build(sampleInventory(), []model.Finding{finding}, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	finding.CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:L"
+	finding.CWEs = []string{"CWE-94"}
+	scanReport := Build(sampleInventory(), []model.Finding{finding}, map[model.ResourceRef]model.Exposure{
+		sampleContainerRef(): {InternetAccessible: true},
+	}, Options{GeneratedAt: fixedTime(), View: ViewResources})
 	var buf bytes.Buffer
 
 	if err := RenderHTML(&buf, scanReport, ""); err != nil {
@@ -37,7 +41,14 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"will_not_fix",
 		"Fix available", // filter to hide findings with no available fix
 		`id="fix-available"`,
-		"fixAvailable",        // row field the fix-available filter reads
+		"fixAvailable", // row field the fix-available filter reads
+		"Chainable entrypoint",
+		`id="chainable-entrypoint"`,
+		`"chainableEntrypoint"`,
+		`"high-confidence"`,
+		`"qualification":"qualifying"`,
+		"chainableEntrypointTooltip",
+		"entrypoint-badge",
 		"test-context",        // kubectx in the header
 		"Certification Class", // class chip/subtitle in the header
 		"privileged",          // security posture moved into the resource-name tooltip
@@ -51,6 +62,9 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	// Security is no longer a column; it lives in the resource tooltip instead.
 	if strings.Contains(output, "<th>Security</th>") {
 		t.Fatalf("HTML output should not have a Security column header")
+	}
+	if strings.Contains(output, "<th>Chainable entrypoint</th>") {
+		t.Fatalf("HTML output should not have a Chainable entrypoint column header")
 	}
 	if strings.Contains(output, "VDR Kubernetes Report") {
 		t.Fatalf("HTML output should use source-neutral report title")

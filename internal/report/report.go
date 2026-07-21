@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/reachability"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
 
@@ -65,6 +66,9 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	}
 
 	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS, options.SuppressEnrichments)
+	for i := range filtered {
+		filtered[i].ChainableEntrypoint = reachability.EvaluateChainableEntrypoint(filtered[i])
+	}
 	active, suppressed := partitionFindings(filtered)
 	resourceReports := buildResourceReports(inventory, active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly, options.Dedupe)
 	if options.Dedupe {
@@ -478,7 +482,10 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 				scoped.Exposure = &value
 				scoped.Affected[0].Exposure = &value
 			}
-			pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(scoped.Exposure))
+			assetInternetAccessible := internetReachable(scoped.Exposure)
+			scoped.ChainableEntrypoint = reachability.QualifyChainableEntrypoint(scoped.ChainableEntrypoint, assetInternetAccessible)
+			scoped.Affected[0].ChainableEntrypoint = cloneChainableEntrypoint(scoped.ChainableEntrypoint)
+			pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, assetInternetAccessible)
 			if classificationOnly {
 				scoped.Affected[0].Classification = classificationFromScore(pain, rem)
 			} else {
@@ -581,6 +588,7 @@ func findingsWithBestExposure(findings []model.Finding, exposures map[model.Reso
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
+		enriched[i].ChainableEntrypoint = bestChainableEntrypoint(enriched[i].Affected, enriched[i].ChainableEntrypoint)
 		if !classificationOnly {
 			pain, rem := worstAsset(enriched[i].Affected)
 			enriched[i].Pain = pain
@@ -598,6 +606,7 @@ func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.R
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
+		enriched[i].ChainableEntrypoint = bestChainableEntrypoint(enriched[i].Affected, enriched[i].ChainableEntrypoint)
 		if !classificationOnly {
 			pain, rem := worstAsset(enriched[i].Affected)
 			enriched[i].WouldHaveBeenPain = pain
@@ -621,7 +630,9 @@ func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]mode
 			value := exposure
 			detail.Exposure = &value
 		}
-		pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, internetReachable(detail.Exposure))
+		assetInternetAccessible := internetReachable(detail.Exposure)
+		detail.ChainableEntrypoint = reachability.QualifyChainableEntrypoint(finding.ChainableEntrypoint, assetInternetAccessible)
+		pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, assetInternetAccessible)
 		if classificationOnly {
 			detail.Classification = classificationFromScore(pain, rem)
 		} else {
@@ -630,6 +641,35 @@ func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]mode
 		details = append(details, detail)
 	}
 	return details
+}
+
+func bestChainableEntrypoint(affected []model.Affected, fallback *model.ChainableEntrypoint) *model.ChainableEntrypoint {
+	var best *model.ChainableEntrypoint
+	for _, item := range affected {
+		if chainableQualificationRank(item.ChainableEntrypoint) > chainableQualificationRank(best) {
+			best = item.ChainableEntrypoint
+		}
+	}
+	if best != nil {
+		return cloneChainableEntrypoint(best)
+	}
+	return reachability.QualifyChainableEntrypoint(fallback, false)
+}
+
+func chainableQualificationRank(value *model.ChainableEntrypoint) int {
+	if value == nil {
+		return 0
+	}
+	switch value.Qualification {
+	case "qualifying":
+		return 3
+	case "review":
+		return 2
+	case "not-qualifying":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func classificationFromScore(pain *model.Pain, remediation *model.Remediation) *model.AssetClassification {
@@ -816,6 +856,9 @@ func cloneFinding(finding model.Finding) model.Finding {
 		value := *finding.Vulnrichment
 		clone.Vulnrichment = &value
 	}
+	if finding.ChainableEntrypoint != nil {
+		clone.ChainableEntrypoint = cloneChainableEntrypoint(finding.ChainableEntrypoint)
+	}
 	if finding.Exposure != nil {
 		value := *finding.Exposure
 		clone.Exposure = &value
@@ -843,6 +886,17 @@ func cloneFinding(finding model.Finding) model.Finding {
 	return clone
 }
 
+func cloneChainableEntrypoint(in *model.ChainableEntrypoint) *model.ChainableEntrypoint {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.ReasonCodes = append([]string(nil), in.ReasonCodes...)
+	out.QualificationReasonCodes = append([]string(nil), in.QualificationReasonCodes...)
+	out.SourceFacts.CWEs = append([]string(nil), in.SourceFacts.CWEs...)
+	return &out
+}
+
 func cloneAffected(affected []model.Affected) []model.Affected {
 	if len(affected) == 0 {
 		return nil
@@ -853,6 +907,9 @@ func cloneAffected(affected []model.Affected) []model.Affected {
 		if item.Exposure != nil {
 			value := *item.Exposure
 			clone[i].Exposure = &value
+		}
+		if item.ChainableEntrypoint != nil {
+			clone[i].ChainableEntrypoint = cloneChainableEntrypoint(item.ChainableEntrypoint)
 		}
 		if item.Classification != nil {
 			value := *item.Classification

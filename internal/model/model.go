@@ -234,7 +234,11 @@ type Finding struct {
 	CWEs         []string      `json:"cwes,omitempty"`
 	EPSS         *EPSS         `json:"epss,omitempty"`
 	Vulnrichment *Vulnrichment `json:"vulnrichment,omitempty"`
-	Exposure     *Exposure     `json:"exposure,omitempty"`
+	// ChainableEntrypoint joins the informational CVE-level execution candidate
+	// classification to the affected asset's internet exposure. It does not change
+	// this or any downstream finding's IRV determination.
+	ChainableEntrypoint *ChainableEntrypoint `json:"chainableEntrypoint,omitempty"`
+	Exposure            *Exposure            `json:"exposure,omitempty"`
 	// AffectedResources is the internal list of resources using this image. It is
 	// not serialized; the public, richer representation is Affected (each resource
 	// plus its exposure).
@@ -289,6 +293,38 @@ type Vulnrichment struct {
 	// skipping the useless NVD-CWE-noinfo/NVD-CWE-Other assignments.
 	CWEs      []string `json:"cwes,omitempty"`
 	SourceURL string   `json:"sourceUrl,omitempty"`
+}
+
+// ChainableEntrypoint records the governed CVE-level E0 candidate classification
+// and its deployed-finding qualification using active state and asset internet
+// exposure. Execution-boundary joins and downstream G0 promotion remain outside
+// this informational record.
+type ChainableEntrypoint struct {
+	// Qualification is the deployed-finding result: qualifying | review |
+	// not-qualifying. A finding qualifies only when it is active, its affected
+	// asset is internet-accessible, and CandidateStatus is high-confidence.
+	Qualification            string                         `json:"qualification"`
+	Qualifies                bool                           `json:"qualifies"`
+	ActiveFinding            bool                           `json:"activeFinding"`
+	InternetAccessible       bool                           `json:"internetAccessible"`
+	CandidateStatus          string                         `json:"candidateStatus"` // high-confidence|possible|none
+	ReasonCodes              []string                       `json:"reasonCodes"`
+	QualificationReasonCodes []string                       `json:"qualificationReasonCodes"`
+	PolicyVersion            string                         `json:"policyVersion"`
+	SourceFacts              ChainableEntrypointSourceFacts `json:"sourceFacts"`
+	ExecutionContext         string                         `json:"executionContext,omitempty"` // server-runtime|client|unknown
+	ExecutionContextSource   string                         `json:"executionContextSource,omitempty"`
+}
+
+// ChainableEntrypointSourceFacts preserves the scanner and enrichment facts
+// consumed by the entry-point policy so a result can be reproduced and audited.
+type ChainableEntrypointSourceFacts struct {
+	CVSSVector                 string   `json:"cvssVector,omitempty"`
+	CVSSSource                 string   `json:"cvssSource,omitempty"`
+	AttackVector               string   `json:"attackVector,omitempty"`
+	FullVulnerableSystemImpact bool     `json:"fullVulnerableSystemImpact"`
+	CWEs                       []string `json:"cwes,omitempty"`
+	CWESource                  string   `json:"cweSource,omitempty"`
 }
 
 type Exposure struct {
@@ -369,11 +405,12 @@ type SecurityPolicy struct {
 }
 
 type Affected struct {
-	Resource       ResourceRef          `json:"resource"`
-	Exposure       *Exposure            `json:"exposure,omitempty"`
-	Classification *AssetClassification `json:"classification,omitempty"`
-	Pain           *Pain                `json:"pain,omitempty"`
-	Remediation    *Remediation         `json:"remediation,omitempty"`
+	Resource            ResourceRef          `json:"resource"`
+	Exposure            *Exposure            `json:"exposure,omitempty"`
+	ChainableEntrypoint *ChainableEntrypoint `json:"chainableEntrypoint,omitempty"`
+	Classification      *AssetClassification `json:"classification,omitempty"`
+	Pain                *Pain                `json:"pain,omitempty"`
+	Remediation         *Remediation         `json:"remediation,omitempty"`
 }
 
 type AssetClassification struct {

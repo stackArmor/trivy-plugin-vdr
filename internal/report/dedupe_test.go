@@ -85,6 +85,23 @@ func TestBuildFindingsViewDedupeKeepsWorstPain(t *testing.T) {
 	}
 }
 
+func TestBuildFindingsViewDedupeKeepsHighestChainableEntrypointStatus(t *testing.T) {
+	findings := crossImageDuplicates()
+	findings[0].CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
+	findings[0].CWEs = []string{"CWE-94"}
+	findings[1].CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
+	findings[1].CWEs = []string{"CWE-79"}
+
+	got := Build(dedupeInventory(), findings, nil, Options{GeneratedAt: fixedTime(), View: ViewFindings, Dedupe: true})
+
+	if len(got.Findings) != 1 || got.Findings[0].ChainableEntrypoint == nil {
+		t.Fatalf("Findings = %#v, want one finding with entrypoint metadata", got.Findings)
+	}
+	if got.Findings[0].ChainableEntrypoint.CandidateStatus != "high-confidence" {
+		t.Fatalf("ChainableEntrypoint = %#v, want conservative high-confidence status", got.Findings[0].ChainableEntrypoint)
+	}
+}
+
 func TestBuildFindingsViewDedupeOffKeepsDuplicates(t *testing.T) {
 	got := Build(dedupeInventory(), crossImageDuplicates(), nil, Options{GeneratedAt: fixedTime(), View: ViewFindings})
 

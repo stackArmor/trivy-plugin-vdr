@@ -415,6 +415,17 @@ func vulnerabilityFor(finding model.Finding, assetRef string, exposure *model.Ex
 		add("vdr:archetype", pain.Archetype)
 	}
 	add("vdr:cwes", strings.Join(finding.CWEs, ","))
+	if entrypoint := finding.ChainableEntrypoint; entrypoint != nil {
+		add("vdr:chainableEntrypointQualification", entrypoint.Qualification)
+		add("vdr:chainableEntrypointQualifies", strconv.FormatBool(entrypoint.Qualifies))
+		add("vdr:chainableEntrypointActiveFinding", strconv.FormatBool(entrypoint.ActiveFinding))
+		add("vdr:chainableEntrypointInternetAccessible", strconv.FormatBool(entrypoint.InternetAccessible))
+		add("vdr:chainableEntrypointCandidateStatus", entrypoint.CandidateStatus)
+		add("vdr:chainableEntrypointReasons", strings.Join(entrypoint.ReasonCodes, ","))
+		add("vdr:chainableEntrypointQualificationReasons", strings.Join(entrypoint.QualificationReasonCodes, ","))
+		add("vdr:chainableEntrypointPolicy", entrypoint.PolicyVersion)
+		add("vdr:chainableEntrypointExecutionContext", entrypoint.ExecutionContext)
+	}
 	if rem != nil {
 		add("vdr:remediationTrack", rem.Column)
 		add("vdr:findingInternetReachable", strconv.FormatBool(rem.IRV))
