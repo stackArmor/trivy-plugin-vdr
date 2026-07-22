@@ -3,7 +3,8 @@
 #
 # The plugin reads fedramp-vdr-trivy/vdr-fedramp from the cluster automatically
 # (no --scoring-config flag needed). It deep-merges the embedded scoring.yaml over its
-# built-in rubric. The built-in rubric already provides the full archetype catalog,
+# built-in rubric. The built-in rubric already provides the governed compositional
+# reason registry and backwards-compatible legacy archetype catalog,
 # the algorithm, the EPSS LEV threshold (0.50), and the H/H/H "unclassified"
 # cluster-default archetype for new/unclassified resources — so this file only
 # carries cluster-wide Class/scope and the rules for GKE-managed,

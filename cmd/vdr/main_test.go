@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -54,6 +55,24 @@ func TestRunK8sPassesPullSecretAuthsToRegistryBuild(t *testing.T) {
 
 	if !found {
 		t.Fatal("runK8s does not pass secretAuths to registry.Build")
+	}
+}
+
+func TestLogIncompatibleClusterConfigGivesMigrationGuidance(t *testing.T) {
+	var output bytes.Buffer
+	logIncompatibleClusterConfig(log.NewWithWriter(&output, log.LevelQuiet), fmt.Errorf("unknown archetype %q", "old-value"))
+
+	for _, want := range []string{
+		"ERROR",
+		"invalid, incompatible, or uses an unsupported older format",
+		`unknown archetype "old-value"`,
+		"<disclosure>.<trusted-change>.<dependency>",
+		"reassessed values",
+		vdrConfigMapAIHelpURL,
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("log output missing %q:\n%s", want, output.String())
+		}
 	}
 }
 

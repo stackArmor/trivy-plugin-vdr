@@ -527,7 +527,7 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 	// ConfigMap override the config-file defaults.
 	if inventory != nil && len(inventory.ClusterDefaults) > 0 {
 		if applyErr := scoringConfig.ApplyClusterDefaults(inventory.ClusterDefaults); applyErr != nil {
-			logger.Warn("ignoring invalid cluster FedRAMP config from ConfigMap: %v", applyErr)
+			logIncompatibleClusterConfig(logger, applyErr)
 		} else {
 			logger.Info("applied cluster FedRAMP defaults (class=%s, default archetype=%s)", scoringConfig.Defaults.Class, scoringConfig.Defaults.Archetype)
 		}
@@ -581,6 +581,16 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 		logger.Info("wrote HTML report to %s", cfg.HTMLOutput)
 	}
 	return nil
+}
+
+const vdrConfigMapAIHelpURL = "https://github.com/stackArmor/trivy-plugin-vdr-skills"
+
+func logIncompatibleClusterConfig(logger *log.Logger, err error) {
+	logger.Error(
+		"cluster FedRAMP ConfigMap is invalid, incompatible, or uses an unsupported older format: %v. Update or regenerate it with the current compositional archetype schema (<disclosure>.<trusted-change>.<dependency>) and reassessed values. For AI-assisted migration, use %s",
+		err,
+		vdrConfigMapAIHelpURL,
+	)
 }
 
 func writePrimaryReport(stdout io.Writer, path, format string, scanReport model.Report) error {

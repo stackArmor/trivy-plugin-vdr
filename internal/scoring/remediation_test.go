@@ -169,7 +169,7 @@ func TestApplyClusterDefaults(t *testing.T) {
 func TestMultiAgencyHierarchy(t *testing.T) {
 	cfg := Default()
 	cfg.MultiAgencyNamespaces = []string{"tenant-*"}
-	// data-sensitive (H/H/H) + C:H/I:H/A:H => Debilitating; multi => N5, single => N4.
+	// data-sensitive (H/H/M) + C:H/I:H/A:H => Debilitating; multi => N5, single => N4.
 	base := Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "data-sensitive"}}
 
 	in := base

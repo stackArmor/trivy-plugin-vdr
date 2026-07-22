@@ -14,8 +14,8 @@ const (
 	vecConfHi  = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" // confidentiality
 )
 
-// TestWorkedExamples reproduces the worked examples published in the VDR
-// Confluence strategy page (PAIN expected N5/N3/N2/N5/N4/N4).
+// TestWorkedExamples reproduces the worked examples published in the PAIN
+// methodology (PAIN expected N5/N3/N2/N5/N3/N3).
 func TestWorkedExamples(t *testing.T) {
 	cfg := Default()
 
@@ -34,12 +34,12 @@ func TestWorkedExamples(t *testing.T) {
 		{
 			name:  "2 same RCE on dev-test single",
 			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "dev-test", "vdr.fedramp.io/multi-agency": "false"}},
-			wantS: 0.69, wantWord: "Disruptive", wantTier: "N3",
+			wantS: 0.63, wantWord: "Disruptive", wantTier: "N3",
 		},
 		{
 			name:  "3 info-leak on data-sensitive multi",
 			in:    Input{CVSSVector: vecInfoLow, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "data-sensitive", "vdr.fedramp.io/multi-agency": "true"}},
-			wantS: 0.36, wantWord: "Narrow", wantTier: "N2",
+			wantS: 0.33, wantWord: "Narrow", wantTier: "N2",
 		},
 		{
 			name:  "4 RCE on cicd-pipeline tagged multi-agency",
@@ -49,15 +49,14 @@ func TestWorkedExamples(t *testing.T) {
 		{
 			name:  "5 DoS on public-edge single",
 			in:    Input{CVSSVector: vecDoSHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "public-edge", "vdr.fedramp.io/multi-agency": "false"}},
-			wantS: 0.92, wantWord: "Debilitating", wantTier: "N4",
+			wantS: 0.84, wantWord: "Disruptive", wantTier: "N3",
 		},
 		{
-			// Untagged now resolves to the built-in H/H/H "unclassified" default
-			// (single-agency), so a confidentiality-only High lands at N4 rather than
-			// the old forced-multi N5 fail-safe (see TestFailSafeForcesN5WhenNoDefault).
+			// A single High/High alignment is intentionally Disruptive under the
+			// calibrated 0.933 Debilitating boundary.
 			name:  "6 confidentiality on untagged (built-in default)",
 			in:    Input{CVSSVector: vecConfHi},
-			wantS: 0.92, wantWord: "Debilitating", wantTier: "N4",
+			wantS: 0.84, wantWord: "Disruptive", wantTier: "N3",
 		},
 	}
 
@@ -96,7 +95,7 @@ func TestBuiltInDefaultArchetype(t *testing.T) {
 func TestFailSafeForcesN5WhenNoDefault(t *testing.T) {
 	cfg := Default()
 	cfg.Defaults.Archetype = "" // clear the default => true fail-safe takes over
-	got := cfg.Score(Input{CVSSVector: vecConfHi, Namespace: "weird", WorkloadName: "mystery"})
+	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "weird", WorkloadName: "mystery"})
 	if got.Tier != "N5" {
 		t.Errorf("untagged Tier = %s, want N5 (fail-safe must force multi-agency)", got.Tier)
 	}
@@ -107,7 +106,7 @@ func TestFailSafeForcesN5WhenNoDefault(t *testing.T) {
 
 func TestSingleAgencyControlPlaneCapsAtN4(t *testing.T) {
 	cfg := Default()
-	// A control-plane H/H/H archetype tagged single-agency caps at N4 (Debilitating,
+	// A critical control-plane archetype tagged single-agency caps at N4 (Debilitating,
 	// one agency); only an explicit multi-agency tag reaches N5.
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Labels: map[string]string{
 		"vdr.fedramp.io/asset-archetype": "cicd-pipeline",
@@ -397,9 +396,9 @@ func TestPlatformFoundationArchetype(t *testing.T) {
 		t.Errorf("platform-foundation = %+v, want CR:L IR:H AR:H", a)
 	}
 	lbl := map[string]string{"vdr.fedramp.io/asset-archetype": "platform-foundation"}
-	// Availability DoS (A:H) => N4 single-agency (DNS outage is debilitating).
-	if got := cfg.Score(Input{CVSSVector: vecDoSHigh, Labels: lbl}).Tier; got != "N4" {
-		t.Errorf("A:H DoS Tier = %s, want N4", got)
+	// One A:H/AR:H alignment is Disruptive under the compound-impact boundary.
+	if got := cfg.Score(Input{CVSSVector: vecDoSHigh, Labels: lbl}).Tier; got != "N3" {
+		t.Errorf("A:H DoS Tier = %s, want N3", got)
 	}
 	// Confidentiality-only High (C:H) => N2 (metadata recon only, CR:L).
 	if got := cfg.Score(Input{CVSSVector: vecConfHi, Labels: lbl}).Tier; got != "N2" {
@@ -410,8 +409,15 @@ func TestPlatformFoundationArchetype(t *testing.T) {
 func TestCloudAndGenericArchetypes(t *testing.T) {
 	cfg := Default()
 	want := map[string]Archetype{
-		"privileged-identity": {Lens: "control", CR: "H", IR: "H", AR: "H"},
+		"cicd-pipeline":       {Lens: "control", CR: "H", IR: "H", AR: "M"},
+		"orchestrator":        {Lens: "control", CR: "M", IR: "M", AR: "H"},
+		"config-actuation":    {Lens: "control", CR: "M", IR: "H", AR: "M"},
+		"identity-secrets":    {Lens: "control", CR: "H", IR: "M", AR: "M"},
+		"privileged-identity": {Lens: "control", CR: "H", IR: "H", AR: "M"},
 		"scoped-identity":     {Lens: "control", CR: "M", IR: "H", AR: "M"},
+		"security-tooling":    {Lens: "control", CR: "M", IR: "H", AR: "M"},
+		"data-sensitive":      {Lens: "data", CR: "H", IR: "H", AR: "M"},
+		"data-backbone":       {Lens: "data", CR: "H", IR: "H", AR: "M"},
 		"public-data":         {Lens: "data", CR: "L", IR: "M", AR: "M"},
 		"telemetry-data":      {Lens: "data", CR: "M", IR: "M", AR: "M"},
 		"generic-high":        {Lens: "generic", CR: "H", IR: "H", AR: "H"},
@@ -436,8 +442,10 @@ func TestWordThresholds(t *testing.T) {
 		s    float64
 		want string
 	}{
-		{0.24, "Minimal"}, {0.25, "Narrow"}, {0.54, "Narrow"}, {0.55, "Disruptive"},
-		{0.79, "Disruptive"}, {0.80, "Debilitating"}, {1.0, "Debilitating"},
+		{0.28, "Minimal"}, {defaultWordThresholds.Narrow, "Narrow"},
+		{0.56, "Narrow"}, {defaultWordThresholds.Disruptive, "Disruptive"},
+		{0.932, "Disruptive"}, {defaultWordThresholds.Debilitating, "Debilitating"},
+		{1.0, "Debilitating"},
 	}
 	for _, c := range cases {
 		if got := cfg.wordFromScalar(c.s); got != c.want {
@@ -447,6 +455,49 @@ func TestWordThresholds(t *testing.T) {
 	// Zero-value config falls back to the built-in thresholds (never all-Debilitating).
 	if got := (&Config{}).wordFromScalar(0.5); got != "Narrow" {
 		t.Errorf("zero-value config wordFromScalar(0.5) = %s, want Narrow (fallback)", got)
+	}
+}
+
+func TestCalibratedImpactAnchors(t *testing.T) {
+	cfg := Default()
+	cases := []struct {
+		name      string
+		vector    string
+		archetype string
+		wantS     float64
+		wantWord  string
+		wantTier  string
+	}{
+		{
+			name:   "High impact at Low requirement starts Narrow",
+			vector: vecConfHi, archetype: "dev-test",
+			wantS: 0.28115159694107067, wantWord: "Narrow", wantTier: "N2",
+		},
+		{
+			name:   "High impact at Medium requirement starts Disruptive",
+			vector: vecConfHi, archetype: "app-tier",
+			wantS: 0.5623031938821413, wantWord: "Disruptive", wantTier: "N3",
+		},
+		{
+			name:   "one High High alignment remains Disruptive",
+			vector: vecDoSHigh, archetype: "orchestrator",
+			wantS: 0.843454790823212, wantWord: "Disruptive", wantTier: "N3",
+		},
+		{
+			name:   "High High plus High Medium is Debilitating",
+			vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H", archetype: "orchestrator",
+			wantS: 0.9334233018443544, wantWord: "Debilitating", wantTier: "N4",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cfg.Score(Input{CVSSVector: tc.vector, Labels: map[string]string{
+				"vdr.fedramp.io/asset-archetype": tc.archetype,
+			}})
+			if math.Abs(got.Severity-tc.wantS) > 1e-12 || got.Word != tc.wantWord || got.Tier != tc.wantTier {
+				t.Fatalf("Score() = S %.15f, %s/%s; want %.15f, %s/%s", got.Severity, got.Word, got.Tier, tc.wantS, tc.wantWord, tc.wantTier)
+			}
+		})
 	}
 }
 
@@ -471,8 +522,8 @@ func TestConfigurableWordThresholds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if loaded.WordThresholds.Narrow != 0.25 || loaded.WordThresholds.Disruptive != 0.55 || loaded.WordThresholds.Debilitating != 0.90 {
-		t.Errorf("merged thresholds = %+v, want narrow=0.25 disruptive=0.55 debilitating=0.90", loaded.WordThresholds)
+	if loaded.WordThresholds.Narrow != defaultWordThresholds.Narrow || loaded.WordThresholds.Disruptive != defaultWordThresholds.Disruptive || loaded.WordThresholds.Debilitating != 0.90 {
+		t.Errorf("merged thresholds = %+v, want narrow=%g disruptive=%g debilitating=0.90", loaded.WordThresholds, defaultWordThresholds.Narrow, defaultWordThresholds.Disruptive)
 	}
 
 	// Non-ascending thresholds are rejected.
@@ -484,7 +535,7 @@ func TestConfigurableWordThresholds(t *testing.T) {
 }
 
 func TestClusterConfigMapCannotSetThresholds(t *testing.T) {
-	cfg := Default() // built-in 0.25/0.55/0.85
+	cfg := Default() // built-in standards-based thresholds
 	// A ConfigMap embedded doc that tries to lower the Debilitating bar must be ignored.
 	err := cfg.ApplyClusterDefaults(map[string]string{
 		"class":        "C",

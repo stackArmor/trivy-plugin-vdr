@@ -70,12 +70,12 @@ func TestBuildAssignsPainFromLabel(t *testing.T) {
 }
 
 func TestBuildPainWorstAcrossAffected(t *testing.T) {
-	// One finding affects an app-tier asset (=> N4) and a dev-test asset (=> N3);
+	// One finding affects a privileged-identity asset (=> N4) and a dev-test asset (=> N3);
 	// the finding-level PAIN must be the worst (N4).
-	appWorkload := model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "apps", Name: "api"}
-	appRef := appWorkload
-	appRef.ContainerName = "app"
-	appRef.ContainerType = "container"
+	privilegedWorkload := model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "apps", Name: "identity-admin"}
+	privilegedRef := privilegedWorkload
+	privilegedRef.ContainerName = "app"
+	privilegedRef.ContainerType = "container"
 	devWorkload := model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "apps", Name: "sandbox"}
 	devRef := devWorkload
 	devRef.ContainerName = "app"
@@ -83,12 +83,12 @@ func TestBuildPainWorstAcrossAffected(t *testing.T) {
 
 	inv := &model.Inventory{
 		Resources: []model.ResourceInventory{
-			{Resource: appWorkload, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "app-tier"}, Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}}},
+			{Resource: privilegedWorkload, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "privileged-identity"}, Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}}},
 			{Resource: devWorkload, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "dev-test"}, Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}}},
 		},
-		Images: []model.ImageInventory{{ImageRef: "example/app:v1", Resources: []model.ResourceRef{appRef, devRef}}},
+		Images: []model.ImageInventory{{ImageRef: "example/app:v1", Resources: []model.ResourceRef{privilegedRef, devRef}}},
 	}
-	finding := painFinding("CVE-2026-2000", appRef, devRef)
+	finding := painFinding("CVE-2026-2000", privilegedRef, devRef)
 
 	got := Build(inv, []model.Finding{finding}, nil, Options{GeneratedAt: fixedTime(), View: ViewFindings})
 	if len(got.Findings) != 1 || got.Findings[0].Pain == nil {
