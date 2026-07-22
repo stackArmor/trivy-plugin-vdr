@@ -10,7 +10,7 @@ archetypes:
     lens: control
     cr: H
     ir: H
-    ar: H
+    ar: M
     typicalMembers:
       - build and deployment runners
       - artifact signing services
@@ -18,8 +18,8 @@ archetypes:
 
   orchestrator:
     lens: control
-    cr: H
-    ir: H
+    cr: M
+    ir: M
     ar: H
     typicalMembers:
       - control planes
@@ -29,9 +29,9 @@ archetypes:
 
   config-actuation:
     lens: control
-    cr: H
+    cr: M
     ir: H
-    ar: H
+    ar: M
     typicalMembers:
       - IaC and GitOps controllers
       - schema registries
@@ -40,8 +40,8 @@ archetypes:
   identity-secrets:
     lens: control
     cr: H
-    ir: H
-    ar: H
+    ir: M
+    ar: M
     typicalMembers:
       - identity providers and SSO
       - KMS and secrets managers
@@ -51,7 +51,7 @@ archetypes:
     lens: control
     cr: H
     ir: H
-    ar: H
+    ar: M
     typicalMembers:
       - organization, account, subscription, and project administrators
       - IAM roles and service accounts that can mutate IAM policy
@@ -69,7 +69,7 @@ archetypes:
 
   security-tooling:
     lens: control
-    cr: H
+    cr: M
     ir: H
     ar: M
     typicalMembers:
@@ -99,7 +99,7 @@ archetypes:
     lens: data
     cr: H
     ir: H
-    ar: H
+    ar: M
     typicalMembers:
       - PII and CUI datastores
 
@@ -126,7 +126,7 @@ archetypes:
     lens: data
     cr: H
     ir: H
-    ar: H
+    ar: M
     typicalMembers:
       - payload queues and brokers
       - system-of-record databases

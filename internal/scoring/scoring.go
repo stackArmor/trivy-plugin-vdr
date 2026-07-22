@@ -31,6 +31,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// painNormalizationDivisor is the maximum attainable pre-cap aggregate U:
+// all three CVSS impacts High (0.56) at all three Security Requirements High
+// (1.5), or 1-(1-0.56*1.5)^3. PAIN intentionally normalizes against this
+// High-centered maximum instead of CVSS v3.1's Medium-requirement MISS cap.
+const painNormalizationDivisor = 0.995904
+
 // Archetype maps an asset class to its CVSS environmental requirements.
 type Archetype struct {
 	Lens string `json:"lens" yaml:"lens"`
@@ -407,8 +413,11 @@ func (c *Config) Score(in Input) Result {
 
 	cImp, iImp, aImp, sevSource := impact(in.TechnicalImpact, in.CVSSVector, in.Severity)
 	cr, ir, ar := weight(a.CR), weight(a.IR), weight(a.AR)
-	isc := 1 - ((1 - cImp*cr) * (1 - iImp*ir) * (1 - aImp*ar))
-	s := math.Min(isc, 0.915) / 0.915
+	// U is the pre-cap complement-product aggregate from the CVSS v3.1 MISS
+	// expression. PAIN retains U rather than applying the 0.915 CVSS MISS cap,
+	// then normalizes against the all-High-impact/all-High-requirement maximum.
+	u := 1 - ((1 - cImp*cr) * (1 - iImp*ir) * (1 - aImp*ar))
+	s := math.Min(u, painNormalizationDivisor) / painNormalizationDivisor
 	word := c.wordFromScalar(s)
 
 	multi, multiSource := c.resolveMultiAgency(in.Namespace, in.Labels, in.NamespaceLabels)
@@ -891,10 +900,18 @@ func normalizeReq(req string) string {
 	}
 }
 
-// defaultWordThresholds is the built-in calibration: Minimal < 0.25, Narrow <
-// 0.55, Disruptive < 0.80, else Debilitating. The cut points are the model's one
-// calibratable judgment and may be overridden via config (wordThresholds).
-var defaultWordThresholds = WordThresholds{Narrow: 0.25, Disruptive: 0.55, Debilitating: 0.80}
+// defaultWordThresholds is the standards-based calibration. Narrow begins at
+// one High impact aligned with a Low requirement (0.28 / D_H); Disruptive at
+// one High impact aligned with a Medium requirement (0.56 / D_H); and 0.933
+// separates the strongest non-compound state from the weakest state containing
+// one High/High alignment plus another High impact at Medium or High. The cut
+// points remain governed configuration and may be overridden via
+// wordThresholds.
+var defaultWordThresholds = WordThresholds{
+	Narrow:       0.28115159694107,
+	Disruptive:   0.56230319388214,
+	Debilitating: 0.933,
+}
 
 // wordFromScalar maps the normalized environmental impact scalar to a FedRAMP
 // customer-effect word using the configured thresholds, falling back to the

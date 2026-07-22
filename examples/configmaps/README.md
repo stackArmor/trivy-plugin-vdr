@@ -49,7 +49,8 @@ The ConfigMap carries:
 > **Governance:** the calibratable PAIN word thresholds (`wordThresholds`) are
 > **not** read from this ConfigMap — a `wordThresholds` block in the ConfigMap's
 > `scoring.yaml` is ignored. They can only be changed via a governed
-> `--scoring-config` file (or left at the built-in defaults 0.25 / 0.55 / 0.85), so
+> `--scoring-config` file (or left at the built-in defaults
+> 0.28115159694107 / 0.56230319388214 / 0.933), so
 > the scoring calibration isn't altered by ad-hoc in-cluster edits.
 
 Workloads you control should instead carry the label directly:
