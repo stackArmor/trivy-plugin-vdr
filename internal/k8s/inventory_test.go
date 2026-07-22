@@ -682,6 +682,28 @@ func TestCollectExcludesControllerOwnedPods(t *testing.T) {
 	}
 }
 
+func TestCollapsesStaticMirrorPodsToOnePerManifest(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		mirrorPod("kube-system", "kube-proxy-gke-node-a1b2", "gke-node-a1b2", podSpec(container("kube-proxy", "example.com/kube-proxy:v1"))),
+		mirrorPod("kube-system", "kube-proxy-gke-node-c3d4", "gke-node-c3d4", podSpec(container("kube-proxy", "example.com/kube-proxy:v1"))),
+		mirrorPod("kube-system", "kube-proxy-gke-node-e5f6", "gke-node-e5f6", podSpec(container("kube-proxy", "example.com/kube-proxy:v1"))),
+	)
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{AllNamespaces: true})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	if len(inv.Resources) != 1 {
+		t.Fatalf("len(Resources) = %d, want 1 collapsed static-pod entry: %#v", len(inv.Resources), inv.Resources)
+	}
+	img := requireImage(t, inv, "example.com/kube-proxy:v1")
+	if len(img.Resources) != 1 {
+		t.Fatalf("len(img.Resources) = %d, want 1: %#v", len(img.Resources), img.Resources)
+	}
+	requireRef(t, img, model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "kube-system", Name: "kube-proxy", ContainerType: "container", ContainerName: "kube-proxy"})
+}
+
 func TestSameImageHasMultipleResourceRefs(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		deployment("default", "web", podSpec(container("app", "example.com/shared:v1"))),
@@ -782,6 +804,15 @@ func controlledPod(namespace, name, ownerKind string, spec corev1.PodSpec) *core
 	controller := true
 	p := pod(namespace, name, spec)
 	p.OwnerReferences = []metav1.OwnerReference{{Kind: ownerKind, Name: "owner", Controller: &controller}}
+	return p
+}
+
+func mirrorPod(namespace, name, nodeName string, spec corev1.PodSpec) *corev1.Pod {
+	controller := true
+	p := pod(namespace, name, spec)
+	p.Annotations = map[string]string{"kubernetes.io/config.mirror": "hash", "kubernetes.io/config.source": "file"}
+	p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: nodeName, Controller: &controller}}
+	p.Spec.NodeName = nodeName
 	return p
 }
 

@@ -216,6 +216,7 @@ func (c *Collector) collectPods(ctx context.Context, namespace string, builder *
 	if err != nil {
 		return err
 	}
+	seenStaticPods := map[string]bool{}
 	for _, pod := range pods.Items {
 		// Only inventory standalone pods. Pods managed by a controller we already
 		// collect (Deployment/ReplicaSet, StatefulSet, DaemonSet, Job/CronJob) are
@@ -224,10 +225,38 @@ func (c *Collector) collectPods(ctx context.Context, namespace string, builder *
 		if ownedByCollectedController(pod) {
 			continue
 		}
-		ref := model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
+		name := pod.Name
+		// Static pods (e.g. kube-proxy on GKE) surface as one Node-owned mirror
+		// pod per node running the same manifest. Collapse them to a single
+		// entry per manifest, named without the node suffix, so the report does
+		// not list one near-identical resource per node.
+		if base, ok := staticPodBaseName(pod); ok {
+			key := pod.Namespace + "/" + base
+			if seenStaticPods[key] {
+				continue
+			}
+			seenStaticPods[key] = true
+			name = base
+		}
+		ref := model.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: pod.Namespace, Name: name}
 		builder.addResource(ref, pod.Spec, pod.Annotations, pod.Labels, pod.Labels, nil)
 	}
 	return nil
+}
+
+// mirrorPodAnnotation marks the API-server representation of a kubelet static
+// pod. The kubelet names mirror pods "<manifest name>-<node name>".
+const mirrorPodAnnotation = "kubernetes.io/config.mirror"
+
+func staticPodBaseName(pod corev1.Pod) (string, bool) {
+	if _, mirror := pod.Annotations[mirrorPodAnnotation]; !mirror {
+		return "", false
+	}
+	name := pod.Name
+	if pod.Spec.NodeName != "" {
+		name = strings.TrimSuffix(name, "-"+pod.Spec.NodeName)
+	}
+	return name, true
 }
 
 func ownedByCollectedController(pod corev1.Pod) bool {
