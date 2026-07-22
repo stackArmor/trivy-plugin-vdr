@@ -1,10 +1,64 @@
-# Canonical VDR asset-archetype policy.
+# Canonical VDR asset-archetype and compositional decision-trace policy.
 #
 # This file is embedded into trivy-plugin-vdr at build time. Downstream copies
 # in TSW and trivy-plugin-vdr-skills are generated from it; do not maintain
 # separate scoring catalogs in consumer repositories.
 schemaVersion: 1
 
+# A compositional archetype is:
+#   <disclosure>.<trusted-change>.<dependency>
+# Each segment independently and definitively determines CR, IR, or AR. The
+# plugin derives these vectors natively; an exact trace does not need a second
+# entry under archetypes. These registries are governed policy and cannot be
+# overridden by a cluster ConfigMap.
+reasonCodes:
+  disclosure:
+    public-content: L
+    opaque-transit: L
+    routing-metadata: L
+    synthetic-data: L
+    service-content: M
+    ops-metadata: M
+    security-evidence: M
+    control-metadata: M
+    scoped-access: M
+    federal-records: H
+    regulated-data: H
+    restricted-evidence: H
+    root-secrets: H
+    privileged-access: H
+
+  trustedChange:
+    advisory-output: L
+    opaque-forwarding: L
+    disposable-state: L
+    isolated-testing: L
+    bounded-processing: M
+    scoped-write: M
+    record-keeping: M
+    coordination-state: M
+    authoritative-record: H
+    config-control: H
+    identity-control: H
+    security-enforcement: H
+    release-control: H
+    foundation-control: H
+    trust-anchor: H
+
+  dependency:
+    deferrable-work: L
+    optional-tooling: L
+    nonproduction: L
+    bounded-service: M
+    operations-support: M
+    shared-degradation: M
+    change-deferred: M
+    shared-critical-path: H
+    mission-essential: H
+    protection-critical: H
+    recovery-critical: H
+
+# Legacy named archetypes remain available for backwards compatibility.
 archetypes:
   cicd-pipeline:
     lens: control

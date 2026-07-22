@@ -18,7 +18,9 @@ This directory has a starter ConfigMap per managed-Kubernetes provider:
 
 Only tenant-specific overrides. The plugin ships the full rubric built in:
 
-- the archetype catalog (CR/IR/AR per archetype),
+- the governed disclosure/trusted-change/dependency reason registries used to
+  derive CR/IR/AR from compositional traces,
+- the backwards-compatible legacy archetype catalog,
 - the scoring algorithm,
 - the EPSS LEV threshold (`0.50`),
 - the H/H/H **`unclassified`** cluster-default archetype that catches new or
@@ -52,16 +54,21 @@ The ConfigMap carries:
 > `--scoring-config` file (or left at the built-in defaults
 > 0.28115159694107 / 0.56230319388214 / 0.933), so
 > the scoring calibration isn't altered by ad-hoc in-cluster edits.
+>
+> The compositional `reasonCodes` registry is also governed built-in policy. A
+> `reasonCodes` block in either the ConfigMap or `--scoring-config` is rejected;
+> change the canonical policy and rebuild the plugin instead.
 
 Workloads you control should instead carry the label directly:
 
 ```yaml
 metadata:
   labels:
-    vdr.fedramp.io/asset-archetype: app-tier
+    vdr.fedramp.io/asset-archetype: regulated-data.authoritative-record.shared-critical-path
 ```
 
-When the exact archetype is not known, use the simpler asset-value fallback:
+When the three independent consequences have not been attested, use the simpler
+asset-value fallback:
 
 ```yaml
 metadata:
@@ -100,7 +107,8 @@ built-in defaults — a missing ConfigMap is visible, not silent.
 
 Edit the `nameRules` / `namespaceRules` to match the add-ons actually installed in
 your cluster (the lists here cover the common managed components). Put specific
-rules before broad globs. The authoritative names and CR/IR/AR values are in
+rules before broad globs. The authoritative reason mappings, legacy names, and
+CR/IR/AR values are in
 [`policy/vdr-policy.yaml`](../../policy/vdr-policy.yaml).
 
 > **Note:** `platform-foundation` (CR:L, IR:H, AR:H) is for **metadata-only**

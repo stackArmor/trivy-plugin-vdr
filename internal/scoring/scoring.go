@@ -16,7 +16,8 @@
 // The built-in Default() rubric is self-contained; an optional YAML or JSON
 // config file may be layered on top (deep-merged) to add tenant-specific rules
 // (namespace/name archetype assignment for workloads that cannot carry labels)
-// or to tune the catalog, EPSS threshold, or default Class.
+// or to tune legacy/custom catalog entries, the EPSS threshold, or default
+// Class. Compositional reason mappings remain governed by the embedded policy.
 package scoring
 
 import (
@@ -121,6 +122,11 @@ type Config struct {
 	// Likely Exploitable (LEV). FedRAMP leaves the framework to the provider.
 	LEVEPSSThreshold float64 `json:"levEpssThreshold" yaml:"levEpssThreshold"`
 
+	// reasonCodes is loaded only from the embedded canonical policy. Keeping it
+	// unexported prevents scoring files and cluster ConfigMaps from redefining
+	// the meaning of a compositional decision trace.
+	reasonCodes reasonCodeCatalog
+
 	// classOrigin/multiAgencyOrigin track which layer supplied the cluster-wide
 	// Defaults values, for provenance reporting: "scoringConfig" (--scoring-config
 	// file) or "configMap" (in-cluster ConfigMap). Empty means the built-in
@@ -184,10 +190,11 @@ type Result struct {
 
 type embeddedPolicy struct {
 	SchemaVersion int                  `yaml:"schemaVersion"`
+	ReasonCodes   reasonCodeCatalog    `yaml:"reasonCodes"`
 	Archetypes    map[string]Archetype `yaml:"archetypes"`
 }
 
-func mustLoadBuiltinArchetypes() map[string]Archetype {
+func mustLoadBuiltinPolicy() embeddedPolicy {
 	var document embeddedPolicy
 	if err := yaml.Unmarshal([]byte(builtinpolicy.VDRPolicyYAML()), &document); err != nil {
 		panic(fmt.Sprintf("parse embedded VDR policy: %v", err))
@@ -197,6 +204,9 @@ func mustLoadBuiltinArchetypes() map[string]Archetype {
 	}
 	if len(document.Archetypes) == 0 {
 		panic("embedded VDR policy has no archetypes")
+	}
+	if err := document.ReasonCodes.validate(); err != nil {
+		panic(fmt.Sprintf("embedded VDR policy: %v", err))
 	}
 	for name, archetype := range document.Archetypes {
 		if strings.TrimSpace(name) == "" {
@@ -218,17 +228,19 @@ func mustLoadBuiltinArchetypes() map[string]Archetype {
 			}
 		}
 	}
-	return document.Archetypes
+	return document
 }
 
-// Default returns the built-in rubric: the archetype catalog loaded from the
-// embedded canonical policy, standard label keys, an EPSS LEV threshold of
-// 0.50, and a default Certification Class of B. It carries no namespace/name
-// rules (those are tenant-specific) and assumes a single-tenant (single-agency)
-// offering.
+// Default returns the built-in rubric: the compositional reason registry and
+// legacy archetype catalog loaded from the embedded canonical policy, standard
+// label keys, an EPSS LEV threshold of 0.50, and a default Certification Class
+// of B. It carries no namespace/name rules (those are tenant-specific) and
+// assumes a single-tenant (single-agency) offering.
 func Default() *Config {
+	policy := mustLoadBuiltinPolicy()
 	return &Config{
-		Archetypes: mustLoadBuiltinArchetypes(),
+		Archetypes:  policy.Archetypes,
+		reasonCodes: policy.ReasonCodes,
 		LabelKeys: LabelKeys{
 			Archetype:   "vdr.fedramp.io/asset-archetype",
 			AssetValue:  "vdr.fedramp.io/asset-value",
@@ -255,6 +267,9 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	if err := rejectReasonCodeOverride(data); err != nil {
+		return nil, fmt.Errorf("scoring config %q: %w", path, err)
 	}
 	pre := cfg.Defaults
 	if err := yaml.Unmarshal(data, cfg); err != nil {
@@ -294,6 +309,9 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 		if !ok || strings.TrimSpace(doc) == "" {
 			continue
 		}
+		if err := rejectReasonCodeOverride([]byte(doc)); err != nil {
+			return fmt.Errorf("cluster scoring config (%s): %w", key, err)
+		}
 		if err := yaml.Unmarshal([]byte(doc), c); err != nil {
 			return fmt.Errorf("parse cluster scoring config (%s): %w", key, err)
 		}
@@ -329,12 +347,18 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 }
 
 func (c *Config) validate() error {
+	if err := c.reasonCodes.validate(); err != nil {
+		return err
+	}
+	if err := c.validateCompositeArchetypeEntries(); err != nil {
+		return err
+	}
 	for i, r := range c.NamespaceRules {
 		if r.Archetype == "" && r.AssetValue == "" {
 			return fmt.Errorf("namespaceRules[%d] must set archetype or assetValue", i)
 		}
 		if r.Archetype != "" {
-			if _, ok := c.Archetypes[r.Archetype]; !ok {
+			if _, ok := c.lookupArchetype(r.Archetype); !ok {
 				return fmt.Errorf("namespaceRules[%d] references unknown archetype %q", i, r.Archetype)
 			}
 		}
@@ -347,7 +371,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("nameRules[%d] must set archetype or assetValue", i)
 		}
 		if r.Archetype != "" {
-			if _, ok := c.Archetypes[r.Archetype]; !ok {
+			if _, ok := c.lookupArchetype(r.Archetype); !ok {
 				return fmt.Errorf("nameRules[%d] references unknown archetype %q", i, r.Archetype)
 			}
 		}
@@ -363,7 +387,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("kindRules[%d] must set archetype or assetValue", i)
 		}
 		if r.Archetype != "" {
-			if _, ok := c.Archetypes[r.Archetype]; !ok {
+			if _, ok := c.lookupArchetype(r.Archetype); !ok {
 				return fmt.Errorf("kindRules[%d] references unknown archetype %q", i, r.Archetype)
 			}
 		}
@@ -378,7 +402,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("defaults.class %q must be one of A, B, C, D", c.Defaults.Class)
 	}
 	if c.Defaults.Archetype != "" {
-		if _, ok := c.Archetypes[c.Defaults.Archetype]; !ok {
+		if _, ok := c.lookupArchetype(c.Defaults.Archetype); !ok {
 			return fmt.Errorf("defaults.archetype %q is not a known archetype", c.Defaults.Archetype)
 		}
 	}
@@ -400,7 +424,7 @@ func (c *Config) Score(in Input) Result {
 		if assetValue != "" {
 			a = archetypeForAssetValue(assetValue)
 		} else {
-			a = c.Archetypes[arch]
+			a, _ = c.lookupArchetype(arch)
 		}
 	} else {
 		// Fail-safe: an unclassified asset is treated as CR/IR/AR=High and
@@ -473,7 +497,7 @@ func (c *Config) resolveClassification(namespace, name, kind string, labels, nsL
 		}
 	}
 	if c.Defaults.Archetype != "" {
-		if _, known := c.Archetypes[c.Defaults.Archetype]; known {
+		if _, known := c.lookupArchetype(c.Defaults.Archetype); known {
 			return c.Defaults.Archetype, "default", "", true
 		}
 	}
@@ -483,14 +507,14 @@ func (c *Config) resolveClassification(namespace, name, kind string, labels, nsL
 func (c *Config) resolveArchetypeSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
 	if v, ok := labels[c.LabelKeys.Archetype]; ok {
 		v = strings.TrimSpace(v)
-		if _, known := c.Archetypes[v]; known {
+		if _, known := c.lookupArchetype(v); known {
 			return v, "label", true
 		}
 		return "", "label-unknown", false
 	}
 	if v, ok := nsLabels[c.LabelKeys.Archetype]; ok {
 		v = strings.TrimSpace(v)
-		if _, known := c.Archetypes[v]; known {
+		if _, known := c.lookupArchetype(v); known {
 			return v, "namespaceLabel", true
 		}
 		return "", "label-unknown", false
@@ -502,7 +526,7 @@ func (c *Config) resolveArchetypeSignal(namespace, name, kind string, labels, ns
 			}
 		}
 		if ok, _ := path.Match(r.Match, name); ok {
-			if _, known := c.Archetypes[r.Archetype]; known {
+			if _, known := c.lookupArchetype(r.Archetype); known {
 				return r.Archetype, "nameRule", true
 			}
 		}
@@ -511,13 +535,13 @@ func (c *Config) resolveArchetypeSignal(namespace, name, kind string, labels, ns
 		if !kindRuleMatches(r, namespace, name, kind) {
 			continue
 		}
-		if _, known := c.Archetypes[r.Archetype]; known {
+		if _, known := c.lookupArchetype(r.Archetype); known {
 			return r.Archetype, "kindRule", true
 		}
 	}
 	for _, r := range c.NamespaceRules {
 		if ok, _ := path.Match(r.Match, namespace); ok {
-			if _, known := c.Archetypes[r.Archetype]; known {
+			if _, known := c.lookupArchetype(r.Archetype); known {
 				return r.Archetype, "namespaceRule", true
 			}
 		}
