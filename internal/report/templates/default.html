@@ -42,9 +42,14 @@
     .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin-bottom: 16px; }
     label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
     .filters .filter { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
-    .checkboxes { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-height: 36px; }
-    .checkboxes label { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; color: var(--ink); font-size: 13px; cursor: pointer; }
-    .checkboxes input { width: auto; }
+    .multiselect { position: relative; }
+    .multiselect-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; font-size: 13px; }
+    .multiselect-toggle .caret { color: var(--muted); }
+    .multiselect-menu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 100%; z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px; display: grid; gap: 2px; max-height: 260px; overflow: auto; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); }
+    .multiselect-menu[hidden] { display: none; }
+    .multiselect-menu label { display: flex; flex-direction: row; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 4px; color: var(--ink); font-size: 13px; cursor: pointer; white-space: nowrap; }
+    .multiselect-menu label:hover { background: var(--hover); }
+    .multiselect-menu input { width: auto; }
     select, input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px; background: var(--field-bg); color: var(--ink); font: inherit; }
     button { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; background: var(--field-bg); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
     button:hover { border-color: var(--accent); }
@@ -100,21 +105,22 @@
     </section>
 
     <section class="filters" aria-label="Filters">
-      <div class="filter"><span>Classical severity</span><div id="severity" class="checkboxes" role="group" aria-label="Classical severity"></div></div>
+      <div class="filter"><span>Classical severity</span><div id="severity" class="multiselect" role="group" aria-label="Classical severity"></div></div>
       <label>Fix status<select id="status"><option value="">All</option></select></label>
       <label>Fix available<select id="fix-available"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
       <label>PAIN (agency impact)<select id="pain"><option value="">All</option></select></label>
-      <label>Resource type<select id="resource-type"><option value="">All</option></select></label>
+      <div class="filter"><span>Resource type</span><div id="resource-type" class="multiselect" role="group" aria-label="Resource type"></div></div>
       {{ if not .IsCloudRun }}
       <label>Namespace<select id="namespace"><option value="">All</option></select></label>
       {{ end }}
+      <label>Image<input id="image" type="search" placeholder="Name contains…"></label>
       <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
       <label>Chainable entrypoint<select id="chainable-entrypoint"><option value="">All</option><option value="high_confidence">High confidence</option><option value="possible">Possible</option><option value="none">None</option></select></label>
       <label>Automatable<select id="automatable"><option value="">All</option></select></label>
       <label>Exploitation<select id="exploitation"><option value="">All</option></select></label>
       <label>EPSS score<input id="epss" type="number" min="0" max="1" step="0.01" placeholder="Minimum"></label>
       <label>Technical impact<select id="impact"><option value="">All</option></select></label>
-      <div class="filter"><span>Remediation</span><div id="remediation" class="checkboxes" role="group" aria-label="Remediation"></div></div>
+      <div class="filter"><span>Remediation</span><div id="remediation" class="multiselect" role="group" aria-label="Remediation"></div></div>
     </section>
 
     <table id="findings">
@@ -463,16 +469,15 @@
     }
     fillSelect("pain", rows.map(row => row.pain));
     fillSelect("status", rows.map(row => row.status));
-    fillSelect("resource-type", rows.map(row => row.resourceType));
     if (!isCloudRun) {
     fillSelect("namespace", rows.map(row => row.namespace));
     }
     fillSelect("automatable", rows.map(row => row.automatable));
     fillSelect("exploitation", rows.map(row => row.exploitation));
     fillSelect("impact", rows.map(row => row.impact));
-    const controlIDs = ["pain", "status", "resource-type"];
+    const controlIDs = ["pain", "status"];
     if (!isCloudRun) controlIDs.push("namespace");
-    controlIDs.push("fix-available", "exposed", "chainable-entrypoint", "automatable", "exploitation", "epss", "impact");
+    controlIDs.push("fix-available", "exposed", "chainable-entrypoint", "automatable", "exploitation", "epss", "impact", "image");
     const controls = controlIDs.map(id => document.getElementById(id));
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
@@ -497,49 +502,89 @@
     );
     const severityRank = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, UNKNOWN: 1 };
 
-    // Severity multi-select: a checkbox per severity present in the data, ordered
-    // by rank. No boxes checked means no severity filter (show all).
-    const severityBox = document.getElementById("severity");
-    function selectedSeverities() {
-      return new Set(Array.from(severityBox.querySelectorAll("input:checked")).map(input => input.value));
-    }
-    [...new Set(rows.map(row => row.severity).filter(Boolean))]
-      .sort((a, b) => (severityRank[b] || 0) - (severityRank[a] || 0))
-      .forEach(severity => {
+    // Multi-select dropdown: a toggle button showing the current selection that
+    // opens a checkbox menu. An empty selection means the filter is off (show
+    // all). Menus close on outside click or Escape.
+    const multiSelects = [];
+    function createMultiSelect(id, values) {
+      const root = document.getElementById(id);
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "multiselect-toggle";
+      toggle.setAttribute("aria-haspopup", "true");
+      toggle.setAttribute("aria-expanded", "false");
+      const text = document.createElement("span");
+      text.textContent = "All";
+      const caret = document.createElement("span");
+      caret.className = "caret";
+      caret.textContent = "▾";
+      toggle.appendChild(text);
+      toggle.appendChild(caret);
+      const menu = document.createElement("div");
+      menu.className = "multiselect-menu";
+      menu.hidden = true;
+      values.forEach(value => {
         const label = document.createElement("label");
         const input = document.createElement("input");
         input.type = "checkbox";
-        input.value = severity;
-        input.addEventListener("change", render);
+        input.value = value;
+        input.addEventListener("change", () => { updateToggle(); render(); });
         label.appendChild(input);
-        label.appendChild(document.createTextNode(" " + severity));
-        severityBox.appendChild(label);
+        label.appendChild(document.createTextNode(" " + value));
+        menu.appendChild(label);
       });
-
-    // Remediation multi-select: a checkbox per timeline present, ordered by
-    // deadline (soonest first). No boxes checked means no remediation filter.
-    const remediationBox = document.getElementById("remediation");
-    function selectedRemediations() {
-      return new Set(Array.from(remediationBox.querySelectorAll("input:checked")).map(input => input.value));
+      function selected() {
+        return new Set(Array.from(menu.querySelectorAll("input:checked")).map(input => input.value));
+      }
+      function updateToggle() {
+        const picked = Array.from(selected());
+        text.textContent = picked.length === 0 ? "All"
+          : picked.length <= 2 ? picked.join(", ")
+          : picked.length + " selected";
+      }
+      function close() {
+        menu.hidden = true;
+        toggle.setAttribute("aria-expanded", "false");
+      }
+      toggle.addEventListener("click", event => {
+        event.stopPropagation();
+        const willOpen = menu.hidden;
+        multiSelects.forEach(other => other.close());
+        if (willOpen) {
+          menu.hidden = false;
+          toggle.setAttribute("aria-expanded", "true");
+        }
+      });
+      menu.addEventListener("click", event => event.stopPropagation());
+      root.appendChild(toggle);
+      root.appendChild(menu);
+      const api = { selected, close };
+      multiSelects.push(api);
+      return api;
     }
-    // Remediation multi-select: a checkbox per FedRAMP deadline present, ordered
-    // by urgency (shortest first). Findings with no deadline (PAIN-1) are omitted.
+    document.addEventListener("click", () => multiSelects.forEach(ms => ms.close()));
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") multiSelects.forEach(ms => ms.close());
+    });
+
+    // Classical severity: options ordered by rank (highest first).
+    const severityFilter = createMultiSelect("severity",
+      [...new Set(rows.map(row => row.severity).filter(Boolean))]
+        .sort((a, b) => (severityRank[b] || 0) - (severityRank[a] || 0)));
+
+    // Resource type: kinds present in the data, alphabetical.
+    const resourceTypeFilter = createMultiSelect("resource-type",
+      [...new Set(rows.map(row => row.resourceType).filter(Boolean))].sort());
+
+    // Remediation: a checkbox per FedRAMP deadline present, ordered by urgency
+    // (shortest first). Findings with no deadline (PAIN-1) are omitted.
     const remediationDaysByLabel = {};
     rows.forEach(row => {
       if (row.remediation) remediationDaysByLabel[row.remediation] = row.remediationDays;
     });
-    [...new Set(rows.map(row => row.remediation).filter(Boolean))]
-      .sort((a, b) => (remediationDaysByLabel[a] ?? 1e9) - (remediationDaysByLabel[b] ?? 1e9))
-      .forEach(deadline => {
-        const label = document.createElement("label");
-        const input = document.createElement("input");
-        input.type = "checkbox";
-        input.value = deadline;
-        input.addEventListener("change", render);
-        label.appendChild(input);
-        label.appendChild(document.createTextNode(" " + deadline));
-        remediationBox.appendChild(label);
-      });
+    const remediationFilter = createMultiSelect("remediation",
+      [...new Set(rows.map(row => row.remediation).filter(Boolean))]
+        .sort((a, b) => (remediationDaysByLabel[a] ?? 1e9) - (remediationDaysByLabel[b] ?? 1e9)));
 
     let sortIndex = null;
     let sortDir = 1;
@@ -700,15 +745,18 @@
     function render() {
       const filters = Object.fromEntries(controls.map(control => [control.id, control.value]));
       const minEPSS = filters.epss === "" ? null : Number(filters.epss);
-      const severities = selectedSeverities();
-      const remediations = selectedRemediations();
+      const severities = severityFilter.selected();
+      const remediations = remediationFilter.selected();
+      const resourceTypes = resourceTypeFilter.selected();
+      const imageQuery = (filters.image || "").trim().toLowerCase();
       const filtered = rows.filter(row =>
         (severities.size === 0 || severities.has(row.severity)) &&
         (remediations.size === 0 || remediations.has(row.remediation)) &&
+        (resourceTypes.size === 0 || resourceTypes.has(row.resourceType)) &&
+        (!imageQuery || row.image.toLowerCase().indexOf(imageQuery) >= 0) &&
         (!filters.pain || row.pain === filters.pain) &&
         (!filters.status || row.status === filters.status) &&
         (!filters["fix-available"] || String(row.fixAvailable) === filters["fix-available"]) &&
-        (!filters["resource-type"] || row.resourceType === filters["resource-type"]) &&
         (isCloudRun || !filters.namespace || row.namespace === filters.namespace) &&
         (!filters.exposed || String(row.exposed) === filters.exposed) &&
         (!filters["chainable-entrypoint"] || row.chainableEntrypointClassification === filters["chainable-entrypoint"]) &&
