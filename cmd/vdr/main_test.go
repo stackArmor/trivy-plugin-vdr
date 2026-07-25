@@ -93,7 +93,12 @@ func TestRunHelmReachabilityOnlyEndToEnd(t *testing.T) {
 	if err := runHelm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
 		t.Fatalf("runHelm returned error: %v", err)
 	}
-	for _, want := range []string{`"contextName": "helm:../../internal/helm/testdata/chart"`, `"imageRef": "ghcr.io/acme/app:prod"`, `"namespace": "default"`} {
+	for _, want := range []string{
+		`"contextName": "helm:../../internal/helm/testdata/chart"`,
+		`"imageRef": "ghcr.io/acme/app:prod"`,
+		`"namespace": "default"`,
+		`"vdr.fedramp.io/security-requirements": "cr-h_ir-m_ar-l"`,
+	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("report missing %s:\n%s", want, output.String())
 		}

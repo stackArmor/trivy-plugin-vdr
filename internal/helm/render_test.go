@@ -68,4 +68,7 @@ func TestRenderUsesHelmValuesRightmostWins(t *testing.T) {
 	if !strings.Contains(string(rendered), "ghcr.io/acme/app:prod") {
 		t.Fatalf("rendered chart did not use rightmost values file:\n%s", rendered)
 	}
+	if !strings.Contains(string(rendered), "vdr.fedramp.io/security-requirements: cr-h_ir-m_ar-l") {
+		t.Fatalf("rendered chart did not preserve the security-requirements label:\n%s", rendered)
+	}
 }

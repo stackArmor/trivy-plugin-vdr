@@ -12,6 +12,7 @@ import (
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/exposure"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
 
 func TestCollectMergesRenderedApplicationAndGatewayObjects(t *testing.T) {
@@ -28,7 +29,9 @@ spec:
     matchLabels: {app: web}
   template:
     metadata:
-      labels: {app: web}
+      labels:
+        app: web
+        vdr.fedramp.io/security-requirements: cr-h_ir-m_ar-l
     spec:
       containers:
         - name: app
@@ -80,6 +83,13 @@ spec:
 	resource := result.Inventory.Resources[0]
 	if resource.Resource.Namespace != "prod" || resource.Images[0].ImageRef != "ghcr.io/acme/web:1.2.3" {
 		t.Fatalf("resource = %#v", resource)
+	}
+	if got := resource.Labels["vdr.fedramp.io/security-requirements"]; got != "cr-h_ir-m_ar-l" {
+		t.Fatalf("rendered Helm security-requirements label = %q, want cr-h_ir-m_ar-l", got)
+	}
+	score := scoring.Default().Score(scoring.Input{Labels: resource.Labels})
+	if score.SecurityRequirements != "CR:H/IR:M/AR:L" || score.SecurityRequirementsSource != "label" {
+		t.Fatalf("rendered Helm security requirements = %+v", score)
 	}
 	if result.Inventory.ClusterDefaults["class"] != "C" {
 		t.Fatalf("ClusterDefaults = %#v", result.Inventory.ClusterDefaults)

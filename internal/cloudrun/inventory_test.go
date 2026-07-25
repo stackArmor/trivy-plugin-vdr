@@ -4,6 +4,8 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
 
 func TestCollectInventoriesServicesAndJobs(t *testing.T) {
@@ -13,7 +15,7 @@ func TestCollectInventoriesServicesAndJobs(t *testing.T) {
 				Project: "armory-gss-prod",
 				Region:  "us-east4",
 				Name:    "peregrine",
-				Labels:  map[string]string{"vdr.fedramp.io/asset-archetype": "app-tier"},
+				Labels:  map[string]string{"vdr_fedramp_io_security_requirements": "cr-h_ir-m_ar-l"},
 				Containers: []Container{
 					{Name: "gateway", Image: "us-east4-docker.pkg.dev/p/peregrine/gateway:1"},
 					{Name: "worker", Image: "us-east4-docker.pkg.dev/p/peregrine/worker:2"},
@@ -25,6 +27,7 @@ func TestCollectInventoriesServicesAndJobs(t *testing.T) {
 				Project: "armory-gss-prod",
 				Region:  "us-east4",
 				Name:    "asa-cloudrun-job",
+				Labels:  map[string]string{"vdr_fedramp_io_security_requirements": "cr-l_ir-h_ar-m"},
 				Containers: []Container{
 					{Name: "asa", Image: "us-east4-docker.pkg.dev/p/asa/asa:latest"},
 				},
@@ -49,6 +52,18 @@ func TestCollectInventoriesServicesAndJobs(t *testing.T) {
 	wantKinds := []string{got.Resources[0].Resource.Kind, got.Resources[1].Resource.Kind}
 	if !reflect.DeepEqual(wantKinds, []string{"Job", "Service"}) {
 		t.Fatalf("resource order/kinds = %#v", wantKinds)
+	}
+	wantLabels := map[string]string{"vdr.fedramp.io/security-requirements": "cr-h_ir-m_ar-l"}
+	if !reflect.DeepEqual(got.Resources[1].Labels, wantLabels) {
+		t.Fatalf("service labels = %#v, want canonical VDR labels %#v", got.Resources[1].Labels, wantLabels)
+	}
+	score := scoring.Default().Score(scoring.Input{Labels: got.Resources[1].Labels})
+	if score.SecurityRequirements != "CR:H/IR:M/AR:L" || score.SecurityRequirementsSource != "label" {
+		t.Fatalf("service security requirements = %+v", score)
+	}
+	jobScore := scoring.Default().Score(scoring.Input{Labels: got.Resources[0].Labels})
+	if jobScore.SecurityRequirements != "CR:L/IR:H/AR:M" || jobScore.SecurityRequirementsSource != "label" {
+		t.Fatalf("job security requirements = %+v", jobScore)
 	}
 }
 
@@ -133,9 +148,9 @@ func TestCollectAddsCloudRunCanonicalIDs(t *testing.T) {
 func TestCollectStoresProjectLabelsForScoringFallback(t *testing.T) {
 	client := &fakeInventoryClient{
 		projectLabels: map[string]string{
-			"vdr.fedramp.io/asset-archetype": "data-sensitive",
-			"vdr.fedramp.io/multi-agency":    "true",
-			"vdr.fedramp.io/class":           "D",
+			"vdr_fedramp_io_security_requirements": "cr-m_ir-h_ar-l",
+			"vdr_fedramp_io_multi_agency":          "true",
+			"vdr_fedramp_io_class":                 "d",
 		},
 		services: map[string][]Service{
 			"us-east4": {{
@@ -152,8 +167,36 @@ func TestCollectStoresProjectLabelsForScoringFallback(t *testing.T) {
 		t.Fatalf("Collect returned error: %v", err)
 	}
 	labels := got.Namespaces["cloudrun/p"]
-	if !reflect.DeepEqual(labels, client.projectLabels) {
-		t.Fatalf("project fallback labels = %#v, want %#v", labels, client.projectLabels)
+	want := map[string]string{
+		"vdr.fedramp.io/security-requirements": "cr-m_ir-h_ar-l",
+		"vdr.fedramp.io/multi-agency":          "true",
+		"vdr.fedramp.io/class":                 "d",
+	}
+	if !reflect.DeepEqual(labels, want) {
+		t.Fatalf("project fallback labels = %#v, want %#v", labels, want)
+	}
+	score := scoring.Default().Score(scoring.Input{NamespaceLabels: labels})
+	if score.SecurityRequirements != "CR:M/IR:H/AR:L" ||
+		score.SecurityRequirementsSource != "namespaceLabel" ||
+		score.Class != "D" ||
+		!score.MultiAgency {
+		t.Fatalf("project fallback score = %+v", score)
+	}
+}
+
+func TestCanonicalizeGCPVDRLabelsSupportsLegacyAliases(t *testing.T) {
+	got := canonicalizeGCPVDRLabels(map[string]string{
+		"vdr_fedramp_io_asset_archetype": "regulated-data__authoritative-record__shared-critical-path",
+		"vdr_fedramp_io_asset_value":     "high",
+		"team":                           "platform",
+	})
+	want := map[string]string{
+		"vdr.fedramp.io/asset-archetype": "regulated-data.authoritative-record.shared-critical-path",
+		"vdr.fedramp.io/asset-value":     "high",
+		"team":                           "platform",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonical labels = %#v, want %#v", got, want)
 	}
 }
 

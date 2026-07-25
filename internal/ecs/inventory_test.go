@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
 
 func TestInventoryCollectsTaskDefinitions(t *testing.T) {
@@ -17,7 +18,7 @@ func TestInventoryCollectsTaskDefinitions(t *testing.T) {
 				Family:   "api",
 				Revision: 7,
 				Status:   "ACTIVE",
-				Tags:     map[string]string{"vdr.fedramp.io/asset-value": "High"},
+				Tags:     map[string]string{"vdr.fedramp.io/security-requirements": "cr-h_ir-m_ar-l"},
 				Containers: []ContainerDefinition{{
 					Name:                           "api",
 					Image:                          "123.dkr.ecr.us-gov-west-1.amazonaws.com/api:1",
@@ -40,8 +41,12 @@ func TestInventoryCollectsTaskDefinitions(t *testing.T) {
 	if len(got.Images) != 1 {
 		t.Fatalf("images = %d, want 1: %#v", len(got.Images), got.Images)
 	}
-	if !reflect.DeepEqual(got.Resources[0].Labels, map[string]string{"vdr.fedramp.io/asset-value": "High"}) {
+	if !reflect.DeepEqual(got.Resources[0].Labels, map[string]string{"vdr.fedramp.io/security-requirements": "cr-h_ir-m_ar-l"}) {
 		t.Fatalf("resource labels = %#v, want task definition tags", got.Resources[0].Labels)
+	}
+	score := scoring.Default().Score(scoring.Input{Labels: got.Resources[0].Labels})
+	if score.SecurityRequirements != "CR:H/IR:M/AR:L" || score.SecurityRequirementsSource != "label" {
+		t.Fatalf("task definition security requirements = %+v", score)
 	}
 
 	wantRef := model.ResourceRef{

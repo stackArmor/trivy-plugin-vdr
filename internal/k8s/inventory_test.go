@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -62,7 +63,7 @@ func TestMergesWorkloadAndTemplateLabels(t *testing.T) {
 	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
 	// Workload-object labels (e.g. from Helm values.labels) plus pod-template labels;
 	// the pod template wins on a key conflict, the rest are unioned.
-	deploy.Labels = map[string]string{"vdr.fedramp.io/asset-archetype": "app-tier", "tier": "workload"}
+	deploy.Labels = map[string]string{"vdr.fedramp.io/security-requirements": "cr-h_ir-m_ar-l", "tier": "workload"}
 	deploy.Spec.Template.Labels = map[string]string{"app": "web", "tier": "template"}
 	client := fake.NewSimpleClientset(deploy)
 
@@ -71,10 +72,14 @@ func TestMergesWorkloadAndTemplateLabels(t *testing.T) {
 		t.Fatalf("Collect() error = %v", err)
 	}
 	requireResourceLabels(t, inv, "web", map[string]string{
-		"vdr.fedramp.io/asset-archetype": "app-tier",
-		"app":                            "web",
-		"tier":                           "template", // template wins over workload
+		"vdr.fedramp.io/security-requirements": "cr-h_ir-m_ar-l",
+		"app":                                  "web",
+		"tier":                                 "template", // template wins over workload
 	})
+	score := scoring.Default().Score(scoring.Input{Labels: inv.Resources[0].Labels})
+	if score.SecurityRequirements != "CR:H/IR:M/AR:L" || score.SecurityRequirementsSource != "label" {
+		t.Fatalf("workload security requirements = %+v", score)
+	}
 }
 
 func TestCollectsNamespaceMetadata(t *testing.T) {

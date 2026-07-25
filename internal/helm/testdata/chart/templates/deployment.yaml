@@ -10,6 +10,7 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}
+        vdr.fedramp.io/security-requirements: cr-h_ir-m_ar-l
     spec:
       containers:
         - name: app

@@ -454,7 +454,7 @@ workload label vdr.fedramp.io/security-requirements
   → built-in CR:H/IR:H/AR:H cluster default (noisy N4, surfaces for classification)
 ```
 
-Tag workloads you control with `vdr.fedramp.io/security-requirements`. Cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot carry the label are assigned vectors by name/kind/namespace rules in the ConfigMap. For Cloud Run, service/job labels override project labels. For ECS, task definition tags are used as labels.
+Tag workloads you control with `vdr.fedramp.io/security-requirements`. Cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot carry the label are assigned vectors by name/kind/namespace rules in the ConfigMap. For Cloud Run, use the provider-valid `vdr_fedramp_io_security_requirements` label on services, jobs, or the project; the plugin normalizes it to the canonical key, and service/job labels override project labels. For ECS, use the canonical `vdr.fedramp.io/security-requirements` task-definition tag.
 
 `kindRules` (since v2.1.0) match on workload kind with optional namespace and name globs — e.g. `{kind: Job, securityRequirements: cr-h_ir-h_ar-m}` classifies standalone Jobs (Helm hooks, one-shot migrations) whose generated names defeat name globs and which cannot carry labels. Kind rules sit between name rules and namespace rules, so a specific name rule or label still wins. CronJob-spawned Jobs are not inventoried separately (since v2.1.0); they are covered by their CronJob's template, so a `Job` kind rule only affects standalone Jobs.
 
