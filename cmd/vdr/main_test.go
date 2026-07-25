@@ -66,8 +66,8 @@ func TestLogIncompatibleClusterConfigGivesMigrationGuidance(t *testing.T) {
 		"ERROR",
 		"invalid, incompatible, or uses an unsupported older format",
 		`unknown archetype "old-value"`,
-		"<disclosure>.<trusted-change>.<dependency>",
-		"reassessed values",
+		"raw security-requirements vectors",
+		"cr-[l|m|h]_ir-[l|m|h]_ar-[l|m|h]",
 		vdrConfigMapAIHelpURL,
 	} {
 		if !strings.Contains(output.String(), want) {

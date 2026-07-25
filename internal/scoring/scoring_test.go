@@ -81,8 +81,8 @@ func TestBuiltInDefaultArchetype(t *testing.T) {
 	// Untagged resources resolve to the built-in H/H/H "unclassified" archetype:
 	// noisy (single-agency H/H/H + C:H/I:H/A:H => N4) but not the forced-multi N5.
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "weird", WorkloadName: "mystery"})
-	if got.ArchetypeSource != "default" || got.Archetype != "unclassified" {
-		t.Errorf("source=%s archetype=%s, want default/unclassified", got.ArchetypeSource, got.Archetype)
+	if got.SecurityRequirementsSource != "default" || got.SecurityRequirements != "CR:H/IR:H/AR:H" {
+		t.Errorf("source=%s requirements=%s, want default/CR:H/IR:H/AR:H", got.SecurityRequirementsSource, got.SecurityRequirements)
 	}
 	if got.Tier != "N4" {
 		t.Errorf("untagged Tier = %s, want N4 (noisy default, not forced-multi N5)", got.Tier)
@@ -94,7 +94,8 @@ func TestBuiltInDefaultArchetype(t *testing.T) {
 
 func TestFailSafeForcesN5WhenNoDefault(t *testing.T) {
 	cfg := Default()
-	cfg.Defaults.Archetype = "" // clear the default => true fail-safe takes over
+	cfg.Defaults.SecurityRequirements = "" // clear the default => true fail-safe takes over
+	cfg.Defaults.Archetype = ""
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "weird", WorkloadName: "mystery"})
 	if got.Tier != "N5" {
 		t.Errorf("untagged Tier = %s, want N5 (fail-safe must force multi-agency)", got.Tier)
@@ -143,8 +144,8 @@ func TestResolutionOrder(t *testing.T) {
 
 	// Nothing matches => built-in cluster-default archetype.
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "thing"})
-	if r.ArchetypeSource != "default" || r.Archetype != "unclassified" {
-		t.Errorf("expected default/unclassified, got source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityRequirementsSource != "default" || r.SecurityRequirements != "CR:H/IR:H/AR:H" {
+		t.Errorf("expected default/CR:H/IR:H/AR:H, got source=%s requirements=%s", r.SecurityRequirementsSource, r.SecurityRequirements)
 	}
 }
 
@@ -303,6 +304,7 @@ func TestTechnicalImpactRaisesTier(t *testing.T) {
 
 func TestDefaultArchetypeFallback(t *testing.T) {
 	cfg := Default()
+	cfg.Defaults.SecurityRequirements = ""
 	// A noisy H/H/H cluster default archetype catches new/unclassified resources.
 	cfg.Archetypes["cluster-default"] = Archetype{Lens: "control", CR: "H", IR: "H", AR: "H"}
 	cfg.Defaults.Archetype = "cluster-default"
@@ -606,8 +608,8 @@ func TestKindRules(t *testing.T) {
 
 	// An empty kind never matches a kind rule.
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "thing"})
-	if r.ArchetypeSource != "default" || r.Archetype != "unclassified" {
-		t.Errorf("empty kind should skip kind rules: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityRequirementsSource != "default" || r.SecurityRequirements != "CR:H/IR:H/AR:H" {
+		t.Errorf("empty kind should skip kind rules: source=%s requirements=%s", r.SecurityRequirementsSource, r.SecurityRequirements)
 	}
 }
 
@@ -705,7 +707,8 @@ func TestClassAndMultiAgencySources(t *testing.T) {
 
 func TestFailsafeForcesMultiAgencySource(t *testing.T) {
 	cfg := Default()
-	cfg.Defaults.Archetype = "" // no default archetype => fail-safe path
+	cfg.Defaults.SecurityRequirements = "" // no default requirements => fail-safe path
+	cfg.Defaults.Archetype = ""
 
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "x", WorkloadName: "y"})
 	if r.ArchetypeSource != "failsafe" {

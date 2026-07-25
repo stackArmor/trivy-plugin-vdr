@@ -56,6 +56,7 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"privileged",             // security posture moved into the resource-name tooltip
 		"image-cell",             // long image references are constrained in the table
 		"text-overflow: ellipsis",
+		`"securityRequirements":"CR:H/IR:H/AR:H"`,
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("HTML output missing %q", want)
@@ -73,6 +74,9 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	}
 	if strings.Contains(output, "VDR Kubernetes Report") {
 		t.Fatalf("HTML output should use source-neutral report title")
+	}
+	if strings.Contains(output, "pain.archetype") || strings.Contains(output, "Archetype:") {
+		t.Fatalf("HTML output should display security requirements, not archetypes")
 	}
 	if strings.Contains(output, "https://") {
 		t.Fatalf("HTML output should be standalone without remote dependencies:\n%s", output)

@@ -4,9 +4,9 @@
 # The plugin reads fedramp-vdr-trivy/vdr-fedramp from the cluster automatically
 # (no --scoring-config flag needed). It deep-merges the embedded scoring.yaml over its
 # built-in rubric. The built-in rubric already provides the governed compositional
-# reason registry and backwards-compatible legacy archetype catalog,
-# the algorithm, the EPSS LEV threshold (0.50), and the H/H/H "unclassified"
-# cluster-default archetype for new/unclassified resources — so this file only
+# raw CR/IR/AR security-requirements parser,
+# the algorithm, the EPSS LEV threshold (0.50), and the H/H/H cluster-default
+# security-requirements vector for new/unclassified resources — so this file only
 # carries cluster-wide Class/scope and the rules for GKE-managed,
 # shared-responsibility components that cannot carry vdr.fedramp.io/* labels.
 #
@@ -48,39 +48,39 @@ data:
     nameRules:
       # GCP workload-identity / metadata credential broker: privileged because
       # it can mint or forward workload credentials, not because the account is a secret.
-      - {namespace: kube-system, match: gke-metadata-server, archetype: privileged-identity}
-      - {namespace: kube-system, match: "metadata-proxy*", archetype: privileged-identity}
+      - {namespace: kube-system, match: gke-metadata-server, securityRequirements: cr-h_ir-h_ar-m}
+      - {namespace: kube-system, match: "metadata-proxy*", securityRequirements: cr-h_ir-h_ar-m}
       # Cluster networking dataplane / API control tunnel.
-      - {namespace: kube-system, match: "calico*", archetype: orchestrator}
-      - {namespace: kube-system, match: kube-proxy, archetype: orchestrator}
-      - {namespace: kube-system, match: netd, archetype: orchestrator}
-      - {namespace: kube-system, match: ip-masq-agent, archetype: orchestrator}
-      - {namespace: kube-system, match: "konnectivity*", archetype: orchestrator}
-      - {namespace: kube-system, match: "*dra*", archetype: orchestrator}
+      - {namespace: kube-system, match: "calico*", securityRequirements: cr-m_ir-m_ar-h}
+      - {namespace: kube-system, match: kube-proxy, securityRequirements: cr-m_ir-m_ar-h}
+      - {namespace: kube-system, match: netd, securityRequirements: cr-m_ir-m_ar-h}
+      - {namespace: kube-system, match: ip-masq-agent, securityRequirements: cr-m_ir-m_ar-h}
+      - {namespace: kube-system, match: "konnectivity*", securityRequirements: cr-m_ir-m_ar-h}
+      - {namespace: kube-system, match: "*dra*", securityRequirements: cr-m_ir-m_ar-h}
       # Storage CSI driver.
-      - {namespace: kube-system, match: "pdcsi*", archetype: orchestrator}
+      - {namespace: kube-system, match: "pdcsi*", securityRequirements: cr-m_ir-m_ar-h}
       # Cluster DNS. platform-foundation is for METADATA-ONLY foundation services
       # (DNS/NTP/discovery/plain L4 LBs): CR:L (recon only), IR:H, AR:H. Anything
       # that terminates TLS or sees payload belongs in public-edge (internet-
       # facing) or app-tier (internal) instead.
-      - {namespace: kube-system, match: "kube-dns*", archetype: platform-foundation}
+      - {namespace: kube-system, match: "kube-dns*", securityRequirements: cr-l_ir-h_ar-h}
       # Runtime security / image inspection / CIS hardening.
-      - {namespace: kube-system, match: container-watcher, archetype: security-tooling}
-      - {namespace: kube-system, match: image-package-extractor, archetype: security-tooling}
-      - {namespace: kube-system, match: configure-cis-level-2, archetype: security-tooling}
-      - {namespace: kube-system, match: runsc-metric-server, archetype: security-tooling}
+      - {namespace: kube-system, match: container-watcher, securityRequirements: cr-m_ir-h_ar-m}
+      - {namespace: kube-system, match: image-package-extractor, securityRequirements: cr-m_ir-h_ar-m}
+      - {namespace: kube-system, match: configure-cis-level-2, securityRequirements: cr-m_ir-h_ar-m}
+      - {namespace: kube-system, match: runsc-metric-server, securityRequirements: cr-m_ir-h_ar-m}
       # Ingress default backend (behind the provider-terminated GCLB, so
       # passthrough; an in-cluster terminating proxy would be public-edge).
-      - {namespace: kube-system, match: l7-default-backend, archetype: passthrough-edge}
+      - {namespace: kube-system, match: l7-default-backend, securityRequirements: cr-l_ir-l_ar-h}
 
     namespaceRules:
       # Specific gke-managed namespaces first, then the catch-all.
-      - {match: gke-managed-networking-dra-driver, archetype: orchestrator}
-      - {match: gke-managed-volumepopulator, archetype: orchestrator}
-      - {match: "gke-managed-*", archetype: internal-tooling}
+      - {match: gke-managed-networking-dra-driver, securityRequirements: cr-m_ir-m_ar-h}
+      - {match: gke-managed-volumepopulator, securityRequirements: cr-m_ir-m_ar-h}
+      - {match: "gke-managed-*", securityRequirements: cr-l_ir-l_ar-l}
       # Managed Prometheus (observability).
-      - {match: gmp-system, archetype: internal-tooling}
-      - {match: gmp-public, archetype: internal-tooling}
+      - {match: gmp-system, securityRequirements: cr-l_ir-l_ar-l}
+      - {match: gmp-public, securityRequirements: cr-l_ir-l_ar-l}
       # Everything else in kube-system (metrics agents, fluentbit, device plugins,
       # autoscalers, event exporter, etc.) is low-privilege node/observability infra.
-      - {match: kube-system, archetype: internal-tooling}
+      - {match: kube-system, securityRequirements: cr-l_ir-l_ar-l}

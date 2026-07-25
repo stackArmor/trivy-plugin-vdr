@@ -187,7 +187,7 @@ func sourceHelpSections(source string) []helpSection {
 		},
 		helpSection{
 			title: "Filtering, enrichment, and scoring",
-			flags: []string{"min-severity", "min-epss", "skip-enrichment", "refresh-enrichment", "scoring-config"},
+			flags: []string{"min-severity", "min-epss", "skip-enrichment", "refresh-enrichment", "scoring-config", "legacy-archetypes"},
 		},
 		helpSection{
 			title: "Registry authentication and VEX",

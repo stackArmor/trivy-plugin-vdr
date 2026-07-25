@@ -113,7 +113,7 @@ func partitionFindings(findings []model.Finding) ([]model.Finding, []model.Findi
 }
 
 // workloadLabelIndex maps a workload identity (namespace/kind/name) to its merged
-// labels, so PAIN scoring can resolve an asset's archetype from the labels of the
+// labels, so PAIN scoring can resolve an asset's security requirements from the labels of the
 // workload that owns an affected (container-level) resource reference.
 func workloadLabelIndex(inventory *model.Inventory) map[string]map[string]string {
 	index := map[string]map[string]string{}
@@ -147,17 +147,19 @@ func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, 
 		InternetReachable: internetReachable,
 	})
 	pain := &model.Pain{
-		Tier:              res.Tier,
-		Word:              res.Word,
-		Severity:          res.Severity,
-		Archetype:         res.Archetype,
-		ArchetypeSource:   res.ArchetypeSource,
-		SeveritySource:    res.SeveritySource,
-		CR:                res.CR,
-		IR:                res.IR,
-		AR:                res.AR,
-		MultiAgency:       res.MultiAgency,
-		MultiAgencySource: res.MultiAgencySource,
+		Tier:                       res.Tier,
+		Word:                       res.Word,
+		Severity:                   res.Severity,
+		SecurityRequirements:       res.SecurityRequirements,
+		SecurityRequirementsSource: res.SecurityRequirementsSource,
+		Archetype:                  res.Archetype,
+		ArchetypeSource:            res.ArchetypeSource,
+		SeveritySource:             res.SeveritySource,
+		CR:                         res.CR,
+		IR:                         res.IR,
+		AR:                         res.AR,
+		MultiAgency:                res.MultiAgency,
+		MultiAgencySource:          res.MultiAgencySource,
 	}
 	rem := &model.Remediation{
 		Class:        res.Class,
@@ -270,7 +272,7 @@ func RenderTable(w io.Writer, report model.Report) error {
 
 func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) error {
 	if len(report.Resources) > 0 {
-		if _, err := fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tCONTAINER\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tFINDINGS"); err != nil {
+		if _, err := fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tCONTAINER\tCLASS\tSECURITY REQUIREMENTS\tIMAGE\tEXPOSED\tFINDINGS"); err != nil {
 			return err
 		}
 		for _, resource := range report.Resources {
@@ -280,7 +282,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 				resource.Resource.Name,
 				resource.Resource.ContainerName,
 				classificationClass(resource.Classification),
-				classificationArchetype(resource.Classification),
+				classificationSecurityRequirements(resource.Classification),
 				formatResourceImages(resource.Images),
 				formatExposure(resource.Exposure),
 				len(resource.Findings),
@@ -290,7 +292,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 		}
 		return tw.Flush()
 	}
-	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tCLASS\tSECURITY REQUIREMENTS\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
 		return err
 	}
 	for _, finding := range report.Findings {
@@ -300,7 +302,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 			finding.Severity,
 			finding.Status,
 			formatAffectedClasses(finding.Affected),
-			formatAffectedArchetypes(finding.Affected),
+			formatAffectedSecurityRequirements(finding.Affected),
 			findingImage(finding),
 			formatExposure(finding.Exposure),
 			formatAffectedResources(finding.AffectedResources),
@@ -312,7 +314,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 		if _, err := fmt.Fprintln(tw, "\nSUPPRESSED FINDINGS"); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tVEX STATUS\tJUSTIFICATION\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
+		if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tVEX STATUS\tJUSTIFICATION\tCLASS\tSECURITY REQUIREMENTS\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
 			return err
 		}
 		for _, finding := range report.SuppressedFindings {
@@ -322,7 +324,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 				suppressionStatus(finding.Suppression),
 				suppressionJustification(finding.Suppression),
 				formatAffectedClasses(finding.Affected),
-				formatAffectedArchetypes(finding.Affected),
+				formatAffectedSecurityRequirements(finding.Affected),
 				findingImage(finding),
 				formatExposure(finding.Exposure),
 				formatAffectedResources(finding.AffectedResources),
@@ -679,10 +681,12 @@ func classificationFromScore(pain *model.Pain, remediation *model.Remediation) *
 		classification.ClassSource = remediation.ClassSource
 	}
 	if pain != nil {
+		classification.SecurityRequirements = pain.SecurityRequirements
+		classification.SecurityRequirementsSource = pain.SecurityRequirementsSource
 		classification.Archetype = pain.Archetype
 		classification.ArchetypeSource = pain.ArchetypeSource
 	}
-	if classification.Class == "" && classification.Archetype == "" && classification.ArchetypeSource == "" {
+	if classification.Class == "" && classification.SecurityRequirements == "" && classification.SecurityRequirementsSource == "" {
 		return nil
 	}
 	return classification
@@ -695,14 +699,14 @@ func classificationClass(classification *model.AssetClassification) string {
 	return classification.Class
 }
 
-func classificationArchetype(classification *model.AssetClassification) string {
+func classificationSecurityRequirements(classification *model.AssetClassification) string {
 	if classification == nil {
 		return ""
 	}
-	if classification.ArchetypeSource == "" {
-		return classification.Archetype
+	if classification.SecurityRequirementsSource == "" {
+		return classification.SecurityRequirements
 	}
-	return fmt.Sprintf("%s (%s)", classification.Archetype, classification.ArchetypeSource)
+	return fmt.Sprintf("%s (%s)", classification.SecurityRequirements, classification.SecurityRequirementsSource)
 }
 
 func formatAffectedClasses(affected []model.Affected) string {
@@ -723,11 +727,11 @@ func formatAffectedClasses(affected []model.Affected) string {
 	return strings.Join(values, ",")
 }
 
-func formatAffectedArchetypes(affected []model.Affected) string {
+func formatAffectedSecurityRequirements(affected []model.Affected) string {
 	values := make([]string, 0, len(affected))
 	seen := map[string]struct{}{}
 	for _, item := range affected {
-		value := classificationArchetype(item.Classification)
+		value := classificationSecurityRequirements(item.Classification)
 		if value == "" {
 			continue
 		}

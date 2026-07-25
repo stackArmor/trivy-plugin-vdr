@@ -523,13 +523,21 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 		scoringConfig = loaded
 		logger.Info("loaded PAIN scoring config from %s", cfg.ScoringConfig)
 	}
+	if cfg.LegacyArchetypes {
+		scoringConfig.UseLegacyArchetypes(true)
+		logger.Info("legacy archetype mode enabled")
+	}
 	// Cluster-wide FedRAMP defaults (class, multi-agency) from the in-cluster
 	// ConfigMap override the config-file defaults.
 	if inventory != nil && len(inventory.ClusterDefaults) > 0 {
 		if applyErr := scoringConfig.ApplyClusterDefaults(inventory.ClusterDefaults); applyErr != nil {
 			logIncompatibleClusterConfig(logger, applyErr)
 		} else {
-			logger.Info("applied cluster FedRAMP defaults (class=%s, default archetype=%s)", scoringConfig.Defaults.Class, scoringConfig.Defaults.Archetype)
+			logger.Info(
+				"applied cluster FedRAMP defaults (class=%s, default security requirements=%s)",
+				scoringConfig.Defaults.Class,
+				scoringConfig.Defaults.SecurityRequirements,
+			)
 		}
 	}
 
@@ -587,7 +595,7 @@ const vdrConfigMapAIHelpURL = "https://github.com/stackArmor/trivy-plugin-vdr-sk
 
 func logIncompatibleClusterConfig(logger *log.Logger, err error) {
 	logger.Error(
-		"cluster FedRAMP ConfigMap is invalid, incompatible, or uses an unsupported older format: %v. Update or regenerate it with the current compositional archetype schema (<disclosure>.<trusted-change>.<dependency>) and reassessed values. For AI-assisted migration, use %s",
+		"cluster FedRAMP ConfigMap is invalid, incompatible, or uses an unsupported older format: %v. Update or regenerate it with raw security-requirements vectors (cr-[l|m|h]_ir-[l|m|h]_ar-[l|m|h]). For AI-assisted migration, use %s",
 		err,
 		vdrConfigMapAIHelpURL,
 	)

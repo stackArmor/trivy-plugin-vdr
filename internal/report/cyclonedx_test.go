@@ -84,7 +84,7 @@ func sampleCycloneDXReport() model.Report {
 							ClassificationReasonCodes: []string{"active-finding", "asset-internet-accessible", "possible-candidate"},
 							PolicyVersion:             "chainable-entrypoint-v2",
 						},
-						Pain:        &model.Pain{Tier: "N4", Word: "Debilitating", Archetype: "web-service"},
+						Pain:        &model.Pain{Tier: "N4", Word: "Debilitating", SecurityRequirements: "CR:H/IR:H/AR:M"},
 						Remediation: &model.Remediation{Column: "LEV+IRV", LEV: true, IRV: true, DeadlineDays: 3},
 					},
 				},
@@ -103,7 +103,7 @@ func sampleCycloneDXReport() model.Report {
 					Status:        "not_affected",
 					Justification: "code_not_reachable",
 				},
-				WouldHaveBeenPain:        &model.Pain{Tier: "N5", Word: "Debilitating", Archetype: "web-service"},
+				WouldHaveBeenPain:        &model.Pain{Tier: "N5", Word: "Debilitating", SecurityRequirements: "CR:H/IR:H/AR:M"},
 				WouldHaveBeenRemediation: &model.Remediation{Column: "LEV+IRV", LEV: true, IRV: true, DeadlineDays: 1},
 				Affected: []model.Affected{{
 					Resource: model.ResourceRef{
@@ -218,6 +218,7 @@ func TestToCycloneDXVDRProperties(t *testing.T) {
 	vulnProps := propMap(active.Properties)
 	wantVuln := map[string]string{
 		"vdr:pain":                                     "N4",
+		"vdr:securityRequirements":                     "CR:H/IR:H/AR:M",
 		"vdr:cwes":                                     "CWE-787,CWE-79",
 		"vdr:chainableEntrypointClassification":        "possible",
 		"vdr:chainableEntrypointHighConfidence":        "false",
@@ -252,6 +253,9 @@ func TestToCycloneDXVDRProperties(t *testing.T) {
 		if got := vulnProps[k]; got != want {
 			t.Errorf("vuln property %s = %q, want %q", k, got, want)
 		}
+	}
+	if _, exists := vulnProps["vdr:archetype"]; exists {
+		t.Error("legacy vdr:archetype property must not be emitted")
 	}
 	// Numeric cwes array.
 	if len(active.CWEs) != 2 || active.CWEs[0] != 79 || active.CWEs[1] != 787 {

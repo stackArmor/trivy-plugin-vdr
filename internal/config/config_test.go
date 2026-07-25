@@ -65,8 +65,15 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.HTMLOutput != "" || cfg.HTMLTemplate != "" {
 		t.Fatalf("HTMLOutput/HTMLTemplate = %q/%q, want empty", cfg.HTMLOutput, cfg.HTMLTemplate)
 	}
-	if cfg.SkipEnrichment || cfg.RefreshEnrichment || cfg.SkipExposure || cfg.Debug {
-		t.Fatalf("SkipEnrichment/RefreshEnrichment/SkipExposure/Debug = %v/%v/%v/%v, want all false", cfg.SkipEnrichment, cfg.RefreshEnrichment, cfg.SkipExposure, cfg.Debug)
+	if cfg.SkipEnrichment || cfg.RefreshEnrichment || cfg.SkipExposure || cfg.LegacyArchetypes || cfg.Debug {
+		t.Fatalf(
+			"SkipEnrichment/RefreshEnrichment/SkipExposure/LegacyArchetypes/Debug = %v/%v/%v/%v/%v, want all false",
+			cfg.SkipEnrichment,
+			cfg.RefreshEnrichment,
+			cfg.SkipExposure,
+			cfg.LegacyArchetypes,
+			cfg.Debug,
+		)
 	}
 	if cfg.SkipRegistryAuth || cfg.NoGcloudAuth || cfg.NoECRAuth || cfg.Quiet {
 		t.Fatalf("registry auth/quiet flags = %v/%v/%v/%v, want all false", cfg.SkipRegistryAuth, cfg.NoGcloudAuth, cfg.NoECRAuth, cfg.Quiet)
@@ -83,6 +90,16 @@ func TestParseNoDedupe(t *testing.T) {
 	}
 	if cfg.Dedupe {
 		t.Fatal("Dedupe = true, want false with --no-dedupe")
+	}
+}
+
+func TestParseLegacyArchetypes(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--legacy-archetypes"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.LegacyArchetypes {
+		t.Fatal("LegacyArchetypes = false, want true")
 	}
 }
 
@@ -882,6 +899,7 @@ func TestParseSourceHelpOnlyShowsRelevantFlags(t *testing.T) {
 		"local Docker config",
 		"Exposure and scan modes:",
 		"Vulnerability scanning:",
+		"--legacy-archetypes",
 		"Registry authentication and VEX:",
 		"Cache management:",
 		"Report output:",
