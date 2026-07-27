@@ -7,7 +7,7 @@ type Inventory struct {
 	Resources   []ResourceInventory `json:"resources"`
 	Images      []ImageInventory    `json:"images"`
 	// Namespaces maps a namespace name to its object labels. Used to resolve
-	// namespace-level FedRAMP metadata (security requirements, multi-agency, class).
+	// namespace-level FedRAMP metadata (asset-archetype, multi-agency, class).
 	Namespaces map[string]map[string]string `json:"namespaces,omitempty"`
 	// ClusterDefaults holds cluster-wide FedRAMP metadata read from the cluster
 	// ConfigMap (e.g. class, multiAgency). Not serialized in the report.
@@ -418,14 +418,14 @@ type Affected struct {
 }
 
 type AssetClassification struct {
-	Class                      string `json:"class,omitempty"`
-	ClassSource                string `json:"classSource,omitempty"`
-	SecurityRequirements       string `json:"securityRequirements,omitempty"`
-	SecurityRequirementsSource string `json:"securityRequirementsSource,omitempty"`
-	// Archetype fields remain in the Go model temporarily for source
-	// compatibility, but are intentionally not serialized or displayed.
-	Archetype       string `json:"-"`
-	ArchetypeSource string `json:"-"`
+	Class                             string `json:"class,omitempty"`
+	ClassSource                       string `json:"classSource,omitempty"`
+	Archetype                         string `json:"archetype,omitempty"`
+	ArchetypeSource                   string `json:"archetypeSource,omitempty"`
+	ArchetypeRequirements             string `json:"archetypeRequirements,omitempty"`
+	SecurityRequirementsCeiling       string `json:"securityRequirementsCeiling,omitempty"`
+	SecurityRequirementsCeilingSource string `json:"securityRequirementsCeilingSource,omitempty"`
+	Recalculated                      bool   `json:"recalculated,omitempty"`
 }
 
 // Remediation is the FedRAMP Rev5 VDR-TFR-PVR remediation deadline for a finding
@@ -448,22 +448,22 @@ type Remediation struct {
 
 // Pain is the FedRAMP Rev5 VDR Potential Agency Impact rating (N1-N5) for a
 // finding on a specific asset. Tier is derived from the CVSS impact vector
-// weighted by the asset's CR/IR/AR security requirements and the agency scope.
+// weighted by the asset archetype's CR/IR/AR requirements and the agency scope.
 type Pain struct {
-	Tier                       string  `json:"tier"`     // N1..N5
-	Word                       string  `json:"word"`     // Minimal|Narrow|Disruptive|Debilitating
-	Severity                   float64 `json:"severity"` // normalized environmental impact scalar 0..1
-	SecurityRequirements       string  `json:"securityRequirements"`
-	SecurityRequirementsSource string  `json:"securityRequirementsSource"`
-	SeveritySource             string  `json:"severitySource,omitempty"` // technicalImpact|cvss|severity
-	CR                         string  `json:"cr"`                       // confidentiality requirement (L|M|H)
-	IR                         string  `json:"ir"`                       // integrity requirement (L|M|H)
-	AR                         string  `json:"ar"`                       // availability requirement (L|M|H)
-	MultiAgency                bool    `json:"multiAgency"`              // effective scope used (incl. fail-safe)
-	// Archetype fields remain in the Go model temporarily for source
-	// compatibility, but are intentionally not serialized or displayed.
-	Archetype       string `json:"-"`
-	ArchetypeSource string `json:"-"`
+	Tier                              string  `json:"tier"`            // N1..N5
+	Word                              string  `json:"word"`            // Minimal|Narrow|Disruptive|Debilitating
+	Severity                          float64 `json:"severity"`        // normalized environmental impact scalar 0..1
+	Archetype                         string  `json:"archetype"`       // resolved asset-archetype or asset-value-* fallback
+	ArchetypeSource                   string  `json:"archetypeSource"` // label|namespaceLabel|nameRule|namespaceRule|assetValue*|default|failsafe
+	ArchetypeRequirements             string  `json:"archetypeRequirements,omitempty"`
+	SecurityRequirementsCeiling       string  `json:"securityRequirementsCeiling,omitempty"`
+	SecurityRequirementsCeilingSource string  `json:"securityRequirementsCeilingSource,omitempty"`
+	Recalculated                      bool    `json:"recalculated,omitempty"`
+	SeveritySource                    string  `json:"severitySource,omitempty"` // technicalImpact|cvss|severity
+	CR                                string  `json:"cr"`                       // effective confidentiality requirement (L|M|H)
+	IR                                string  `json:"ir"`                       // effective integrity requirement (L|M|H)
+	AR                                string  `json:"ar"`                       // effective availability requirement (L|M|H)
+	MultiAgency                       bool    `json:"multiAgency"`              // effective scope used (incl. fail-safe)
 	// MultiAgencySource records which signal set MultiAgency: label |
 	// namespaceLabel | multiAgencyNamespaces | configMap | scoringConfig |
 	// builtin | failsafe. "configMap" means the in-cluster vdr-fedramp ConfigMap

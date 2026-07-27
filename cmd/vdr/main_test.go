@@ -66,8 +66,8 @@ func TestLogIncompatibleClusterConfigGivesMigrationGuidance(t *testing.T) {
 		"ERROR",
 		"invalid, incompatible, or uses an unsupported older format",
 		`unknown archetype "old-value"`,
-		"raw security-requirements vectors",
-		"cr-[l|m|h]_ir-[l|m|h]_ar-[l|m|h]",
+		"<disclosure>.<trusted-change>.<dependency>",
+		"reassessed values",
 		vdrConfigMapAIHelpURL,
 	} {
 		if !strings.Contains(output.String(), want) {
@@ -93,12 +93,7 @@ func TestRunHelmReachabilityOnlyEndToEnd(t *testing.T) {
 	if err := runHelm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
 		t.Fatalf("runHelm returned error: %v", err)
 	}
-	for _, want := range []string{
-		`"contextName": "helm:../../internal/helm/testdata/chart"`,
-		`"imageRef": "ghcr.io/acme/app:prod"`,
-		`"namespace": "default"`,
-		`"vdr.fedramp.io/security-requirements": "cr-h_ir-m_ar-l"`,
-	} {
+	for _, want := range []string{`"contextName": "helm:../../internal/helm/testdata/chart"`, `"imageRef": "ghcr.io/acme/app:prod"`, `"namespace": "default"`} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("report missing %s:\n%s", want, output.String())
 		}

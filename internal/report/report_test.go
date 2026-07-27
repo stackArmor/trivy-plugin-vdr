@@ -80,13 +80,10 @@ func TestBuildAndRenderJSONIncludeChainableEntrypointMetadata(t *testing.T) {
 	if err := RenderJSON(&output, got); err != nil {
 		t.Fatalf("RenderJSON returned error: %v", err)
 	}
-	for _, want := range []string{`"chainableEntrypoint"`, `"classification": "none"`, `"candidateStatus": "high_confidence"`, `"strict-execution-cwe"`, `"policyVersion": "chainable-entrypoint-v2"`, `"securityRequirements": "CR:H/IR:H/AR:H"`} {
+	for _, want := range []string{`"chainableEntrypoint"`, `"classification": "none"`, `"candidateStatus": "high_confidence"`, `"strict-execution-cwe"`, `"policyVersion": "chainable-entrypoint-v2"`} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("rendered JSON missing %q:\n%s", want, output.String())
 		}
-	}
-	if strings.Contains(output.String(), `"archetype"`) {
-		t.Fatalf("rendered JSON must not expose legacy archetype fields:\n%s", output.String())
 	}
 
 	exposed := Build(sampleInventory(), []model.Finding{finding}, map[model.ResourceRef]model.Exposure{
@@ -331,10 +328,8 @@ func TestBuildScanReachabilityReportSuppressesScoringAndEnrichmentButKeepsExposu
 	if affected.Classification == nil {
 		t.Fatalf("Classification missing from affected resource: %#v", affected)
 	}
-	if affected.Classification.Class != "B" ||
-		affected.Classification.SecurityRequirements != "CR:L/IR:L/AR:L" ||
-		affected.Classification.SecurityRequirementsSource != "label" {
-		t.Fatalf("Classification = %#v, want class B CR:L/IR:L/AR:L from label", affected.Classification)
+	if affected.Classification.Class != "B" || affected.Classification.Archetype != "dev-test" || affected.Classification.ArchetypeSource != "label" {
+		t.Fatalf("Classification = %#v, want class B dev-test from label", affected.Classification)
 	}
 
 	var buf bytes.Buffer
@@ -342,12 +337,12 @@ func TestBuildScanReachabilityReportSuppressesScoringAndEnrichmentButKeepsExposu
 		t.Fatalf("RenderJSON returned error: %v", err)
 	}
 	output := buf.String()
-	for _, want := range []string{`"exposure"`, `"internetAccessible"`, `"classification"`, `"class"`, `"securityRequirements"`} {
+	for _, want := range []string{`"exposure"`, `"internetAccessible"`, `"classification"`, `"class"`, `"archetype"`} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("JSON output missing %s:\n%s", want, output)
 		}
 	}
-	for _, forbidden := range []string{`"archetype"`, `"epss"`, `"vulnrichment"`, `"pain"`, `"remediation"`, `"wouldHaveBeenPain"`, `"wouldHaveBeenRemediation"`} {
+	for _, forbidden := range []string{`"epss"`, `"vulnrichment"`, `"pain"`, `"remediation"`, `"wouldHaveBeenPain"`, `"wouldHaveBeenRemediation"`} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("JSON output leaked %s:\n%s", forbidden, output)
 		}
@@ -515,11 +510,7 @@ func TestBuildSummaryCountsFindingsWithSpecificCWE(t *testing.T) {
 }
 
 func TestRenderClassificationOnlyTableOmitsScoringAndEnrichmentColumns(t *testing.T) {
-	classification := &model.AssetClassification{
-		Class:                      "B",
-		SecurityRequirements:       "CR:L/IR:L/AR:L",
-		SecurityRequirementsSource: "label",
-	}
+	classification := &model.AssetClassification{Class: "B", Archetype: "dev-test", ArchetypeSource: "label"}
 	report := model.Report{
 		ClassificationOnly: true,
 		Findings: []model.Finding{{
@@ -545,7 +536,7 @@ func TestRenderClassificationOnlyTableOmitsScoringAndEnrichmentColumns(t *testin
 	}
 
 	output := buf.String()
-	for _, want := range []string{"CLASS", "SECURITY REQUIREMENTS", "EXPOSED", "B", "CR:L/IR:L/AR:L (label)", "yes"} {
+	for _, want := range []string{"CLASS", "ASSET ARCHETYPE", "EXPOSED", "B", "dev-test (label)", "yes"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("table output missing %q:\n%s", want, output)
 		}

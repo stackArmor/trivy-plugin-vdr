@@ -2,7 +2,7 @@
 
 `trivy-plugin-vdr` reads a ConfigMap named **`vdr-fedramp`** in the
 **`fedramp-vdr-trivy`** namespace to set cluster-wide FedRAMP metadata and the
-raw security-requirements rules used for PAIN scoring and the VDR-TFR-PVR remediation
+asset-archetype rules used for PAIN scoring and the VDR-TFR-PVR remediation
 deadline. The plugin reads it from the cluster automatically — no
 `--scoring-config` flag is required.
 
@@ -16,16 +16,29 @@ This directory has a starter ConfigMap per managed-Kubernetes provider:
 
 ## What goes in the ConfigMap
 
-Only tenant-specific overrides. The plugin ships the scoring algorithm, the
-EPSS LEV threshold (`0.50`), and a `CR:H/IR:H/AR:H` cluster default that catches
-new or otherwise-unclassified resources (noisy PAIN-4, single-agency).
+Only tenant-specific overrides. The plugin ships the full rubric built in:
+
+- the governed disclosure/trusted-change/dependency reason registries used to
+  derive CR/IR/AR from compositional traces,
+- the backwards-compatible legacy archetype catalog,
+- the scoring algorithm,
+- the EPSS LEV threshold (`0.50`),
+- the H/H/H **`unclassified`** cluster-default archetype that catches new or
+  otherwise-unclassified resources (noisy PAIN-4, single-agency) so they surface
+  for deliberate classification.
 
 The ConfigMap carries:
 
 - `class` — your FedRAMP Certification Class (`A`/`B`/`C`/`D`).
 - `multiAgency` — `"true"` if the cluster serves more than one agency.
-- `scoring.yaml` — `nameRules` / `kindRules` / `namespaceRules` assigning raw
-  `securityRequirements` vectors to cloud-managed, shared-responsibility components
+- `assetValue` — optional cluster-wide fallback (`High`, `Medium`/`Moderate`, or
+  `Low`) used when no asset-archetype signal exists.
+- `securityRequirementsCeiling` — optional system-and-agency ceiling such as
+  `cr-m_ir-m_ar-l`. It caps each resolved archetype objective before PAIN is
+  recalculated. Omit it to preserve archetype scoring exactly; omission is not
+  a warning.
+- `scoring.yaml` — `nameRules` / `namespaceRules` assigning archetypes or
+  `assetValue` to the cloud-managed, shared-responsibility components
   (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot
   carry `vdr.fedramp.io/*` labels because their managed reconcilers revert manual
   changes.
@@ -46,26 +59,40 @@ The ConfigMap carries:
 > 0.28115159694107 / 0.56230319388214 / 0.933), so
 > the scoring calibration isn't altered by ad-hoc in-cluster edits.
 >
+> The compositional `reasonCodes` registry is also governed built-in policy. A
+> `reasonCodes` block in either the ConfigMap or `--scoring-config` is rejected;
+> change the canonical policy and rebuild the plugin instead.
+
 Workloads you control should instead carry the label directly:
 
 ```yaml
 metadata:
   labels:
-    vdr.fedramp.io/security-requirements: cr-h_ir-m_ar-l
+    vdr.fedramp.io/asset-archetype: regulated-data.authoritative-record.shared-critical-path
 ```
 
-The wire value is Kubernetes-label-safe. Reports display this example as
-`CR:H/IR:M/AR:L`.
+When the three independent consequences have not been attested, use the simpler
+asset-value fallback:
+
+```yaml
+metadata:
+  labels:
+    vdr.fedramp.io/asset-value: High # High/H, Medium/Moderate/M, or Low/L
+```
 
 ## Resolution precedence
 
 ```
-workload security-requirements label
-  → namespace/project security-requirements label
-  → securityRequirements nameRule   (ConfigMap scoring.yaml; first match wins)
-  → securityRequirements kindRule   (ConfigMap scoring.yaml; first match wins)
-  → securityRequirements namespaceRule (ConfigMap scoring.yaml; first match wins)
-  → built-in CR:H/IR:H/AR:H default
+workload asset-archetype label
+  → namespace asset-archetype label
+  → archetype nameRule   (ConfigMap scoring.yaml; first match wins)
+  → archetype namespaceRule (ConfigMap scoring.yaml; first match wins)
+  → workload asset-value label
+  → namespace/project asset-value label
+  → assetValue nameRule   (ConfigMap scoring.yaml; first match wins)
+  → assetValue namespaceRule (ConfigMap scoring.yaml; first match wins)
+  → configured assetValue default
+  → built-in "unclassified" default archetype (H/H/H)
 ```
 
 `class` and `multiAgency` follow the same most-specific-wins idea: workload label →
@@ -82,14 +109,16 @@ built-in defaults — a missing ConfigMap is visible, not silent.
 
 ## Customize
 
-Edit the `nameRules` / `kindRules` / `namespaceRules` to match the add-ons
-actually installed in your cluster (the lists here cover common managed
-components). Put specific rules before broad globs.
+Edit the `nameRules` / `namespaceRules` to match the add-ons actually installed in
+your cluster (the lists here cover the common managed components). Put specific
+rules before broad globs. The authoritative reason mappings, legacy names, and
+CR/IR/AR values are in
+[`policy/vdr-policy.yaml`](../../policy/vdr-policy.yaml).
 
-> **Note:** `cr-l_ir-h_ar-h` is for **metadata-only**
+> **Note:** `platform-foundation` (CR:L, IR:H, AR:H) is for **metadata-only**
 > foundation services the whole estate depends on — DNS, NTP, service discovery,
 > plain L4 internal load balancers. Its low confidentiality requirement assumes the
 > service sees only operational metadata (names, times, the call graph), not
 > payload. Anything that **terminates TLS or handles request payload** (an internal
 > LB doing TLS termination, a service-mesh sidecar that sees plaintext) should be
-> a vector with the appropriate confidentiality requirement instead.
+> `app-tier` or higher instead.

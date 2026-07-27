@@ -412,7 +412,13 @@ func vulnerabilityFor(finding model.Finding, assetRef string, exposure *model.Ex
 	if pain != nil {
 		add("vdr:pain", pain.Tier)
 		add("vdr:painWord", pain.Word)
-		add("vdr:securityRequirements", pain.SecurityRequirements)
+		add("vdr:archetype", pain.Archetype)
+		add("vdr:archetypeRequirements", pain.ArchetypeRequirements)
+		add("vdr:securityRequirementsCeiling", pain.SecurityRequirementsCeiling)
+		add("vdr:securityRequirementsCeilingSource", pain.SecurityRequirementsCeilingSource)
+		if pain.SecurityRequirementsCeiling != "" {
+			add("vdr:painRecalculated", strconv.FormatBool(pain.Recalculated))
+		}
 	}
 	add("vdr:cwes", strings.Join(finding.CWEs, ","))
 	if entrypoint := finding.ChainableEntrypoint; entrypoint != nil {

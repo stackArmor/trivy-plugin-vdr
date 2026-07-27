@@ -4,9 +4,9 @@
 # The plugin reads fedramp-vdr-trivy/vdr-fedramp from the cluster automatically
 # (no --scoring-config flag needed). It deep-merges the embedded scoring.yaml over its
 # built-in rubric. The built-in rubric already provides the governed compositional
-# raw CR/IR/AR security-requirements parser,
-# the algorithm, the EPSS LEV threshold (0.50), and the H/H/H cluster-default
-# security-requirements vector for new/unclassified resources — so this file only
+# reason registry and backwards-compatible legacy archetype catalog,
+# the algorithm, the EPSS LEV threshold (0.50), and the H/H/H "unclassified"
+# cluster-default archetype for new/unclassified resources — so this file only
 # carries cluster-wide Class/scope and the rules for EKS-managed,
 # shared-responsibility components that cannot carry vdr.fedramp.io/* labels.
 #
@@ -28,6 +28,8 @@ data:
   # --- cluster-wide scalars (override anything the embedded doc sets) ---
   class: "B"            # set to your FedRAMP Certification Class: A, B, C, or D
   multiAgency: "false"  # "true" if this cluster serves more than one agency
+  # Optional system-and-agency ceiling; omit to leave archetype scoring unchanged.
+  # securityRequirementsCeiling: cr-m_ir-m_ar-l
 
   # --- operator-declared internet-reachable classes (optional) ---
   # List Ingress/Gateway class names whose edge load balancer is provisioned
@@ -48,35 +50,35 @@ data:
     nameRules:
       # EKS Pod Identity / IRSA credential broker: privileged because it can
       # mint or forward workload credentials, not because the account is a secret.
-      - {namespace: kube-system, match: "eks-pod-identity-agent*", securityRequirements: cr-h_ir-h_ar-m}
+      - {namespace: kube-system, match: "eks-pod-identity-agent*", archetype: privileged-identity}
       # VPC CNI dataplane and kube-proxy.
-      - {namespace: kube-system, match: "aws-node*", securityRequirements: cr-m_ir-m_ar-h}
-      - {namespace: kube-system, match: kube-proxy, securityRequirements: cr-m_ir-m_ar-h}
+      - {namespace: kube-system, match: "aws-node*", archetype: orchestrator}
+      - {namespace: kube-system, match: kube-proxy, archetype: orchestrator}
       # Storage CSI drivers (EBS/EFS/FSx).
-      - {namespace: kube-system, match: "ebs-csi-*", securityRequirements: cr-m_ir-m_ar-h}
-      - {namespace: kube-system, match: "efs-csi-*", securityRequirements: cr-m_ir-m_ar-h}
-      - {namespace: kube-system, match: "fsx-csi-*", securityRequirements: cr-m_ir-m_ar-h}
+      - {namespace: kube-system, match: "ebs-csi-*", archetype: orchestrator}
+      - {namespace: kube-system, match: "efs-csi-*", archetype: orchestrator}
+      - {namespace: kube-system, match: "fsx-csi-*", archetype: orchestrator}
       # Node provisioning / autoscaling actuators.
-      - {namespace: kube-system, match: "cluster-autoscaler*", securityRequirements: cr-m_ir-m_ar-h}
-      - {namespace: kube-system, match: "karpenter*", securityRequirements: cr-m_ir-m_ar-h}
+      - {namespace: kube-system, match: "cluster-autoscaler*", archetype: orchestrator}
+      - {namespace: kube-system, match: "karpenter*", archetype: orchestrator}
       # Cluster DNS. platform-foundation is for METADATA-ONLY foundation services
       # (DNS/NTP/discovery/plain L4 LBs): CR:L (recon only), IR:H, AR:H. Anything
       # that terminates TLS or sees payload belongs in public-edge (internet-
       # facing) or app-tier (internal) instead.
-      - {namespace: kube-system, match: "coredns*", securityRequirements: cr-l_ir-h_ar-h}
+      - {namespace: kube-system, match: "coredns*", archetype: platform-foundation}
       # Ingress / load-balancer controller. It carries no traffic — it holds AWS
       # credentials that provision and reshape the public ALBs/NLBs, so the
       # control-plane lens applies: config-actuation. (The ALB itself terminates
       # TLS on AWS's side; an in-cluster terminating proxy such as nginx-ingress
       # would be public-edge, and a pure L4/SNI passthrough would be
       # passthrough-edge.)
-      - {namespace: kube-system, match: "aws-load-balancer-controller*", securityRequirements: cr-m_ir-h_ar-m}
+      - {namespace: kube-system, match: "aws-load-balancer-controller*", archetype: config-actuation}
 
     namespaceRules:
       # CloudWatch agent / Fluent Bit observability.
-      - {match: amazon-cloudwatch, securityRequirements: cr-l_ir-l_ar-l}
+      - {match: amazon-cloudwatch, archetype: internal-tooling}
       # Other AWS-managed add-on namespaces (guardduty agent, etc.).
-      - {match: "aws-*", securityRequirements: cr-l_ir-l_ar-l}
+      - {match: "aws-*", archetype: internal-tooling}
       # Everything else in kube-system (metrics-server, node-local-dns, device
       # plugins, etc.) is low-privilege node/observability infra.
-      - {match: kube-system, securityRequirements: cr-l_ir-l_ar-l}
+      - {match: kube-system, archetype: internal-tooling}

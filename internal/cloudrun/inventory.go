@@ -16,14 +16,6 @@ const googleBaseImageUpdateRuntime = "run.googleapis.com/linux-base-image-update
 
 var googleBaseImageUpdateSkipDirs = []string{"/cnb", "layers/sbom"}
 
-var gcpVDRLabelAliases = map[string]string{
-	"vdr_fedramp_io_security_requirements": "vdr.fedramp.io/security-requirements",
-	"vdr_fedramp_io_asset_archetype":       "vdr.fedramp.io/asset-archetype",
-	"vdr_fedramp_io_asset_value":           "vdr.fedramp.io/asset-value",
-	"vdr_fedramp_io_multi_agency":          "vdr.fedramp.io/multi-agency",
-	"vdr_fedramp_io_class":                 "vdr.fedramp.io/class",
-}
-
 func (c Collector) Collect(ctx context.Context, opts Options) (*model.Inventory, error) {
 	inventory, _, _, err := c.CollectResources(ctx, opts)
 	return inventory, err
@@ -49,7 +41,7 @@ func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.I
 		if err != nil {
 			builder.inventory.Warnings = append(builder.inventory.Warnings, fmt.Sprintf("cloudrun project labels for %s not read (%v); PAIN scoring uses built-in defaults unless resource labels are present", opts.Project, err))
 		} else if len(labels) > 0 {
-			builder.inventory.Namespaces = map[string]map[string]string{ProjectLabelScope(opts.Project): canonicalizeGCPVDRLabels(labels)}
+			builder.inventory.Namespaces = map[string]map[string]string{ProjectLabelScope(opts.Project): copyStringMap(labels)}
 		}
 	}
 	var allServices []Service
@@ -101,7 +93,7 @@ func (b *inventoryBuilder) addService(service Service) {
 	}
 	ref.CanonicalID = cloudRunBaseCanonicalID(ref)
 	ref.DisplayID = ref.CanonicalID
-	b.addResource(ref, canonicalizeGCPVDRLabels(service.Labels), service.Containers, skipDirsForRuntime(service.RuntimeClassName), service.ExecutionEnvironment)
+	b.addResource(ref, service.Labels, service.Containers, skipDirsForRuntime(service.RuntimeClassName), service.ExecutionEnvironment)
 }
 
 func (b *inventoryBuilder) addJob(job Job) {
@@ -116,30 +108,7 @@ func (b *inventoryBuilder) addJob(job Job) {
 	ref.UID = cloudRunUID(job.Project, job.Region, ref.Kind, job.Name)
 	ref.CanonicalID = cloudRunBaseCanonicalID(ref)
 	ref.DisplayID = ref.CanonicalID
-	b.addResource(ref, canonicalizeGCPVDRLabels(job.Labels), job.Containers, nil, job.ExecutionEnvironment)
-}
-
-// canonicalizeGCPVDRLabels converts provider-valid GCP label aliases to the
-// canonical VDR keys consumed by the shared scoring engine. Canonical labels,
-// when present (for example from the Cloud Run v1 Kubernetes-shaped API), win
-// over their aliases.
-func canonicalizeGCPVDRLabels(labels map[string]string) map[string]string {
-	normalized := copyStringMap(labels)
-	for alias, canonical := range gcpVDRLabelAliases {
-		value, ok := normalized[alias]
-		if !ok {
-			continue
-		}
-		delete(normalized, alias)
-		if _, exists := normalized[canonical]; exists {
-			continue
-		}
-		if canonical == "vdr.fedramp.io/asset-archetype" {
-			value = strings.ReplaceAll(value, "__", ".")
-		}
-		normalized[canonical] = value
-	}
-	return normalized
+	b.addResource(ref, job.Labels, job.Containers, nil, job.ExecutionEnvironment)
 }
 
 // cloudRunContainerSecurity reports the security posture Cloud Run enforces on

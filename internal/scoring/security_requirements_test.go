@@ -2,24 +2,26 @@ package scoring
 
 import "testing"
 
-func TestParseSecurityRequirements(t *testing.T) {
-	requirements, ok := ParseSecurityRequirements("cr-h_ir-m_ar-l")
-	if !ok {
-		t.Fatal("ParseSecurityRequirements rejected a valid vector")
-	}
-	if got := requirements.String(); got != "CR:H/IR:M/AR:L" {
-		t.Fatalf("normalized requirements = %q, want CR:H/IR:M/AR:L", got)
-	}
-	if got := requirements.labelValue(); got != "cr-h_ir-m_ar-l" {
-		t.Fatalf("wire value = %q, want cr-h_ir-m_ar-l", got)
+func TestParseSecurityRequirementsCeiling(t *testing.T) {
+	for _, value := range []string{"cr-h_ir-m_ar-l", "CR:H/IR:M/AR:L"} {
+		requirements, ok := ParseSecurityRequirements(value)
+		if !ok {
+			t.Fatalf("ParseSecurityRequirements(%q) rejected a valid vector", value)
+		}
+		if got := requirements.String(); got != "CR:H/IR:M/AR:L" {
+			t.Fatalf("normalized requirements = %q, want CR:H/IR:M/AR:L", got)
+		}
+		if got := requirements.WireValue(); got != "cr-h_ir-m_ar-l" {
+			t.Fatalf("wire value = %q, want cr-h_ir-m_ar-l", got)
+		}
 	}
 
 	for _, invalid := range []string{
 		"",
 		"cr-h_ir-m",
 		"cr-high_ir-m_ar-l",
-		"CR:H/IR:M/AR:L",
 		"cr-x_ir-m_ar-l",
+		"H/M/L",
 	} {
 		if _, ok := ParseSecurityRequirements(invalid); ok {
 			t.Errorf("ParseSecurityRequirements(%q) unexpectedly succeeded", invalid)
@@ -27,103 +29,111 @@ func TestParseSecurityRequirements(t *testing.T) {
 	}
 }
 
-func TestNativeSecurityRequirementsSchema(t *testing.T) {
-	cfg := Default()
-	err := cfg.ApplyClusterDefaults(map[string]string{
-		"class": "C",
-		"scoring.yaml": `
-labelKeys:
-  securityRequirements: vdr.fedramp.io/security-requirements
-nameRules:
-  - {namespace: app, match: api, securityRequirements: cr-m_ir-h_ar-l}
-`,
-	})
-	if err != nil {
-		t.Fatalf("ApplyClusterDefaults: %v", err)
+func TestCapRequirements(t *testing.T) {
+	got, recalculated := capRequirements(
+		SecurityRequirements{CR: "H", IR: "M", AR: "H"},
+		SecurityRequirements{CR: "M", IR: "H", AR: "L"},
+	)
+	if got.String() != "CR:M/IR:M/AR:L" {
+		t.Fatalf("capped requirements = %s, want CR:M/IR:M/AR:L", got)
+	}
+	if !recalculated {
+		t.Fatal("recalculated = false, want true")
 	}
 
-	fromLabel := cfg.Score(Input{
-		CVSSVector: vecCIAHigh,
-		Labels: map[string]string{
-			"vdr.fedramp.io/security-requirements": "cr-h_ir-l_ar-m",
-		},
-	})
-	if fromLabel.SecurityRequirements != "CR:H/IR:L/AR:M" || fromLabel.SecurityRequirementsSource != "label" {
-		t.Fatalf("label result = %+v", fromLabel)
-	}
-
-	fromRule := cfg.Score(Input{
-		CVSSVector:   vecCIAHigh,
-		Namespace:    "app",
-		WorkloadName: "api",
-	})
-	if fromRule.SecurityRequirements != "CR:M/IR:H/AR:L" || fromRule.SecurityRequirementsSource != "nameRule" {
-		t.Fatalf("rule result = %+v", fromRule)
+	got, recalculated = capRequirements(
+		SecurityRequirements{CR: "L", IR: "M", AR: "H"},
+		SecurityRequirements{CR: "H", IR: "H", AR: "H"},
+	)
+	if got.String() != "CR:L/IR:M/AR:H" || recalculated {
+		t.Fatalf("nonbinding ceiling result = %s recalculated=%t", got, recalculated)
 	}
 }
 
-func TestTransitionalGeneratedSchemaDoesNotNeedArchetypeCatalogLookup(t *testing.T) {
+func TestOptionalCeilingRecalculatesArchetypeScore(t *testing.T) {
 	cfg := Default()
-	err := cfg.ApplyClusterDefaults(map[string]string{
-		"scoring.yaml": `
-labelKeys:
-  archetype: vdr.fedramp.io/security-requirements
-nameRules:
-  - {namespace: app, match: api, archetype: cr-h_ir-m_ar-l}
-`,
-	})
-	if err != nil {
-		t.Fatalf("ApplyClusterDefaults: %v", err)
-	}
-
-	got := cfg.Score(Input{
-		CVSSVector:   vecCIAHigh,
-		Namespace:    "app",
-		WorkloadName: "api",
-	})
-	if got.SecurityRequirements != "CR:H/IR:M/AR:L" || got.SecurityRequirementsSource != "nameRule" {
-		t.Fatalf("transitional rule result = %+v", got)
-	}
-}
-
-func TestLegacyArchetypeModeTakesPrecedence(t *testing.T) {
-	cfg := Default()
-	// The new generated ConfigMap uses this transitional alias. Legacy mode must
-	// still read the canonical old label key when explicitly requested.
-	cfg.LabelKeys.Archetype = "vdr.fedramp.io/security-requirements"
 	input := Input{
-		CVSSVector: vecCIAHigh,
+		CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 		Labels: map[string]string{
-			"vdr.fedramp.io/security-requirements": "cr-l_ir-l_ar-l",
-			"vdr.fedramp.io/asset-archetype":       "data-sensitive",
+			"vdr.fedramp.io/asset-archetype": "data-sensitive",
 		},
 	}
 
-	raw := cfg.Score(input)
-	if raw.SecurityRequirements != "CR:L/IR:L/AR:L" || raw.Archetype != "cr-l_ir-l_ar-l" {
-		t.Fatalf("default raw-vector result = %+v", raw)
+	uncapped := cfg.Score(input)
+	if uncapped.Archetype != "data-sensitive" ||
+		uncapped.CR != "H" ||
+		uncapped.IR != "H" ||
+		uncapped.AR != "M" {
+		t.Fatalf("uncapped archetype result = %+v", uncapped)
+	}
+	if uncapped.SecurityRequirementsCeiling != "" ||
+		uncapped.SecurityRequirementsCeilingSource != "" ||
+		uncapped.ArchetypeRequirements != "" ||
+		uncapped.Recalculated {
+		t.Fatalf("absent ceiling must be silent: %+v", uncapped)
 	}
 
-	cfg.UseLegacyArchetypes(true)
-	if !cfg.LegacyArchetypesEnabled() {
-		t.Fatal("LegacyArchetypesEnabled = false after enabling it")
+	if err := cfg.ApplyClusterDefaults(map[string]string{
+		"securityRequirementsCeiling": "cr-m_ir-l_ar-h",
+	}); err != nil {
+		t.Fatalf("ApplyClusterDefaults: %v", err)
 	}
-	legacy := cfg.Score(input)
-	if legacy.SecurityRequirements != "CR:H/IR:H/AR:M" ||
-		legacy.Archetype != "data-sensitive" ||
-		legacy.SecurityRequirementsSource != "label" {
-		t.Fatalf("legacy result = %+v", legacy)
+	capped := cfg.Score(input)
+	if capped.Archetype != "data-sensitive" ||
+		capped.ArchetypeSource != "label" ||
+		capped.ArchetypeRequirements != "CR:H/IR:H/AR:M" ||
+		capped.SecurityRequirementsCeiling != "CR:M/IR:L/AR:H" ||
+		capped.SecurityRequirementsCeilingSource != "configMap" ||
+		!capped.Recalculated ||
+		capped.CR != "M" ||
+		capped.IR != "L" ||
+		capped.AR != "M" {
+		t.Fatalf("ConfigMap-capped archetype result = %+v", capped)
+	}
+
+	if err := cfg.SetRuntimeSecurityRequirementsCeiling("CR:H/IR:M/AR:L"); err != nil {
+		t.Fatalf("SetRuntimeSecurityRequirementsCeiling: %v", err)
+	}
+	runtime := cfg.Score(input)
+	if runtime.SecurityRequirementsCeiling != "CR:H/IR:M/AR:L" ||
+		runtime.SecurityRequirementsCeilingSource != "runtime" ||
+		!runtime.Recalculated ||
+		runtime.CR != "H" ||
+		runtime.IR != "M" ||
+		runtime.AR != "L" {
+		t.Fatalf("runtime-capped archetype result = %+v", runtime)
 	}
 }
 
-func TestLegacyArchetypeModeUsesLegacyDefault(t *testing.T) {
+func TestInvalidDeclaredCeilingIsRejected(t *testing.T) {
 	cfg := Default()
-	cfg.UseLegacyArchetypes(true)
+	if err := cfg.ApplyClusterDefaults(map[string]string{
+		"securityRequirementsCeiling": "high/moderate/low",
+	}); err == nil {
+		t.Fatal("ApplyClusterDefaults accepted an invalid ceiling")
+	}
+	if err := cfg.SetRuntimeSecurityRequirementsCeiling("not-a-vector"); err == nil {
+		t.Fatal("SetRuntimeSecurityRequirementsCeiling accepted an invalid ceiling")
+	}
+}
 
-	got := cfg.Score(Input{CVSSVector: vecCIAHigh})
-	if got.Archetype != "unclassified" ||
-		got.SecurityRequirements != "CR:H/IR:H/AR:H" ||
-		got.SecurityRequirementsSource != "default" {
-		t.Fatalf("legacy default result = %+v", got)
+func TestEmbeddedConfigMapCeilingIsNormalizedAndAttributed(t *testing.T) {
+	cfg := Default()
+	cfg.SecurityRequirementsCeiling = "cr-m_ir-l_ar-h"
+	cfg.ceilingOrigin = "scoringConfig"
+	if err := cfg.ApplyClusterDefaults(map[string]string{
+		"scoring.yaml": "securityRequirementsCeiling: CR:M/IR:L/AR:H\n",
+	}); err != nil {
+		t.Fatalf("ApplyClusterDefaults: %v", err)
+	}
+	if cfg.SecurityRequirementsCeiling != "cr-m_ir-l_ar-h" {
+		t.Fatalf("normalized ceiling = %q", cfg.SecurityRequirementsCeiling)
+	}
+	result := cfg.Score(Input{})
+	if result.SecurityRequirementsCeilingSource != "configMap" {
+		t.Fatalf(
+			"SecurityRequirementsCeilingSource = %q, want configMap",
+			result.SecurityRequirementsCeilingSource,
+		)
 	}
 }

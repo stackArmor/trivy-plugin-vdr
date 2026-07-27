@@ -3,7 +3,7 @@
 // given asset.
 //
 // PAIN = f(SEVERITY, SCOPE), where SEVERITY is the CVSS impact vector (C/I/A)
-// re-weighted by the asset's raw CR/IR/AR security-requirements vector,
+// re-weighted by the asset's CR/IR/AR requirements (driven by its archetype),
 // and SCOPE is whether the asset serves one agency or more than one.
 //
 // The remediation deadline is the FedRAMP VDR-TFR-PVR matrix entry selected by
@@ -15,7 +15,7 @@
 //
 // The built-in Default() rubric is self-contained; an optional YAML or JSON
 // config file may be layered on top (deep-merged) to add tenant-specific rules
-// (namespace/name security-requirements assignment for workloads that cannot carry labels)
+// (namespace/name archetype assignment for workloads that cannot carry labels)
 // or to tune legacy/custom catalog entries, the EPSS threshold, or default
 // Class. Compositional reason mappings remain governed by the embedded policy.
 package scoring
@@ -38,8 +38,6 @@ import (
 // High-centered maximum instead of CVSS v3.1's Medium-requirement MISS cap.
 const painNormalizationDivisor = 0.995904
 
-const legacyArchetypeLabelKey = "vdr.fedramp.io/asset-archetype"
-
 // Archetype maps an asset class to its CVSS environmental requirements.
 type Archetype struct {
 	Lens string `json:"lens" yaml:"lens"`
@@ -48,59 +46,54 @@ type Archetype struct {
 	AR   string `json:"ar" yaml:"ar"`
 }
 
-// NamespaceRule assigns security requirements to workloads in matching namespaces.
+// NamespaceRule assigns an archetype to all workloads in namespaces matching a
 // glob (e.g. "kube-system", "gke-managed-*"). Used for workloads that cannot
 // carry in-cluster labels (managed, shared-responsibility components).
 type NamespaceRule struct {
-	Match                string `json:"match" yaml:"match"`
-	SecurityRequirements string `json:"securityRequirements,omitempty" yaml:"securityRequirements,omitempty"`
-	Archetype            string `json:"archetype,omitempty" yaml:"archetype,omitempty"` // transitional schema alias
-	AssetValue           string `json:"assetValue,omitempty" yaml:"assetValue,omitempty"`
+	Match      string `json:"match" yaml:"match"`
+	Archetype  string `json:"archetype" yaml:"archetype"`
+	AssetValue string `json:"assetValue" yaml:"assetValue"`
 }
 
-// NameRule assigns security requirements to workloads whose name matches a glob, optionally
+// NameRule assigns an archetype to workloads whose name matches a glob, optionally
 // scoped to a namespace glob. Evaluated before namespace rules.
 type NameRule struct {
-	Namespace            string `json:"namespace" yaml:"namespace"`
-	Match                string `json:"match" yaml:"match"`
-	SecurityRequirements string `json:"securityRequirements,omitempty" yaml:"securityRequirements,omitempty"`
-	Archetype            string `json:"archetype,omitempty" yaml:"archetype,omitempty"` // transitional schema alias
-	AssetValue           string `json:"assetValue,omitempty" yaml:"assetValue,omitempty"`
+	Namespace  string `json:"namespace" yaml:"namespace"`
+	Match      string `json:"match" yaml:"match"`
+	Archetype  string `json:"archetype" yaml:"archetype"`
+	AssetValue string `json:"assetValue" yaml:"assetValue"`
 }
 
-// KindRule assigns security requirements to workloads whose kind matches a glob (e.g.
+// KindRule assigns an archetype to workloads whose kind matches a glob (e.g.
 // "Job", "Pod"), optionally scoped to namespace and name globs. Evaluated after
 // name rules and before namespace rules, so a specific name rule or label can
 // still override it. Typical use: standalone Jobs (Helm hooks, one-shot
 // migrations) that carry no labels and whose generated names defeat name globs.
 type KindRule struct {
-	Kind                 string `json:"kind" yaml:"kind"`
-	Namespace            string `json:"namespace" yaml:"namespace"`
-	Match                string `json:"match" yaml:"match"`
-	SecurityRequirements string `json:"securityRequirements,omitempty" yaml:"securityRequirements,omitempty"`
-	Archetype            string `json:"archetype,omitempty" yaml:"archetype,omitempty"` // transitional schema alias
-	AssetValue           string `json:"assetValue,omitempty" yaml:"assetValue,omitempty"`
+	Kind       string `json:"kind" yaml:"kind"`
+	Namespace  string `json:"namespace" yaml:"namespace"`
+	Match      string `json:"match" yaml:"match"`
+	Archetype  string `json:"archetype" yaml:"archetype"`
+	AssetValue string `json:"assetValue" yaml:"assetValue"`
 }
 
 // LabelKeys are the label keys read from a workload (or its namespace) to resolve
-// its security requirements, multi-agency scope, and Certification Class.
+// its archetype, multi-agency scope, and Certification Class.
 type LabelKeys struct {
-	SecurityRequirements string `json:"securityRequirements,omitempty" yaml:"securityRequirements,omitempty"`
-	Archetype            string `json:"archetype,omitempty" yaml:"archetype,omitempty"` // transitional schema alias
-	AssetValue           string `json:"assetValue,omitempty" yaml:"assetValue,omitempty"`
-	MultiAgency          string `json:"multiAgency" yaml:"multiAgency"`
-	Class                string `json:"class" yaml:"class"`
+	Archetype   string `json:"archetype" yaml:"archetype"`
+	AssetValue  string `json:"assetValue" yaml:"assetValue"`
+	MultiAgency string `json:"multiAgency" yaml:"multiAgency"`
+	Class       string `json:"class" yaml:"class"`
 }
 
 // Defaults hold the cluster-wide fallbacks applied when a workload (or its
 // namespace) carries no explicit signal. Class and MultiAgency here are the
 // cluster-wide defaults; main may populate them from a cluster ConfigMap.
 type Defaults struct {
-	MultiAgency          bool   `json:"multiAgency" yaml:"multiAgency"`
-	SecurityRequirements string `json:"securityRequirements,omitempty" yaml:"securityRequirements,omitempty"`
-	Archetype            string `json:"archetype,omitempty" yaml:"archetype,omitempty"` // transitional schema alias
-	AssetValue           string `json:"assetValue,omitempty" yaml:"assetValue,omitempty"`
-	Class                string `json:"class" yaml:"class"`
+	MultiAgency bool   `json:"multiAgency" yaml:"multiAgency"`
+	Archetype   string `json:"archetype" yaml:"archetype"`
+	AssetValue  string `json:"assetValue" yaml:"assetValue"`
+	Class       string `json:"class" yaml:"class"`
 }
 
 // WordThresholds are the (calibratable) cut points on the normalized
@@ -128,6 +121,10 @@ type Config struct {
 	// LEVEPSSThreshold is the EPSS score at or above which a finding is considered
 	// Likely Exploitable (LEV). FedRAMP leaves the framework to the provider.
 	LEVEPSSThreshold float64 `json:"levEpssThreshold" yaml:"levEpssThreshold"`
+	// SecurityRequirementsCeiling is an optional system-and-agency CR/IR/AR
+	// ceiling. It caps the resolved archetype requirements per objective before
+	// PAIN is calculated. Empty preserves archetype scoring exactly.
+	SecurityRequirementsCeiling string `json:"securityRequirementsCeiling,omitempty" yaml:"securityRequirementsCeiling,omitempty"`
 
 	// reasonCodes is loaded only from the embedded canonical policy. Keeping it
 	// unexported prevents scoring files and cluster ConfigMaps from redefining
@@ -141,19 +138,7 @@ type Config struct {
 	// them.
 	classOrigin       string
 	multiAgencyOrigin string
-	legacyArchetypes  bool
-}
-
-// UseLegacyArchetypes makes legacy asset-archetype and asset-value signals take
-// precedence over raw security-requirements signals. The default keeps raw
-// security requirements first while retaining legacy inputs as a migration
-// fallback.
-func (c *Config) UseLegacyArchetypes(enabled bool) {
-	c.legacyArchetypes = enabled
-}
-
-func (c *Config) LegacyArchetypesEnabled() bool {
-	return c.legacyArchetypes
+	ceilingOrigin     string
 }
 
 // Input describes one finding-on-asset to be scored.
@@ -187,16 +172,20 @@ type Result struct {
 	Severity        float64
 	Archetype       string
 	ArchetypeSource string
-	// SecurityRequirements is the normalized CR/IR/AR display vector, for
-	// example CR:H/IR:M/AR:L. SecurityRequirementsSource records the signal that
-	// supplied its raw label-safe value.
-	SecurityRequirements       string
-	SecurityRequirementsSource string
-	SeveritySource             string // technicalImpact | cvss | severity
-	CR                         string
-	IR                         string
-	AR                         string
-	MultiAgency                bool
+	// ArchetypeRequirements is the uncapped CR/IR/AR vector supplied by the
+	// resolved archetype. It is populated when a ceiling is declared.
+	ArchetypeRequirements string
+	// SecurityRequirementsCeiling is the normalized optional ceiling considered
+	// during PAIN calculation. Recalculated is true only when it lowered at
+	// least one archetype requirement.
+	SecurityRequirementsCeiling       string
+	SecurityRequirementsCeilingSource string
+	Recalculated                      bool
+	SeveritySource                    string // technicalImpact | cvss | severity
+	CR                                string
+	IR                                string
+	AR                                string
+	MultiAgency                       bool
 	// MultiAgencySource records which signal set MultiAgency:
 	// label | namespaceLabel | multiAgencyNamespaces | configMap | scoringConfig
 	// | builtin | failsafe.
@@ -267,17 +256,15 @@ func Default() *Config {
 		Archetypes:  policy.Archetypes,
 		reasonCodes: policy.ReasonCodes,
 		LabelKeys: LabelKeys{
-			SecurityRequirements: "vdr.fedramp.io/security-requirements",
-			Archetype:            legacyArchetypeLabelKey,
-			AssetValue:           "vdr.fedramp.io/asset-value",
-			MultiAgency:          "vdr.fedramp.io/multi-agency",
-			Class:                "vdr.fedramp.io/class",
+			Archetype:   "vdr.fedramp.io/asset-archetype",
+			AssetValue:  "vdr.fedramp.io/asset-value",
+			MultiAgency: "vdr.fedramp.io/multi-agency",
+			Class:       "vdr.fedramp.io/class",
 		},
 		Defaults: Defaults{
-			MultiAgency:          false,
-			SecurityRequirements: "cr-h_ir-h_ar-h",
-			Archetype:            "unclassified",
-			Class:                "B",
+			MultiAgency: false,
+			Archetype:   "unclassified",
+			Class:       "B",
 		},
 		WordThresholds:   defaultWordThresholds,
 		LEVEPSSThreshold: 0.50,
@@ -299,6 +286,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("scoring config %q: %w", path, err)
 	}
 	pre := cfg.Defaults
+	preCeiling := cfg.SecurityRequirementsCeiling
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse scoring config %q: %w", path, err)
 	}
@@ -307,6 +295,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Defaults.MultiAgency != pre.MultiAgency {
 		cfg.multiAgencyOrigin = "scoringConfig"
+	}
+	if cfg.SecurityRequirementsCeiling != preCeiling {
+		cfg.ceilingOrigin = "scoringConfig"
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("scoring config %q: %w", path, err)
@@ -319,8 +310,9 @@ func Load(path string) (*Config, error) {
 // "scoring.yaml"/"scoring" key (archetypes, rules, defaults) and is deep-merged
 // exactly like a --scoring-config file; the scalar keys "class" and
 // "multiAgency"/"multi-agency" are convenience overrides that win over anything
-// the embedded document set. ConfigMap values take precedence over the config
-// file's defaults.
+// the embedded document set. The optional securityRequirementsCeiling scalar
+// behaves the same way. ConfigMap values take precedence over the config file's
+// defaults.
 func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	if len(data) == 0 {
 		return nil
@@ -331,6 +323,8 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	// may set them. Preserve whatever is already in effect across the merge.
 	savedThresholds := c.WordThresholds
 	pre := c.Defaults
+	preCeiling := c.SecurityRequirementsCeiling
+	embeddedCeilingPresent := false
 	for _, key := range []string{"scoring.yaml", "scoring", "config.yaml", "config"} {
 		doc, ok := data[key]
 		if !ok || strings.TrimSpace(doc) == "" {
@@ -342,6 +336,13 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 		if err := yaml.Unmarshal([]byte(doc), c); err != nil {
 			return fmt.Errorf("parse cluster scoring config (%s): %w", key, err)
 		}
+		var declared struct {
+			SecurityRequirementsCeiling *string `yaml:"securityRequirementsCeiling"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &declared); err != nil {
+			return fmt.Errorf("parse cluster scoring config (%s): %w", key, err)
+		}
+		embeddedCeilingPresent = declared.SecurityRequirementsCeiling != nil
 		break
 	}
 	c.WordThresholds = savedThresholds
@@ -350,6 +351,9 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	}
 	if c.Defaults.MultiAgency != pre.MultiAgency {
 		c.multiAgencyOrigin = "configMap"
+	}
+	if c.SecurityRequirementsCeiling != preCeiling || embeddedCeilingPresent {
+		c.ceilingOrigin = "configMap"
 	}
 	if v := normalizeClass(data["class"]); v != "" {
 		c.Defaults.Class = v
@@ -370,7 +374,38 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 		c.Defaults.MultiAgency = b
 		c.multiAgencyOrigin = "configMap"
 	}
+	ceiling, ceilingPresent := data["securityRequirementsCeiling"]
+	if !ceilingPresent {
+		ceiling, ceilingPresent = data["security-requirements-ceiling"]
+	}
+	if ceilingPresent && strings.TrimSpace(ceiling) != "" {
+		parsed, ok := ParseSecurityRequirements(ceiling)
+		if !ok {
+			return fmt.Errorf(
+				"securityRequirementsCeiling %q must use cr-[l|m|h]_ir-[l|m|h]_ar-[l|m|h] or CR:L/IR:M/AR:H form",
+				ceiling,
+			)
+		}
+		c.SecurityRequirementsCeiling = parsed.WireValue()
+		c.ceilingOrigin = "configMap"
+	}
 	return c.validate()
+}
+
+// SetRuntimeSecurityRequirementsCeiling applies the explicit invocation-level
+// ceiling. Call it after loading scoring configuration and cluster defaults so
+// the runtime value has highest precedence.
+func (c *Config) SetRuntimeSecurityRequirementsCeiling(value string) error {
+	parsed, ok := ParseSecurityRequirements(value)
+	if !ok {
+		return fmt.Errorf(
+			"security requirements ceiling %q must use cr-[l|m|h]_ir-[l|m|h]_ar-[l|m|h] or CR:L/IR:M/AR:H form",
+			value,
+		)
+	}
+	c.SecurityRequirementsCeiling = parsed.WireValue()
+	c.ceilingOrigin = "runtime"
+	return nil
 }
 
 func (c *Config) validate() error {
@@ -381,13 +416,8 @@ func (c *Config) validate() error {
 		return err
 	}
 	for i, r := range c.NamespaceRules {
-		if r.SecurityRequirements == "" && r.Archetype == "" && r.AssetValue == "" {
-			return fmt.Errorf("namespaceRules[%d] must set securityRequirements", i)
-		}
-		if r.SecurityRequirements != "" {
-			if _, ok := ParseSecurityRequirements(r.SecurityRequirements); !ok {
-				return fmt.Errorf("namespaceRules[%d] has invalid securityRequirements %q", i, r.SecurityRequirements)
-			}
+		if r.Archetype == "" && r.AssetValue == "" {
+			return fmt.Errorf("namespaceRules[%d] must set archetype or assetValue", i)
 		}
 		if r.Archetype != "" {
 			if _, ok := c.lookupArchetype(r.Archetype); !ok {
@@ -399,13 +429,8 @@ func (c *Config) validate() error {
 		}
 	}
 	for i, r := range c.NameRules {
-		if r.SecurityRequirements == "" && r.Archetype == "" && r.AssetValue == "" {
-			return fmt.Errorf("nameRules[%d] must set securityRequirements", i)
-		}
-		if r.SecurityRequirements != "" {
-			if _, ok := ParseSecurityRequirements(r.SecurityRequirements); !ok {
-				return fmt.Errorf("nameRules[%d] has invalid securityRequirements %q", i, r.SecurityRequirements)
-			}
+		if r.Archetype == "" && r.AssetValue == "" {
+			return fmt.Errorf("nameRules[%d] must set archetype or assetValue", i)
 		}
 		if r.Archetype != "" {
 			if _, ok := c.lookupArchetype(r.Archetype); !ok {
@@ -420,13 +445,8 @@ func (c *Config) validate() error {
 		if r.Kind == "" {
 			return fmt.Errorf("kindRules[%d] must set kind", i)
 		}
-		if r.SecurityRequirements == "" && r.Archetype == "" && r.AssetValue == "" {
-			return fmt.Errorf("kindRules[%d] must set securityRequirements", i)
-		}
-		if r.SecurityRequirements != "" {
-			if _, ok := ParseSecurityRequirements(r.SecurityRequirements); !ok {
-				return fmt.Errorf("kindRules[%d] has invalid securityRequirements %q", i, r.SecurityRequirements)
-			}
+		if r.Archetype == "" && r.AssetValue == "" {
+			return fmt.Errorf("kindRules[%d] must set archetype or assetValue", i)
 		}
 		if r.Archetype != "" {
 			if _, ok := c.lookupArchetype(r.Archetype); !ok {
@@ -443,18 +463,20 @@ func (c *Config) validate() error {
 	if c.Defaults.Class != "" && normalizeClass(c.Defaults.Class) == "" {
 		return fmt.Errorf("defaults.class %q must be one of A, B, C, D", c.Defaults.Class)
 	}
-	if c.Defaults.SecurityRequirements != "" {
-		if _, ok := ParseSecurityRequirements(c.Defaults.SecurityRequirements); !ok {
-			return fmt.Errorf(
-				"defaults.securityRequirements %q must match cr-[l|m|h]_ir-[l|m|h]_ar-[l|m|h]",
-				c.Defaults.SecurityRequirements,
-			)
-		}
-	}
 	if c.Defaults.Archetype != "" {
 		if _, ok := c.lookupArchetype(c.Defaults.Archetype); !ok {
 			return fmt.Errorf("defaults.archetype %q is not a known archetype", c.Defaults.Archetype)
 		}
+	}
+	if c.SecurityRequirementsCeiling != "" {
+		parsed, ok := ParseSecurityRequirements(c.SecurityRequirementsCeiling)
+		if !ok {
+			return fmt.Errorf(
+				"securityRequirementsCeiling %q must use cr-[l|m|h]_ir-[l|m|h]_ar-[l|m|h] or CR:L/IR:M/AR:H form",
+				c.SecurityRequirementsCeiling,
+			)
+		}
+		c.SecurityRequirementsCeiling = parsed.WireValue()
 	}
 	if t := c.WordThresholds; t != (WordThresholds{}) {
 		if !(t.Narrow > 0 && t.Narrow < t.Disruptive && t.Disruptive < t.Debilitating && t.Debilitating <= 1) {
@@ -473,13 +495,6 @@ func (c *Config) Score(in Input) Result {
 	if found {
 		if assetValue != "" {
 			a = archetypeForAssetValue(assetValue)
-		} else if requirements, ok := ParseSecurityRequirements(arch); ok {
-			a = Archetype{
-				Lens: "requirements",
-				CR:   requirements.CR,
-				IR:   requirements.IR,
-				AR:   requirements.AR,
-			}
 		} else {
 			a, _ = c.lookupArchetype(arch)
 		}
@@ -492,8 +507,22 @@ func (c *Config) Score(in Input) Result {
 		forceMulti = true
 	}
 
+	archetypeRequirements := requirementsFromArchetype(a)
+	effectiveRequirements := archetypeRequirements
+	var archetypeRequirementsDisplay, ceilingDisplay, ceilingSource string
+	var recalculated bool
+	if ceiling, ok := ParseSecurityRequirements(c.SecurityRequirementsCeiling); ok {
+		effectiveRequirements, recalculated = capRequirements(archetypeRequirements, ceiling)
+		archetypeRequirementsDisplay = archetypeRequirements.String()
+		ceilingDisplay = ceiling.String()
+		ceilingSource = c.ceilingOrigin
+		if ceilingSource == "" {
+			ceilingSource = "scoringConfig"
+		}
+	}
+
 	cImp, iImp, aImp, sevSource := impact(in.TechnicalImpact, in.CVSSVector, in.Severity)
-	cr, ir, ar := weight(a.CR), weight(a.IR), weight(a.AR)
+	cr, ir, ar := weight(effectiveRequirements.CR), weight(effectiveRequirements.IR), weight(effectiveRequirements.AR)
 	// U is the pre-cap complement-product aggregate from the CVSS v3.1 MISS
 	// expression. PAIN retains U rather than applying the 0.915 CVSS MISS cap,
 	// then normalizes against the all-High-impact/all-High-requirement maximum.
@@ -516,158 +545,69 @@ func (c *Config) Score(in Input) Result {
 	days, label := remediationDeadline(class, tier, column)
 
 	return Result{
-		Tier:                       tier,
-		Word:                       word,
-		Severity:                   s,
-		Archetype:                  arch,
-		ArchetypeSource:            source,
-		SecurityRequirements:       (SecurityRequirements{CR: normalizeReq(a.CR), IR: normalizeReq(a.IR), AR: normalizeReq(a.AR)}).String(),
-		SecurityRequirementsSource: source,
-		SeveritySource:             sevSource,
-		CR:                         normalizeReq(a.CR),
-		IR:                         normalizeReq(a.IR),
-		AR:                         normalizeReq(a.AR),
-		MultiAgency:                effectiveMulti,
-		MultiAgencySource:          multiSource,
-		Class:                      class,
-		ClassSource:                classSource,
-		LEV:                        lev,
-		IRV:                        irv,
-		Column:                     column,
-		DeadlineDays:               days,
-		RemediationLabel:           label,
+		Tier:                              tier,
+		Word:                              word,
+		Severity:                          s,
+		Archetype:                         arch,
+		ArchetypeSource:                   source,
+		ArchetypeRequirements:             archetypeRequirementsDisplay,
+		SecurityRequirementsCeiling:       ceilingDisplay,
+		SecurityRequirementsCeilingSource: ceilingSource,
+		Recalculated:                      recalculated,
+		SeveritySource:                    sevSource,
+		CR:                                effectiveRequirements.CR,
+		IR:                                effectiveRequirements.IR,
+		AR:                                effectiveRequirements.AR,
+		MultiAgency:                       effectiveMulti,
+		MultiAgencySource:                 multiSource,
+		Class:                             class,
+		ClassSource:                       classSource,
+		LEV:                               lev,
+		IRV:                               irv,
+		Column:                            column,
+		DeadlineDays:                      days,
+		RemediationLabel:                  label,
 	}
 }
 
-// resolveClassification uses raw security requirements by default. Legacy mode
-// reverses the precedence so asset-archetype and asset-value signals win.
+// resolveClassification prefers the richer asset-archetype path, then falls back
+// to asset-value (H/M/L mapped uniformly across CR/IR/AR), then the default
+// archetype/fail-safe path. The returned bool is false only for the fail-safe
+// path (no usable signal).
 func (c *Config) resolveClassification(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, string, bool) {
-	if c.legacyArchetypes {
-		if arch, source, found := c.resolveArchetypeSignal(namespace, name, kind, labels, nsLabels); found || source == "label-unknown" {
-			return arch, source, "", found
-		}
-		if value, source, found := c.resolveAssetValueSignal(namespace, name, kind, labels, nsLabels); found || source == "assetValueLabelUnknown" {
-			return "asset-value-" + strings.ToLower(value), source, value, found
-		}
+	if arch, source, found := c.resolveArchetypeSignal(namespace, name, kind, labels, nsLabels); found || source == "label-unknown" {
+		return arch, source, "", found
 	}
-	if requirements, source, found := c.resolveSecurityRequirementsSignal(namespace, name, kind, labels, nsLabels); found || source == "label-unknown" {
-		return requirements, source, "", found
+	if value, source, found := c.resolveAssetValueSignal(namespace, name, kind, labels, nsLabels); found || source == "assetValueLabelUnknown" {
+		return "asset-value-" + strings.ToLower(value), source, value, found
 	}
-	if !c.legacyArchetypes {
-		if arch, source, found := c.resolveArchetypeSignal(namespace, name, kind, labels, nsLabels); found || source == "label-unknown" {
-			return arch, source, "", found
-		}
-		if value, source, found := c.resolveAssetValueSignal(namespace, name, kind, labels, nsLabels); found || source == "assetValueLabelUnknown" {
-			return "asset-value-" + strings.ToLower(value), source, value, found
-		}
-	}
-	if c.legacyArchetypes {
-		if c.Defaults.AssetValue != "" {
-			if value := normalizeAssetValue(c.Defaults.AssetValue); value != "" {
-				return "asset-value-" + strings.ToLower(value), "assetValueDefault", value, true
-			}
-		}
-		if c.Defaults.Archetype != "" {
-			if _, known := c.lookupArchetype(c.Defaults.Archetype); known {
-				return c.Defaults.Archetype, "default", "", true
-			}
-		}
-	}
-	if !c.legacyArchetypes && c.Defaults.AssetValue != "" {
+	if c.Defaults.AssetValue != "" {
 		if value := normalizeAssetValue(c.Defaults.AssetValue); value != "" {
 			return "asset-value-" + strings.ToLower(value), "assetValueDefault", value, true
 		}
 	}
-	if c.Defaults.SecurityRequirements != "" {
-		if _, ok := ParseSecurityRequirements(c.Defaults.SecurityRequirements); ok {
-			return c.Defaults.SecurityRequirements, "default", "", true
-		}
-	}
-	if !c.legacyArchetypes {
-		if c.Defaults.Archetype != "" {
-			if _, known := c.lookupArchetype(c.Defaults.Archetype); known {
-				return c.Defaults.Archetype, "default", "", true
-			}
+	if c.Defaults.Archetype != "" {
+		if _, known := c.lookupArchetype(c.Defaults.Archetype); known {
+			return c.Defaults.Archetype, "default", "", true
 		}
 	}
 	return "", "failsafe", "", false
 }
 
-func (c *Config) resolveSecurityRequirementsSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
-	if key := c.LabelKeys.SecurityRequirements; key != "" {
-		if v, ok := labels[key]; ok {
-			v = strings.TrimSpace(v)
-			if _, valid := ParseSecurityRequirements(v); valid {
-				return v, "label", true
-			}
-			return "", "label-unknown", false
-		}
-		if v, ok := nsLabels[key]; ok {
-			v = strings.TrimSpace(v)
-			if _, valid := ParseSecurityRequirements(v); valid {
-				return v, "namespaceLabel", true
-			}
-			return "", "label-unknown", false
-		}
-	}
-	for _, r := range c.NameRules {
-		if r.SecurityRequirements == "" {
-			continue
-		}
-		if r.Namespace != "" {
-			if ok, _ := path.Match(r.Namespace, namespace); !ok {
-				continue
-			}
-		}
-		if ok, _ := path.Match(r.Match, name); ok {
-			return r.SecurityRequirements, "nameRule", true
-		}
-	}
-	for _, r := range c.KindRules {
-		if r.SecurityRequirements == "" || !kindRuleMatches(r, namespace, name, kind) {
-			continue
-		}
-		return r.SecurityRequirements, "kindRule", true
-	}
-	for _, r := range c.NamespaceRules {
-		if r.SecurityRequirements == "" {
-			continue
-		}
-		if ok, _ := path.Match(r.Match, namespace); ok {
-			return r.SecurityRequirements, "namespaceRule", true
-		}
-	}
-	return "", "", false
-}
-
 func (c *Config) resolveArchetypeSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
-	labelKeys := []string{c.LabelKeys.Archetype}
-	if c.legacyArchetypes && c.LabelKeys.Archetype != legacyArchetypeLabelKey {
-		labelKeys = append([]string{legacyArchetypeLabelKey}, labelKeys...)
+	if v, ok := labels[c.LabelKeys.Archetype]; ok {
+		v = strings.TrimSpace(v)
+		if _, known := c.lookupArchetype(v); known {
+			return v, "label", true
+		}
+		return "", "label-unknown", false
 	}
-	for _, key := range labelKeys {
-		if key == "" {
-			continue
+	if v, ok := nsLabels[c.LabelKeys.Archetype]; ok {
+		v = strings.TrimSpace(v)
+		if _, known := c.lookupArchetype(v); known {
+			return v, "namespaceLabel", true
 		}
-		if v, ok := labels[key]; ok {
-			v = strings.TrimSpace(v)
-			if _, known := c.lookupArchetype(v); known {
-				return v, "label", true
-			}
-			return "", "label-unknown", false
-		}
-	}
-	for _, key := range labelKeys {
-		if key == "" {
-			continue
-		}
-		if v, ok := nsLabels[key]; ok {
-			v = strings.TrimSpace(v)
-			if _, known := c.lookupArchetype(v); known {
-				return v, "namespaceLabel", true
-			}
-			return "", "label-unknown", false
-		}
+		return "", "label-unknown", false
 	}
 	for _, r := range c.NameRules {
 		if r.Namespace != "" {

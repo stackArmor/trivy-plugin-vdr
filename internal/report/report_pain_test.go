@@ -69,6 +69,51 @@ func TestBuildAssignsPainFromLabel(t *testing.T) {
 	}
 }
 
+func TestBuildReportsOptionalSecurityRequirementsCeiling(t *testing.T) {
+	inv, ref := labeledInventory("apps", "records", "data-sensitive")
+	finding := painFinding("CVE-2026-1001", ref)
+	sc := scoring.Default()
+	if err := sc.SetRuntimeSecurityRequirementsCeiling("cr-m_ir-l_ar-h"); err != nil {
+		t.Fatalf("SetRuntimeSecurityRequirementsCeiling: %v", err)
+	}
+
+	got := Build(inv, []model.Finding{finding}, nil, Options{
+		GeneratedAt: fixedTime(),
+		View:        ViewFindings,
+		Scoring:     sc,
+	})
+	pain := got.Findings[0].Pain
+	if pain == nil {
+		t.Fatal("Pain = nil")
+	}
+	if pain.Archetype != "data-sensitive" ||
+		pain.ArchetypeRequirements != "CR:H/IR:H/AR:M" ||
+		pain.SecurityRequirementsCeiling != "CR:M/IR:L/AR:H" ||
+		pain.SecurityRequirementsCeilingSource != "runtime" ||
+		!pain.Recalculated ||
+		pain.CR != "M" ||
+		pain.IR != "L" ||
+		pain.AR != "M" {
+		t.Fatalf("ceiling-aware PAIN = %+v", pain)
+	}
+
+	var output bytes.Buffer
+	if err := RenderJSON(&output, got); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+	for _, want := range []string{
+		`"archetype": "data-sensitive"`,
+		`"archetypeRequirements": "CR:H/IR:H/AR:M"`,
+		`"securityRequirementsCeiling": "CR:M/IR:L/AR:H"`,
+		`"securityRequirementsCeilingSource": "runtime"`,
+		`"recalculated": true`,
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("JSON output missing %s:\n%s", want, output.String())
+		}
+	}
+}
+
 func TestBuildPainWorstAcrossAffected(t *testing.T) {
 	// One finding affects a privileged-identity asset (=> N4) and a dev-test asset (=> N3);
 	// the finding-level PAIN must be the worst (N4).

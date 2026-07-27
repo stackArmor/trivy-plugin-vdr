@@ -6,21 +6,27 @@ import (
 	"strings"
 )
 
-var securityRequirementsPattern = regexp.MustCompile(`(?i)^cr-([lmh])_ir-([lmh])_ar-([lmh])$`)
+var (
+	securityRequirementsWirePattern    = regexp.MustCompile(`(?i)^cr-([lmh])_ir-([lmh])_ar-([lmh])$`)
+	securityRequirementsDisplayPattern = regexp.MustCompile(`(?i)^cr:([lmh])/ir:([lmh])/ar:([lmh])$`)
+)
 
-// SecurityRequirements is the raw CR/IR/AR objective vector used to weight a
-// vulnerability's confidentiality, integrity, and availability impacts.
+// SecurityRequirements is a CR/IR/AR objective vector used as an optional
+// system-and-agency ceiling over an asset archetype's requirements.
 type SecurityRequirements struct {
 	CR string
 	IR string
 	AR string
 }
 
-// ParseSecurityRequirements accepts the Kubernetes-label-safe wire form
-// cr-h_ir-m_ar-l. The returned display value is always normalized to
-// CR:H/IR:M/AR:L.
+// ParseSecurityRequirements accepts either the transport-safe wire form
+// cr-h_ir-m_ar-l or the normalized display form CR:H/IR:M/AR:L.
 func ParseSecurityRequirements(value string) (SecurityRequirements, bool) {
-	matches := securityRequirementsPattern.FindStringSubmatch(strings.TrimSpace(value))
+	value = strings.TrimSpace(value)
+	matches := securityRequirementsWirePattern.FindStringSubmatch(value)
+	if len(matches) != 4 {
+		matches = securityRequirementsDisplayPattern.FindStringSubmatch(value)
+	}
 	if len(matches) != 4 {
 		return SecurityRequirements{}, false
 	}
@@ -35,11 +41,50 @@ func (r SecurityRequirements) String() string {
 	return fmt.Sprintf("CR:%s/IR:%s/AR:%s", r.CR, r.IR, r.AR)
 }
 
-func (r SecurityRequirements) labelValue() string {
+// WireValue returns the transport-safe representation used by ConfigMaps and
+// the --security-requirements-ceiling runtime flag.
+func (r SecurityRequirements) WireValue() string {
 	return fmt.Sprintf(
 		"cr-%s_ir-%s_ar-%s",
 		strings.ToLower(r.CR),
 		strings.ToLower(r.IR),
 		strings.ToLower(r.AR),
 	)
+}
+
+func requirementsFromArchetype(a Archetype) SecurityRequirements {
+	return SecurityRequirements{
+		CR: normalizeReq(a.CR),
+		IR: normalizeReq(a.IR),
+		AR: normalizeReq(a.AR),
+	}
+}
+
+func capRequirements(requirements, ceiling SecurityRequirements) (SecurityRequirements, bool) {
+	capped := SecurityRequirements{
+		CR: lowerRequirement(requirements.CR, ceiling.CR),
+		IR: lowerRequirement(requirements.IR, ceiling.IR),
+		AR: lowerRequirement(requirements.AR, ceiling.AR),
+	}
+	return capped, capped != requirements
+}
+
+func lowerRequirement(value, ceiling string) string {
+	if requirementRank(value) <= requirementRank(ceiling) {
+		return normalizeReq(value)
+	}
+	return normalizeReq(ceiling)
+}
+
+func requirementRank(value string) int {
+	switch normalizeReq(value) {
+	case "L":
+		return 1
+	case "M":
+		return 2
+	case "H":
+		return 3
+	default:
+		return 3
+	}
 }
