@@ -102,14 +102,6 @@ func (c reasonCodeCatalog) archetype(trace string) (Archetype, bool) {
 // names from the explicit archetype catalog. Any dotted value is reserved for
 // the compositional grammar and must contain three registered reasons.
 func (c *Config) lookupArchetype(name string) (Archetype, bool) {
-	if requirements, ok := ParseSecurityRequirements(name); ok {
-		return Archetype{
-			Lens: "requirements",
-			CR:   requirements.CR,
-			IR:   requirements.IR,
-			AR:   requirements.AR,
-		}, true
-	}
 	if strings.Contains(name, ".") {
 		return c.reasonCodes.archetype(name)
 	}

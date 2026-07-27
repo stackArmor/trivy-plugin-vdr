@@ -49,8 +49,8 @@ func TestAWSClientInventoryListsAndDescribesActiveTaskDefinitions(t *testing.T) 
 					}},
 				},
 				Tags: []types.Tag{{
-					Key:   stringPtr("vdr.fedramp.io/security-requirements"),
-					Value: stringPtr("cr-h_ir-m_ar-l"),
+					Key:   stringPtr("vdr.fedramp.io/asset-value"),
+					Value: stringPtr("High"),
 				}},
 			},
 			"arn:aws:ecs:us-east-1:123:task-definition/worker:2": {
@@ -87,7 +87,7 @@ func TestAWSClientInventoryListsAndDescribesActiveTaskDefinitions(t *testing.T) 
 		Family:                  "api",
 		Revision:                7,
 		Status:                  "ACTIVE",
-		Tags:                    map[string]string{"vdr.fedramp.io/security-requirements": "cr-h_ir-m_ar-l"},
+		Tags:                    map[string]string{"vdr.fedramp.io/asset-value": "High"},
 		NetworkMode:             "awsvpc",
 		ExecutionRoleArn:        "arn:aws:iam::123:role/exec",
 		TaskRoleArn:             "arn:aws:iam::123:role/task",

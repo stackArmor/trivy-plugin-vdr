@@ -146,7 +146,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset's CR/IR/AR security requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50, active exploitation, or the FedRAMP unauthenticated-automation floor (internet-reachable plus AV:N/AC:L/PR:N/UI:N), and IRV = internet-reachable. A high-confidence chainable-entrypoint badge requires an active finding on an internet-accessible asset plus a high-confidence CVE execution classification; exposed possible candidates remain visible as possible. The flag is informational and does not alter IRV or downstream findings. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
+    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the asset archetype's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50, active exploitation, or the FedRAMP unauthenticated-automation floor (internet-reachable plus AV:N/AC:L/PR:N/UI:N), and IRV = internet-reachable. A high-confidence chainable-entrypoint badge requires an active finding on an internet-accessible asset plus a high-confidence CVE execution classification; exposed possible candidates remain visible as possible. The flag is informational and does not alter IRV or downstream findings. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
     {{ if .Report.SuppressedFindings }}
     <table class="suppressed-table" id="suppressed-findings">
       <thead>
@@ -299,8 +299,8 @@
     function painTooltip(pain) {
       if (!pain) return "";
       const sourceLabel = {
-        label: "security-requirements label",
-        namespaceLabel: "namespace security-requirements label",
+        label: "asset-archetype label",
+        namespaceLabel: "namespace asset-archetype label",
         nameRule: "name rule (config)",
         namespaceRule: "namespace rule (config)",
         assetValueLabel: "asset-value label",
@@ -308,11 +308,11 @@
         assetValueNameRule: "asset-value name rule (config)",
         assetValueNamespaceRule: "asset-value namespace rule (config)",
         assetValueDefault: "asset-value default (config)",
-        default: "cluster default security requirements (config)",
+        default: "cluster default archetype (config)",
         failsafe: "fail-safe (unclassified — treated as High/High/High, multi-agency)",
-        "label-unknown": "fail-safe (label has an invalid security-requirements vector)",
+        "label-unknown": "fail-safe (label names an unknown archetype)",
         assetValueLabelUnknown: "fail-safe (label names an unknown asset value)"
-      }[pain.securityRequirementsSource] || pain.securityRequirementsSource;
+      }[pain.archetypeSource] || pain.archetypeSource;
       let sevSource = "";
       if (pain.severitySource) {
         const base = pain.severitySource.indexOf("severity") === 0
@@ -322,9 +322,22 @@
       }
       const lines = [
         "PAIN " + pain.tier + " — " + pain.word,
-        "Security requirements: " + pain.securityRequirements + " (from " + sourceLabel + ")",
-        "Agency scope: " + (pain.multiAgency ? "more than one (multi-agency)" : "single agency")
+        "Archetype: " + pain.archetype + " (from " + sourceLabel + ")",
       ];
+      if (pain.securityRequirementsCeiling) {
+        const ceilingSource = {
+          runtime: "runtime flag",
+          configMap: "ConfigMap",
+          scoringConfig: "scoring config"
+        }[pain.securityRequirementsCeilingSource] || pain.securityRequirementsCeilingSource;
+        lines.push("Archetype requirements: " + pain.archetypeRequirements);
+        lines.push("Security requirements ceiling: " + pain.securityRequirementsCeiling + " (from " + ceilingSource + ")");
+        lines.push("Effective CR/IR/AR: " + pain.cr + "/" + pain.ir + "/" + pain.ar);
+        lines.push("PAIN recalculated by ceiling: " + (pain.recalculated ? "yes" : "no (ceiling is nonbinding)"));
+      } else {
+        lines.push("CR/IR/AR: " + pain.cr + "/" + pain.ir + "/" + pain.ar);
+      }
+      lines.push("Agency scope: " + (pain.multiAgency ? "more than one (multi-agency)" : "single agency"));
       if (sevSource) lines.push("Impact from: " + sevSource);
       lines.push("Severity scalar: " + (typeof pain.severity === "number" ? pain.severity.toFixed(2) : pain.severity));
       return lines.join("\n");
@@ -417,13 +430,17 @@
       });
       return [...new Set(values)].join("; ");
     }
-    // Tooltip for the Resource cell: the asset's security requirements, agency scope, and
+    // Tooltip for the Resource cell: the asset's archetype, agency scope, and
     // container security posture, consolidated into the one column.
     function resourceTooltip(row) {
       const lines = [];
       if (row.painObj) {
-        const src = row.painObj.securityRequirementsSource ? " (from " + row.painObj.securityRequirementsSource + ")" : "";
-        lines.push("Security requirements: " + row.painObj.securityRequirements + src);
+        const src = row.painObj.archetypeSource ? " (from " + row.painObj.archetypeSource + ")" : "";
+        lines.push("Archetype: " + row.painObj.archetype + src);
+        if (row.painObj.securityRequirementsCeiling) {
+          lines.push("Security requirements ceiling: " + row.painObj.securityRequirementsCeiling);
+          lines.push("Effective CR/IR/AR: " + row.painObj.cr + "/" + row.painObj.ir + "/" + row.painObj.ar);
+        }
         lines.push("Agency scope: " + (row.painObj.multiAgency ? "more than one (multi-agency)" : "single agency"));
       }
       if (row.security) lines.push("Security: " + row.security);
@@ -612,7 +629,7 @@
         "It factors exploitability and scope and is independent of PAIN.",
         "",
         "PAIN instead uses only the CVSS impact vector (C/I/A) re-weighted by the",
-        "asset's CR/IR/AR security requirements — so a 'LOW' CVE can still score high PAIN on a",
+        "asset archetype's CR/IR/AR — so a 'LOW' CVE can still score high PAIN on a",
         "high-requirement asset (e.g. an availability DoS on a data-backbone).",
         "",
         "Hover a value to see its CVSS vector."
@@ -633,15 +650,15 @@
         "PAIN — FedRAMP Rev5 VDR Potential Agency Impact (N1–N5).",
         "Per finding: the CVSS impact vector (C/I/A) — each in-scope dimension",
         "raised to High when CISA Vulnrichment technical impact is 'total' —",
-        "re-weighted by the asset's CR/IR/AR security requirements, mapped to a",
+        "re-weighted by the asset archetype's CR/IR/AR requirements, mapped to a",
         "customer-effect word, then combined with agency scope.",
         "",
         "  N1 Minimal | N2 Narrow | N3 Disruptive (1 agency)",
         "  N4 Debilitating (1 agency) or Disruptive (>1) | N5 Debilitating (>1)",
         "",
-        "Security requirements are resolved from the vdr.fedramp.io/security-requirements",
-        "label or rules first. Values use cr-h_ir-m_ar-l wire form and are displayed",
-        "as CR:H/IR:M/AR:L. Otherwise the built-in H/H/H default",
+        "Archetype is resolved from the vdr.fedramp.io/asset-archetype label or",
+        "rules first. If absent, vdr.fedramp.io/asset-value can map High/Medium/Low",
+        "to uniform CR/IR/AR. Otherwise the built-in 'unclassified' default (H/H/H)",
         "keeps new resources visible. Hover a value for details."
       ].join("\n");
     }
@@ -719,7 +736,7 @@
         "                            OR internet-reachable AV:N/AC:L/PR:N/UI:N (FRD-LEV floor)",
         "  IRV  (internet reachable) = the affected resource is internet-reachable",
         "",
-        "PAIN comes from the asset security requirements (CR/IR/AR) × CVE impact × agency scope.",
+        "PAIN comes from the asset archetype (CR/IR/AR) × CVE impact × agency scope.",
         "Class is cluster metadata (workload/namespace label or cluster ConfigMap).",
         "PAIN-1 findings have no FedRAMP deadline."
       ].join("\n");

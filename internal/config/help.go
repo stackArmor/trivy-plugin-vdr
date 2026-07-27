@@ -187,7 +187,7 @@ func sourceHelpSections(source string) []helpSection {
 		},
 		helpSection{
 			title: "Filtering, enrichment, and scoring",
-			flags: []string{"min-severity", "min-epss", "skip-enrichment", "refresh-enrichment", "scoring-config", "legacy-archetypes"},
+			flags: []string{"min-severity", "min-epss", "skip-enrichment", "refresh-enrichment", "scoring-config", "security-requirements-ceiling"},
 		},
 		helpSection{
 			title: "Registry authentication and VEX",
@@ -312,6 +312,7 @@ func helpValueName(name string) string {
 		"release-name":                    "NAME",
 		"repo":                            "URL",
 		"scoring-config":                  "FILE",
+		"security-requirements-ceiling":   "VECTOR",
 		"timeout":                         "DURATION",
 		"values":                          "FILE",
 		"vex-oci-registries":              "PREFIXES",
