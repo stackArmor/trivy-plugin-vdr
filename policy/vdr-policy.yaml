@@ -1,15 +1,16 @@
-# Canonical VDR asset-archetype and compositional decision-trace policy.
+# Canonical VDR security-impact-profile derivation policy.
 #
 # This file is embedded into trivy-plugin-vdr at build time. Downstream copies
 # in TSW and trivy-plugin-vdr-skills are generated from it; do not maintain
 # separate scoring catalogs in consumer repositories.
 schemaVersion: 1
 
-# A compositional archetype is:
+# One supported profile derivation method is the compositional decision trace:
 #   <disclosure>.<trusted-change>.<dependency>
 # Each segment independently and definitively determines CR, IR, or AR. The
 # plugin derives these vectors natively; an exact trace does not need a second
-# entry under archetypes. These registries are governed policy and cannot be
+# entry under archetypes. Direct CR/IR/AR vectors and named archetypes are also
+# accepted profile inputs. These registries are governed policy and cannot be
 # overridden by a cluster ConfigMap.
 reasonCodes:
   disclosure:
@@ -58,7 +59,9 @@ reasonCodes:
     protection-critical: H
     recovery-critical: H
 
-# Legacy named archetypes remain available for backwards compatibility.
+# This optional named-archetype catalog is an illustrative assignment system.
+# CSPs may use it, a decision trace, or a direct independently dimensional
+# CR/IR/AR profile. The catalog also preserves backwards compatibility.
 archetypes:
   cicd-pipeline:
     lens: control

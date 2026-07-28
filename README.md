@@ -16,7 +16,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Workload inventory from Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs, plus standalone Pods. Pods managed by a collected controller are skipped to avoid double-counting; pods owned by other controllers (e.g. operators/CRDs) are still inventoried.
 - JSON and table output mode flags.
 - Finding-centric and resource-centric view flags.
-- Per-finding FedRAMP Rev5 VDR **PAIN** (Potential Agency Impact, N1–N5) and **VDR-TFR-PVR** remediation deadline, driven by an asset-archetype classification (see [PAIN scoring and remediation](#pain-scoring-and-remediation)).
+- Per-finding FedRAMP Rev5 VDR **PAIN** (Potential Agency Impact, N1–N5) and **VDR-TFR-PVR** remediation deadline, driven by an independently dimensional asset security-impact profile (see [PAIN scoring and remediation](#pain-scoring-and-remediation)).
 - Optional standalone HTML report with per-finding PAIN and FedRAMP remediation deadlines, plus filter controls for severity (multi-select), PAIN, namespace, internet exposure, automatable, exploitation status, EPSS score, technical impact, and remediation deadline (multi-select).
 - Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
 - Automatic private-registry authentication from the local Docker config, Kubernetes `imagePullSecrets`, ECS task `repositoryCredentials`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
@@ -392,7 +392,7 @@ Duplicate findings are merged by default (since v2.0.0): findings that share the
 
 Use `--reachability-only` with `k8s`, `cloudrun`, or `ecs` for an internet-reachability metadata report without vulnerability findings. This mode emits the resources view, skips registry authentication and Trivy scanning, and does not fetch EPSS or Vulnrichment data.
 
-Use `--scan-reachability-only` with `k8s`, `cloudrun`, or `ecs` to run Trivy vulnerability scans and exposure analysis without EPSS, Vulnrichment, PAIN, or remediation scoring output. JSON findings keep scanner vulnerability data plus `affected[].resource`, `affected[].exposure`, and `affected[].classification` with the effective Certification Class and asset archetype. Resource-view reports also include each resource's `classification`. Table output replaces PAIN/remediation/enrichment columns with Class and Asset Archetype columns. This mode does not support `--html-output`, `--html-template`, `--skip-exposure`, `--min-epss`, or the standalone `image` source.
+Use `--scan-reachability-only` with `k8s`, `cloudrun`, or `ecs` to run Trivy vulnerability scans and exposure analysis without EPSS, Vulnrichment, PAIN, or remediation scoring output. JSON findings keep scanner vulnerability data plus `affected[].resource`, `affected[].exposure`, and `affected[].classification` with the effective Certification Class and security-impact profile. Resource-view reports also include each resource's `classification`. Table output replaces PAIN/remediation/enrichment columns with Class and Security-Impact Profile columns. This mode does not support `--html-output`, `--html-template`, `--skip-exposure`, `--min-epss`, or the standalone `image` source.
 
 Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a Trivy fix-status filter (including `will_not_fix`), a PAIN filter, a multi-select remediation-deadline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
 
@@ -406,50 +406,50 @@ Every finding is scored against the FedRAMP Rev5 VDR model: a **PAIN** rating (P
 
 ### PAIN = f(severity, scope)
 
-- **Severity** is the CVE's CVSS impact vector (which of Confidentiality/Integrity/Availability it touches) re-weighted by the asset's `CR/IR/AR` requirements, which come from its **asset archetype** and may be capped by an optional system-and-agency security-requirements ceiling. CISA Vulnrichment **technical impact** refines this as a *floor*: when `total`, each in-scope CVSS dimension is raised to High before weighting; it never invents impact on a dimension the CVE does not touch, and `partial`/absent leaves the CVSS vector unchanged. The weighted dimensions form the pre-cap complement-product aggregate `U`; PAIN normalizes it by the all-High-impact/all-High-requirement maximum `D_H = 0.995904`, not by the CVSS MISS cap of `0.915`. The scalar maps to Minimal, Narrow, Disruptive, or Debilitating using governed defaults `0.28115159694107 / 0.56230319388214 / 0.933`. These anchors make one High impact at Low requirement Narrow, one High impact at Medium requirement Disruptive, and reserve Debilitating for compound High-impact alignment. The thresholds are calibratable via `wordThresholds` in a governed `--scoring-config` file and are deliberately **not** read from the in-cluster ConfigMap, so calibration cannot be changed by ad-hoc cluster edits.
+- **Severity** is the CVE's CVSS impact vector (which of Confidentiality/Integrity/Availability it touches) re-weighted by the asset's independent `CR/IR/AR` **security-impact profile**, which may be capped by an optional system-and-agency security-requirements ceiling. CISA Vulnrichment **technical impact** refines this as a *floor*: when `total`, each in-scope CVSS dimension is raised to High before weighting; it never invents impact on a dimension the CVE does not touch, and `partial`/absent leaves the CVSS vector unchanged. The weighted dimensions form the pre-cap complement-product aggregate `U`; PAIN normalizes it by the all-High-impact/all-High-requirement maximum `D_H = 0.995904`, not by the CVSS MISS cap of `0.915`. The scalar maps to Minimal, Narrow, Disruptive, or Debilitating using governed defaults `0.28115159694107 / 0.56230319388214 / 0.933`. These anchors make one High impact at Low requirement Narrow, one High impact at Medium requirement Disruptive, and reserve Debilitating for compound High-impact alignment. The thresholds are calibratable via `wordThresholds` in a governed `--scoring-config` file and are deliberately **not** read from the in-cluster ConfigMap, so calibration cannot be changed by ad-hoc cluster edits.
 - **Scope** is whether the asset serves one agency or more than one. Disruptive → N3 (single) / N4 (multi); Debilitating → N4 (single) / N5 (multi).
 
-### Asset classification
+### Asset security-impact profile
 
-The preferred archetype is a compositional decision trace with exactly three segments: `<disclosure>.<trusted-change>.<dependency>`. The segments independently determine CR, IR, and AR from the governed reason registries in [`policy/vdr-policy.yaml`](policy/vdr-policy.yaml). For example, `regulated-data.authoritative-record.shared-critical-path` derives H/H/H and `public-content.bounded-processing.bounded-service` derives L/M/M. The plugin resolves these traces natively, so a ConfigMap rule or label can use a valid trace without duplicating it under `archetypes`. Exact compatibility entries are accepted only when they match the governed vector.
+The required input is a three-dimensional CR/IR/AR profile. A ConfigMap rule or `vdr.fedramp.io/security-impact-profile` label may express it in any of three supported forms:
 
-Legacy named archetypes remain supported for backwards compatibility. Classification is resolved most-specific-first. If no archetype signal is present, `asset-value` can be used as a simpler fallback: `H`/`High` maps to CR:H/IR:H/AR:H, `M`/`Medium`/`Moderate` maps to CR:M/IR:M/AR:M, and `L`/`Low` maps to CR:L/IR:L/AR:L.
+- a direct independent vector such as `cr-h_ir-m_ar-l`;
+- a governed decision trace, `<disclosure>.<trusted-change>.<dependency>`, whose segments independently derive CR, IR, and AR; or
+- a named entry from the optional archetype catalog in [`policy/vdr-policy.yaml`](policy/vdr-policy.yaml).
+
+For example, `regulated-data.authoritative-record.shared-critical-path` derives H/H/H and `public-content.bounded-processing.bounded-service` derives L/M/M. Decision traces resolve natively and do not need duplicate catalog entries. Archetypes are one useful assignment system, not the required model.
+
+A CSP may use an archetype system, an asset-value system, or another governed method to choose the profile, but the runtime transport is always SIP. A scalar asset-value method must translate High/Medium/Low to `cr-h_ir-h_ar-h`, `cr-m_ir-m_ar-m`, or `cr-l_ir-l_ar-l` before assignment. That method erases independent CR/IR/AR reasoning and should not be the CSP's only classification interface.
 
 For cloud compliance findings, use the same three independent decisions rather than classifying from resource type alone. Broad IAM mutation, deployment, impersonation, or cross-service administration supports `privileged-access` for disclosure and a High trusted-change reason such as `identity-control` or `config-control`; constrained workload authority supports `scoped-access`. Regulated objects support `regulated-data`, intentionally public objects support `public-content`, and payload-free telemetry supports `ops-metadata`. Select dependency/outage separately from the affected population and consequence.
 
 ```
-workload label vdr.fedramp.io/asset-archetype
-  → namespace label
-  → name rule   (cluster ConfigMap; first match wins)
-  → kind rule   (cluster ConfigMap; first match wins)
-  → namespace rule (cluster ConfigMap; first match wins)
-  → workload label vdr.fedramp.io/asset-value
-  → namespace/project label vdr.fedramp.io/asset-value
-  → assetValue name rule   (cluster ConfigMap; first match wins)
-  → assetValue kind rule   (cluster ConfigMap; first match wins)
-  → assetValue namespace rule (cluster ConfigMap; first match wins)
-  → configured assetValue default
+workload label vdr.fedramp.io/security-impact-profile
+  → namespace label vdr.fedramp.io/security-impact-profile
+  → securityImpactProfile name rule   (cluster ConfigMap; first match wins)
+  → securityImpactProfile kind rule   (cluster ConfigMap; first match wins)
+  → securityImpactProfile namespace rule (cluster ConfigMap; first match wins)
   → built-in "unclassified" cluster-default (H/H/H — noisy N4, surfaces for classification)
 ```
 
-Tag workloads you control with `vdr.fedramp.io/asset-archetype: <disclosure>.<trusted-change>.<dependency>` after attesting the three consequences, or use `vdr.fedramp.io/asset-value: High|Medium|Low` when the uniform value level is all you have. Cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot carry the label are classified by name/namespace rules in the ConfigMap instead. For Cloud Run, service/job labels override project labels. For ECS, task definition tags are used as labels.
+Tag workloads you control with `vdr.fedramp.io/security-impact-profile: <profile>`, where `<profile>` is a direct vector, governed decision trace, or named archetype. Cloud-managed, shared-responsibility components (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot carry the label are classified by name/namespace rules in the ConfigMap instead. For Cloud Run, service/job labels override project labels. For ECS, task definition tags are used as labels.
 
-`kindRules` (since v2.1.0) match on workload kind with optional namespace and name globs — e.g. `{kind: Job, archetype: security-evidence.record-keeping.operations-support}` classifies standalone Jobs (Helm hooks, one-shot migrations) whose generated names defeat name globs and which cannot carry labels. Kind rules sit between name rules and namespace rules, so a specific name rule or label still wins. CronJob-spawned Jobs are not inventoried separately (since v2.1.0); they are covered by their CronJob's template, so a `Job` kind rule only affects standalone Jobs.
+`kindRules` (since v2.1.0) match on workload kind with optional namespace and name globs — e.g. `{kind: Job, securityImpactProfile: security-evidence.record-keeping.operations-support}` classifies standalone Jobs (Helm hooks, one-shot migrations) whose generated names defeat name globs and which cannot carry labels. Kind rules sit between name rules and namespace rules, so a specific name rule or label still wins. CronJob-spawned Jobs are not inventoried separately (since v2.1.0); they are covered by their CronJob's template, so a `Job` kind rule only affects standalone Jobs.
 
-Every scored finding records where each classification input came from, so defaults are auditable: `pain.archetypeSource` (`label | namespaceLabel | nameRule | kindRule | namespaceRule | assetValue* | default | failsafe`), and since v2.2.0 `remediation.classSource` (`label | namespaceLabel | configMap | scoringConfig | builtin`) and `pain.multiAgencySource` (`label | namespaceLabel | multiAgencyNamespaces | configMap | scoringConfig | builtin | failsafe`). A `configMap` source means the in-cluster `vdr-fedramp` ConfigMap value applied because the workload and namespace carried no label; `scoringConfig` means a `--scoring-config` file set it; `builtin` means nothing was configured anywhere; `failsafe` means no signal existed anywhere and the conservative fail-safe was used.
+Every scored finding records where each classification input came from, so defaults are auditable: `pain.securityImpactProfileSource` (`label | namespaceLabel | nameRule | kindRule | namespaceRule | default | failsafe`), `remediation.classSource` (`label | namespaceLabel | configMap | scoringConfig | builtin`), and `pain.multiAgencySource` (`label | namespaceLabel | multiAgencyNamespaces | configMap | scoringConfig | builtin | failsafe`). A `configMap` source means the in-cluster `vdr-fedramp` ConfigMap value applied because the workload and namespace carried no label; `scoringConfig` means a `--scoring-config` file set it; `builtin` means nothing was configured anywhere; `failsafe` means no signal existed anywhere and the conservative fail-safe was used.
 
 ### Optional security-requirements ceiling
 
-The asset archetype remains the primary classification and supplies the uncapped CR/IR/AR vector. An optional deployment-wide ceiling can be derived from the system and deploying agency security objectives:
+The asset security-impact profile supplies the uncapped CR/IR/AR vector. An optional deployment-wide ceiling can be derived from the system and deploying agency security objectives:
 
 ```text
 ceiling(objective) = min(system objective, agency objective)
-effective asset requirement = min(archetype requirement, ceiling)
+effective asset requirement = min(profile requirement, ceiling)
 ```
 
 Pass it for one invocation with `--security-requirements-ceiling cr-m_ir-m_ar-l`, or place `securityRequirementsCeiling: cr-m_ir-m_ar-l` in the `vdr-fedramp` ConfigMap data. The runtime flag has highest precedence. The display form `CR:M/IR:M/AR:L` is also accepted.
 
-The ceiling is entirely optional: when omitted, no warning is emitted and archetype scoring is unchanged. When declared, JSON and HTML reports retain the archetype, show `archetypeRequirements`, `securityRequirementsCeiling`, and its source, expose the effective `cr`/`ir`/`ar`, and set `recalculated: true` only when the ceiling actually lowers a dimension. CycloneDX output carries the equivalent `vdr:*` properties.
+The ceiling is entirely optional: when omitted, no warning is emitted and profile scoring is unchanged. When declared, reports retain the resolved profile and uncapped requirements, show `securityRequirementsCeiling` and its source, expose the effective `cr`/`ir`/`ar`, and set `recalculated: true` only when the ceiling actually lowers a dimension.
 
 ### Remediation deadline
 
@@ -465,7 +465,7 @@ So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively
 
 ### Cluster configuration
 
-The provider **Certification Class** (A/B/C/D), the **agency scope**, and the archetype / asset-value **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in the **`fedramp-vdr-trivy`** namespace — no flag required. It carries the scalar keys `class`, `multiAgency`, and optionally `assetValue` and `securityRequirementsCeiling`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (legacy/custom catalog entries, rules, algorithm settings, and the `unclassified` default). Compositional reason mappings remain governed by the embedded canonical policy and are not cluster-overridable. It can also carry `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` — lists of Ingress/Gateway class names to treat as internet-reachable when their edge load balancer is built outside Kubernetes, a cleaner alternative to labeling each resource (see [exposure rules](#exposure-rules)). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`, `vdr.fedramp.io/asset-value`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules). A missing ceiling is normal and produces no warning. If a present ConfigMap is invalid, incompatible, or uses an unsupported older format, the plugin logs an **error** directing the operator to regenerate it with the current compositional schema and links to [`trivy-plugin-vdr-skills`](https://github.com/stackArmor/trivy-plugin-vdr-skills) for AI-assisted migration.
+The provider **Certification Class** (A/B/C/D), the **agency scope**, and the security-impact-profile **rules** are read from an in-cluster ConfigMap named **`vdr-fedramp`** in the **`fedramp-vdr-trivy`** namespace — no flag required. It carries the scalar keys `class`, `multiAgency`, and optionally `securityRequirementsCeiling`, plus an embedded `scoring.yaml` that is deep-merged over the plugin's built-in rubric (optional named-archetype catalog entries, profile rules, algorithm settings, and the `unclassified` default). Compositional reason mappings remain governed by the embedded canonical policy and are not cluster-overridable. It can also carry `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses` — lists of Ingress/Gateway class names to treat as internet-reachable when their edge load balancer is built outside Kubernetes, a cleaner alternative to labeling each resource (see [exposure rules](#exposure-rules)). Namespace labels (`vdr.fedramp.io/class`, `vdr.fedramp.io/multi-agency`, `vdr.fedramp.io/security-impact-profile`) and workload labels override the ConfigMap (most specific wins). When the ConfigMap is missing or unreadable the plugin **warns** and falls back to built-in defaults (Class B, single-agency, no tenant rules). A missing ceiling is normal and produces no warning. Retired `archetype` and `assetValue` fields are rejected so the estate has one transport contract. If a present ConfigMap is invalid, incompatible, or uses an unsupported format, the plugin logs an **error** directing the operator to regenerate it with the current profile schema and links to [`trivy-plugin-vdr-skills`](https://github.com/stackArmor/trivy-plugin-vdr-skills) for AI-assisted migration.
 
 See [`examples/configmaps/`](examples/configmaps/) for starter GKE, EKS, and AKS ConfigMaps. The optional `--scoring-config <file>` flag layers a local YAML/JSON config under the ConfigMap for testing or non-cluster use.
 

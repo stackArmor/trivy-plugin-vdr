@@ -12,7 +12,7 @@ var (
 )
 
 // SecurityRequirements is a CR/IR/AR objective vector used as an optional
-// system-and-agency ceiling over an asset archetype's requirements.
+// system-and-agency ceiling over an asset security-impact profile.
 type SecurityRequirements struct {
 	CR string
 	IR string

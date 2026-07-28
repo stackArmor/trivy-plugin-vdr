@@ -4,9 +4,9 @@
 # The plugin reads fedramp-vdr-trivy/vdr-fedramp from the cluster automatically
 # (no --scoring-config flag needed). It deep-merges the embedded scoring.yaml over its
 # built-in rubric. The built-in rubric already provides the governed compositional
-# reason registry and backwards-compatible legacy archetype catalog,
+# reason registry and optional named-archetype catalog,
 # the algorithm, the EPSS LEV threshold (0.50), and the H/H/H "unclassified"
-# cluster-default archetype for new/unclassified resources — so this file only
+# cluster-default profile for new/unclassified resources — so this file only
 # carries cluster-wide Class/scope and the rules for AKS-managed,
 # shared-responsibility components that cannot carry vdr.fedramp.io/* labels.
 #
@@ -28,7 +28,7 @@ data:
   # --- cluster-wide scalars (override anything the embedded doc sets) ---
   class: "B"            # set to your FedRAMP Certification Class: A, B, C, or D
   multiAgency: "false"  # "true" if this cluster serves more than one agency
-  # Optional system-and-agency ceiling; omit to leave archetype scoring unchanged.
+  # Optional system-and-agency ceiling; omit to leave profile scoring unchanged.
   # securityRequirementsCeiling: cr-m_ir-m_ar-l
 
   # --- operator-declared internet-reachable classes (optional) ---
@@ -50,39 +50,39 @@ data:
     nameRules:
       # Microsoft Entra Workload Identity / AAD pod identity credential broker:
       # privileged because it can mint or forward workload credentials.
-      - {namespace: kube-system, match: "azure-wi-webhook*", archetype: privileged-identity}
-      - {namespace: kube-system, match: "aad-pod-identity*", archetype: privileged-identity}
+      - {namespace: kube-system, match: "azure-wi-webhook*", securityImpactProfile: privileged-identity}
+      - {namespace: kube-system, match: "aad-pod-identity*", securityImpactProfile: privileged-identity}
       # Azure CNI dataplane, network policy, masq, and kube-proxy.
-      - {namespace: kube-system, match: "azure-cns*", archetype: orchestrator}
-      - {namespace: kube-system, match: "azure-npm*", archetype: orchestrator}
-      - {namespace: kube-system, match: "azure-ip-masq-agent*", archetype: orchestrator}
-      - {namespace: kube-system, match: kube-proxy, archetype: orchestrator}
-      - {namespace: kube-system, match: "konnectivity-agent*", archetype: orchestrator}
-      - {namespace: kube-system, match: "cloud-node-manager*", archetype: orchestrator}
+      - {namespace: kube-system, match: "azure-cns*", securityImpactProfile: orchestrator}
+      - {namespace: kube-system, match: "azure-npm*", securityImpactProfile: orchestrator}
+      - {namespace: kube-system, match: "azure-ip-masq-agent*", securityImpactProfile: orchestrator}
+      - {namespace: kube-system, match: kube-proxy, securityImpactProfile: orchestrator}
+      - {namespace: kube-system, match: "konnectivity-agent*", securityImpactProfile: orchestrator}
+      - {namespace: kube-system, match: "cloud-node-manager*", securityImpactProfile: orchestrator}
       # Storage CSI drivers (Azure Disk / File / Blob).
-      - {namespace: kube-system, match: "csi-*", archetype: orchestrator}
+      - {namespace: kube-system, match: "csi-*", securityImpactProfile: orchestrator}
       # Cluster DNS. platform-foundation is for METADATA-ONLY foundation services
       # (DNS/NTP/discovery/plain L4 LBs): CR:L (recon only), IR:H, AR:H. Anything
       # that terminates TLS or sees payload belongs in public-edge (internet-
       # facing) or app-tier (internal) instead.
-      - {namespace: kube-system, match: "coredns*", archetype: platform-foundation}
+      - {namespace: kube-system, match: "coredns*", securityImpactProfile: platform-foundation}
       # Azure Policy / Gatekeeper admission enforcement.
-      - {namespace: kube-system, match: "azure-policy*", archetype: security-tooling}
+      - {namespace: kube-system, match: "azure-policy*", securityImpactProfile: security-tooling}
       # Application Gateway Ingress Controller. It carries no traffic — it holds
       # Azure credentials that provision and reshape the public App Gateway, so
       # the control-plane lens applies: config-actuation. (App Gateway terminates
       # TLS on Azure's side; an in-cluster terminating proxy would be
       # public-edge, a pure L4/SNI passthrough would be passthrough-edge.)
-      - {namespace: kube-system, match: "ingress-appgw*", archetype: config-actuation}
+      - {namespace: kube-system, match: "ingress-appgw*", securityImpactProfile: config-actuation}
 
     namespaceRules:
       # OPA Gatekeeper policy enforcement.
-      - {match: gatekeeper-system, archetype: security-tooling}
+      - {match: gatekeeper-system, securityImpactProfile: security-tooling}
       # Calico network policy (if enabled).
-      - {match: calico-system, archetype: orchestrator}
+      - {match: calico-system, securityImpactProfile: orchestrator}
       # Azure Monitor / Container Insights and other Azure-managed add-on namespaces.
-      - {match: "azure-*", archetype: internal-tooling}
-      - {match: "aks-*", archetype: internal-tooling}
+      - {match: "azure-*", securityImpactProfile: internal-tooling}
+      - {match: "aks-*", securityImpactProfile: internal-tooling}
       # Everything else in kube-system (metrics-server, ama-* agents, coredns
       # autoscaler, etc.) is low-privilege node/observability infra.
-      - {match: kube-system, archetype: internal-tooling}
+      - {match: kube-system, securityImpactProfile: internal-tooling}

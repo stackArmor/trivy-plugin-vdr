@@ -3,8 +3,9 @@ package policy
 
 import _ "embed"
 
-// vdrPolicyYAML is the authoritative asset-archetype catalog used by the
-// compiled plugin and synchronized into downstream consumers.
+// vdrPolicyYAML is the authoritative profile-derivation policy and optional
+// named-archetype catalog used by the compiled plugin and synchronized into
+// downstream consumers.
 //
 //go:embed vdr-policy.yaml
 var vdrPolicyYAML string

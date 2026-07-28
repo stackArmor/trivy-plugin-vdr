@@ -87,18 +87,18 @@ func TestCompositeTraceScoresFromLabelAndRuleWithoutCatalogEntry(t *testing.T) {
 	fromLabel := cfg.Score(Input{
 		CVSSVector: vecCIAHigh,
 		Labels: map[string]string{
-			"vdr.fedramp.io/asset-archetype": trace,
+			"vdr.fedramp.io/security-impact-profile": trace,
 		},
 	})
-	if fromLabel.Archetype != trace || fromLabel.ArchetypeSource != "label" ||
+	if fromLabel.SecurityImpactProfile != trace || fromLabel.SecurityImpactProfileSource != "label" ||
 		fromLabel.CR != "H" || fromLabel.IR != "H" || fromLabel.AR != "H" {
 		t.Fatalf("composite label result = %+v", fromLabel)
 	}
 
 	cfg.NameRules = []NameRule{{
-		Namespace: "records",
-		Match:     "database-*",
-		Archetype: trace,
+		Namespace:             "records",
+		Match:                 "database-*",
+		SecurityImpactProfile: trace,
 	}}
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate composite rule: %v", err)
@@ -108,22 +108,84 @@ func TestCompositeTraceScoresFromLabelAndRuleWithoutCatalogEntry(t *testing.T) {
 		Namespace:    "records",
 		WorkloadName: "database-primary",
 	})
-	if fromRule.Archetype != trace || fromRule.ArchetypeSource != "nameRule" ||
+	if fromRule.SecurityImpactProfile != trace || fromRule.SecurityImpactProfileSource != "nameRule" ||
 		fromRule.CR != "H" || fromRule.IR != "H" || fromRule.AR != "H" {
 		t.Fatalf("composite rule result = %+v", fromRule)
+	}
+}
+
+func TestSecurityImpactProfileSupportsIndependentVectorTraceAndArchetype(t *testing.T) {
+	cfg := Default()
+
+	direct := cfg.Score(Input{
+		CVSSVector: vecCIAHigh,
+		Labels: map[string]string{
+			"vdr.fedramp.io/security-impact-profile": "cr-h_ir-l_ar-m",
+			"vdr.fedramp.io/asset-archetype":         "generic-low",
+		},
+	})
+	if direct.SecurityImpactProfile != "cr-h_ir-l_ar-m" || direct.SecurityImpactProfileSource != "label" ||
+		direct.CR != "H" || direct.IR != "L" || direct.AR != "M" {
+		t.Fatalf("direct profile label result = %+v", direct)
+	}
+
+	const trace = "regulated-data.record-keeping.operations-support"
+	cfg.NameRules = []NameRule{{
+		Namespace:             "ops",
+		Match:                 "logs-*",
+		SecurityImpactProfile: trace,
+	}}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate profile rule: %v", err)
+	}
+	fromTrace := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "ops", WorkloadName: "logs-node"})
+	if fromTrace.SecurityImpactProfile != trace || fromTrace.CR != "H" || fromTrace.IR != "M" || fromTrace.AR != "M" {
+		t.Fatalf("trace-derived profile result = %+v", fromTrace)
+	}
+
+	fromArchetype := cfg.Score(Input{
+		CVSSVector: vecCIAHigh,
+		Labels: map[string]string{
+			"vdr.fedramp.io/security-impact-profile": "platform-foundation",
+		},
+	})
+	if fromArchetype.CR != "L" || fromArchetype.IR != "H" || fromArchetype.AR != "H" {
+		t.Fatalf("named-archetype profile result = %+v", fromArchetype)
+	}
+}
+
+func TestClusterConfigAcceptsCanonicalProfileFieldAndRejectsRetiredField(t *testing.T) {
+	cfg := Default()
+	err := cfg.ApplyClusterDefaults(map[string]string{
+		"scoring.yaml": "nameRules:\n  - {match: api, securityImpactProfile: cr-m_ir-h_ar-l}\n",
+	})
+	if err != nil {
+		t.Fatalf("ApplyClusterDefaults: %v", err)
+	}
+	got := cfg.Score(Input{CVSSVector: vecCIAHigh, WorkloadName: "api"})
+	if got.CR != "M" || got.IR != "H" || got.AR != "L" || got.SecurityImpactProfileSource != "nameRule" {
+		t.Fatalf("canonical profile ConfigMap rule result = %+v", got)
+	}
+
+	retired := Default()
+	err = retired.ApplyClusterDefaults(map[string]string{
+		"scoring.yaml": "nameRules:\n  - {match: api, archetype: generic-low}\n",
+	})
+	if err == nil {
+		t.Fatal("retired archetype rule field was accepted")
 	}
 }
 
 func TestClusterConfigAcceptsCompositeRulesWithoutArchetypeEntries(t *testing.T) {
 	cfg := Default()
 	err := cfg.ApplyClusterDefaults(map[string]string{
-		"scoring.yaml": "nameRules:\n  - {namespace: ops, match: logs-*, archetype: regulated-data.record-keeping.operations-support}\n",
+		"scoring.yaml": "nameRules:\n  - {namespace: ops, match: logs-*, securityImpactProfile: regulated-data.record-keeping.operations-support}\n",
 	})
 	if err != nil {
 		t.Fatalf("ApplyClusterDefaults: %v", err)
 	}
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "ops", WorkloadName: "logs-node"})
-	if got.ArchetypeSource != "nameRule" || got.CR != "H" || got.IR != "M" || got.AR != "M" {
+	if got.SecurityImpactProfileSource != "nameRule" || got.CR != "H" || got.IR != "M" || got.AR != "M" {
 		t.Fatalf("composite ConfigMap rule result = %+v", got)
 	}
 }
@@ -134,15 +196,15 @@ func TestInvalidCompositeTraceFailsLoud(t *testing.T) {
 	got := cfg.Score(Input{
 		CVSSVector: vecCIAHigh,
 		Labels: map[string]string{
-			"vdr.fedramp.io/asset-archetype": invalid,
+			"vdr.fedramp.io/security-impact-profile": invalid,
 		},
 	})
-	if got.Archetype != "unclassified" || got.ArchetypeSource != "label-unknown" ||
+	if got.SecurityImpactProfile != "unclassified" || got.SecurityImpactProfileSource != "label-unknown" ||
 		got.CR != "H" || got.IR != "H" || got.AR != "H" || !got.MultiAgency {
 		t.Fatalf("invalid composite label did not fail safe: %+v", got)
 	}
 
-	cfg.NameRules = []NameRule{{Match: "*", Archetype: invalid}}
+	cfg.NameRules = []NameRule{{Match: "*", SecurityImpactProfile: invalid}}
 	if err := cfg.validate(); err == nil {
 		t.Fatal("invalid composite rule was accepted")
 	}

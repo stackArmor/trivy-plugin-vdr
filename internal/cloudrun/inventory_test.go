@@ -13,7 +13,7 @@ func TestCollectInventoriesServicesAndJobs(t *testing.T) {
 				Project: "armory-gss-prod",
 				Region:  "us-east4",
 				Name:    "peregrine",
-				Labels:  map[string]string{"vdr.fedramp.io/asset-archetype": "app-tier"},
+				Labels:  map[string]string{"vdr.fedramp.io/security-impact-profile": "app-tier"},
 				Containers: []Container{
 					{Name: "gateway", Image: "us-east4-docker.pkg.dev/p/peregrine/gateway:1"},
 					{Name: "worker", Image: "us-east4-docker.pkg.dev/p/peregrine/worker:2"},
@@ -133,9 +133,9 @@ func TestCollectAddsCloudRunCanonicalIDs(t *testing.T) {
 func TestCollectStoresProjectLabelsForScoringFallback(t *testing.T) {
 	client := &fakeInventoryClient{
 		projectLabels: map[string]string{
-			"vdr.fedramp.io/asset-archetype": "data-sensitive",
-			"vdr.fedramp.io/multi-agency":    "true",
-			"vdr.fedramp.io/class":           "D",
+			"vdr.fedramp.io/security-impact-profile": "data-sensitive",
+			"vdr.fedramp.io/multi-agency":            "true",
+			"vdr.fedramp.io/class":                   "D",
 		},
 		services: map[string][]Service{
 			"us-east4": {{

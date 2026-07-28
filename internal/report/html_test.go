@@ -55,8 +55,8 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Certification Class",    // class chip/subtitle in the header
 		"Security requirements ceiling",
 		"PAIN recalculated by ceiling",
-		"privileged",             // security posture moved into the resource-name tooltip
-		"image-cell",             // long image references are constrained in the table
+		"privileged", // security posture moved into the resource-name tooltip
+		"image-cell", // long image references are constrained in the table
 		"text-overflow: ellipsis",
 	} {
 		if !strings.Contains(output, want) {

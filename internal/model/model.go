@@ -7,7 +7,7 @@ type Inventory struct {
 	Resources   []ResourceInventory `json:"resources"`
 	Images      []ImageInventory    `json:"images"`
 	// Namespaces maps a namespace name to its object labels. Used to resolve
-	// namespace-level FedRAMP metadata (asset-archetype, multi-agency, class).
+	// namespace-level FedRAMP metadata (security-impact profile, multi-agency, class).
 	Namespaces map[string]map[string]string `json:"namespaces,omitempty"`
 	// ClusterDefaults holds cluster-wide FedRAMP metadata read from the cluster
 	// ConfigMap (e.g. class, multiAgency). Not serialized in the report.
@@ -420,9 +420,9 @@ type Affected struct {
 type AssetClassification struct {
 	Class                             string `json:"class,omitempty"`
 	ClassSource                       string `json:"classSource,omitempty"`
-	Archetype                         string `json:"archetype,omitempty"`
-	ArchetypeSource                   string `json:"archetypeSource,omitempty"`
-	ArchetypeRequirements             string `json:"archetypeRequirements,omitempty"`
+	SecurityImpactProfile             string `json:"securityImpactProfile,omitempty"`
+	SecurityImpactProfileSource       string `json:"securityImpactProfileSource,omitempty"`
+	SecurityImpactProfileRequirements string `json:"securityImpactProfileRequirements,omitempty"`
 	SecurityRequirementsCeiling       string `json:"securityRequirementsCeiling,omitempty"`
 	SecurityRequirementsCeilingSource string `json:"securityRequirementsCeilingSource,omitempty"`
 	Recalculated                      bool   `json:"recalculated,omitempty"`
@@ -448,14 +448,14 @@ type Remediation struct {
 
 // Pain is the FedRAMP Rev5 VDR Potential Agency Impact rating (N1-N5) for a
 // finding on a specific asset. Tier is derived from the CVSS impact vector
-// weighted by the asset archetype's CR/IR/AR requirements and the agency scope.
+// weighted by the asset security-impact profile's CR/IR/AR requirements and the agency scope.
 type Pain struct {
-	Tier                              string  `json:"tier"`            // N1..N5
-	Word                              string  `json:"word"`            // Minimal|Narrow|Disruptive|Debilitating
-	Severity                          float64 `json:"severity"`        // normalized environmental impact scalar 0..1
-	Archetype                         string  `json:"archetype"`       // resolved asset-archetype or asset-value-* fallback
-	ArchetypeSource                   string  `json:"archetypeSource"` // label|namespaceLabel|nameRule|namespaceRule|assetValue*|default|failsafe
-	ArchetypeRequirements             string  `json:"archetypeRequirements,omitempty"`
+	Tier                              string  `json:"tier"`                        // N1..N5
+	Word                              string  `json:"word"`                        // Minimal|Narrow|Disruptive|Debilitating
+	Severity                          float64 `json:"severity"`                    // normalized environmental impact scalar 0..1
+	SecurityImpactProfile             string  `json:"securityImpactProfile"`       // direct vector, decision trace, or named archetype
+	SecurityImpactProfileSource       string  `json:"securityImpactProfileSource"` // label|namespaceLabel|nameRule|kindRule|namespaceRule|default|failsafe
+	SecurityImpactProfileRequirements string  `json:"securityImpactProfileRequirements,omitempty"`
 	SecurityRequirementsCeiling       string  `json:"securityRequirementsCeiling,omitempty"`
 	SecurityRequirementsCeilingSource string  `json:"securityRequirementsCeilingSource,omitempty"`
 	Recalculated                      bool    `json:"recalculated,omitempty"`

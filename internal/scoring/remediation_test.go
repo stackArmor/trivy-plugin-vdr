@@ -7,7 +7,7 @@ import "testing"
 func dataSensitiveN5(epss float64, exploitation string, irv bool) Input {
 	return Input{
 		CVSSVector:        vecCIAHigh,
-		Labels:            map[string]string{"vdr.fedramp.io/asset-archetype": "data-sensitive", "vdr.fedramp.io/multi-agency": "true"},
+		Labels:            map[string]string{"vdr.fedramp.io/security-impact-profile": "data-sensitive", "vdr.fedramp.io/multi-agency": "true"},
 		EPSS:              epss,
 		Exploitation:      exploitation,
 		InternetReachable: irv,
@@ -84,7 +84,7 @@ func TestRemediationN1NoDeadline(t *testing.T) {
 	// dev-test (L/L/L) with a tiny confidentiality-only impact => Minimal => N1.
 	r := cfg.Score(Input{
 		CVSSVector: vecInfoLow,
-		Labels:     map[string]string{"vdr.fedramp.io/asset-archetype": "dev-test", "vdr.fedramp.io/multi-agency": "false"},
+		Labels:     map[string]string{"vdr.fedramp.io/security-impact-profile": "dev-test", "vdr.fedramp.io/multi-agency": "false"},
 		EPSS:       0.9, Exploitation: "active", InternetReachable: true,
 	})
 	if r.Tier != "N1" {
@@ -170,7 +170,7 @@ func TestMultiAgencyHierarchy(t *testing.T) {
 	cfg := Default()
 	cfg.MultiAgencyNamespaces = []string{"tenant-*"}
 	// data-sensitive (H/H/M) + C:H/I:H/A:H => Debilitating; multi => N5, single => N4.
-	base := Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "data-sensitive"}}
+	base := Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "data-sensitive"}}
 
 	in := base
 	in.Namespace = "tenant-x"
@@ -197,9 +197,9 @@ func TestNamespaceLabelArchetype(t *testing.T) {
 		CVSSVector:      vecCIAHigh,
 		Namespace:       "team-a",
 		WorkloadName:    "svc",
-		NamespaceLabels: map[string]string{"vdr.fedramp.io/asset-archetype": "dev-test"},
+		NamespaceLabels: map[string]string{"vdr.fedramp.io/security-impact-profile": "dev-test"},
 	})
-	if r.Archetype != "dev-test" || r.ArchetypeSource != "namespaceLabel" {
-		t.Errorf("archetype=%s source=%s, want dev-test/namespaceLabel", r.Archetype, r.ArchetypeSource)
+	if r.SecurityImpactProfile != "dev-test" || r.SecurityImpactProfileSource != "namespaceLabel" {
+		t.Errorf("archetype=%s source=%s, want dev-test/namespaceLabel", r.SecurityImpactProfile, r.SecurityImpactProfileSource)
 	}
 }
