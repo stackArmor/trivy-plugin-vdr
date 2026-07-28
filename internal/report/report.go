@@ -113,7 +113,7 @@ func partitionFindings(findings []model.Finding) ([]model.Finding, []model.Findi
 }
 
 // workloadLabelIndex maps a workload identity (namespace/kind/name) to its merged
-// labels, so PAIN scoring can resolve an asset's archetype from the labels of the
+// labels, so PAIN scoring can resolve an asset's security-impact profile from the labels of the
 // workload that owns an affected (container-level) resource reference.
 func workloadLabelIndex(inventory *model.Inventory) map[string]map[string]string {
 	index := map[string]map[string]string{}
@@ -150,9 +150,9 @@ func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, 
 		Tier:                              res.Tier,
 		Word:                              res.Word,
 		Severity:                          res.Severity,
-		Archetype:                         res.Archetype,
-		ArchetypeSource:                   res.ArchetypeSource,
-		ArchetypeRequirements:             res.ArchetypeRequirements,
+		SecurityImpactProfile:             res.SecurityImpactProfile,
+		SecurityImpactProfileSource:       res.SecurityImpactProfileSource,
+		SecurityImpactProfileRequirements: res.SecurityImpactProfileRequirements,
 		SecurityRequirementsCeiling:       res.SecurityRequirementsCeiling,
 		SecurityRequirementsCeilingSource: res.SecurityRequirementsCeilingSource,
 		Recalculated:                      res.Recalculated,
@@ -274,7 +274,7 @@ func RenderTable(w io.Writer, report model.Report) error {
 
 func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) error {
 	if len(report.Resources) > 0 {
-		if _, err := fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tCONTAINER\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tFINDINGS"); err != nil {
+		if _, err := fmt.Fprintln(tw, "NAMESPACE\tRESOURCE\tCONTAINER\tCLASS\tSECURITY-IMPACT PROFILE\tIMAGE\tEXPOSED\tFINDINGS"); err != nil {
 			return err
 		}
 		for _, resource := range report.Resources {
@@ -294,7 +294,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 		}
 		return tw.Flush()
 	}
-	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ID\tPACKAGE\tSEVERITY\tSTATUS\tCLASS\tSECURITY-IMPACT PROFILE\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
 		return err
 	}
 	for _, finding := range report.Findings {
@@ -316,7 +316,7 @@ func renderClassificationOnlyTable(tw *tabwriter.Writer, report model.Report) er
 		if _, err := fmt.Fprintln(tw, "\nSUPPRESSED FINDINGS"); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tVEX STATUS\tJUSTIFICATION\tCLASS\tASSET ARCHETYPE\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
+		if _, err := fmt.Fprintln(tw, "ID\tSEVERITY\tVEX STATUS\tJUSTIFICATION\tCLASS\tSECURITY-IMPACT PROFILE\tIMAGE\tEXPOSED\tAFFECTED"); err != nil {
 			return err
 		}
 		for _, finding := range report.SuppressedFindings {
@@ -683,16 +683,16 @@ func classificationFromScore(pain *model.Pain, remediation *model.Remediation) *
 		classification.ClassSource = remediation.ClassSource
 	}
 	if pain != nil {
-		classification.Archetype = pain.Archetype
-		classification.ArchetypeSource = pain.ArchetypeSource
-		classification.ArchetypeRequirements = pain.ArchetypeRequirements
+		classification.SecurityImpactProfile = pain.SecurityImpactProfile
+		classification.SecurityImpactProfileSource = pain.SecurityImpactProfileSource
+		classification.SecurityImpactProfileRequirements = pain.SecurityImpactProfileRequirements
 		classification.SecurityRequirementsCeiling = pain.SecurityRequirementsCeiling
 		classification.SecurityRequirementsCeilingSource = pain.SecurityRequirementsCeilingSource
 		classification.Recalculated = pain.Recalculated
 	}
 	if classification.Class == "" &&
-		classification.Archetype == "" &&
-		classification.ArchetypeSource == "" &&
+		classification.SecurityImpactProfile == "" &&
+		classification.SecurityImpactProfileSource == "" &&
 		classification.SecurityRequirementsCeiling == "" {
 		return nil
 	}
@@ -710,10 +710,10 @@ func classificationArchetype(classification *model.AssetClassification) string {
 	if classification == nil {
 		return ""
 	}
-	if classification.ArchetypeSource == "" {
-		return classification.Archetype
+	if classification.SecurityImpactProfileSource == "" {
+		return classification.SecurityImpactProfile
 	}
-	return fmt.Sprintf("%s (%s)", classification.Archetype, classification.ArchetypeSource)
+	return fmt.Sprintf("%s (%s)", classification.SecurityImpactProfile, classification.SecurityImpactProfileSource)
 }
 
 func formatAffectedClasses(affected []model.Affected) string {

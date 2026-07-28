@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	compositeLens               = "composite"
-	maxArchetypeLabelValueBytes = 63
+	compositeLens             = "composite"
+	directProfileLens         = "direct"
+	maxProfileLabelValueBytes = 63
 )
 
 // reasonCodeCatalog is the governed mapping from the three decision-trace
@@ -82,7 +83,7 @@ func validReasonToken(token string) bool {
 }
 
 func (c reasonCodeCatalog) archetype(trace string) (Archetype, bool) {
-	if trace == "" || trace != strings.TrimSpace(trace) || len(trace) > maxArchetypeLabelValueBytes {
+	if trace == "" || trace != strings.TrimSpace(trace) || len(trace) > maxProfileLabelValueBytes {
 		return Archetype{}, false
 	}
 	parts := strings.Split(trace, ".")
@@ -98,10 +99,20 @@ func (c reasonCodeCatalog) archetype(trace string) (Archetype, bool) {
 	return Archetype{Lens: compositeLens, CR: cr, IR: ir, AR: ar}, true
 }
 
-// lookupArchetype resolves compositional traces natively and legacy/custom
-// names from the explicit archetype catalog. Any dotted value is reserved for
-// the compositional grammar and must contain three registered reasons.
+// lookupArchetype resolves every supported security-impact profile encoding:
+// a direct CR/IR/AR vector, a governed compositional decision trace, or a
+// named entry from the optional archetype catalog. The internal function name
+// reflects the catalog lookup it originally performed; the external contract
+// is securityImpactProfile.
 func (c *Config) lookupArchetype(name string) (Archetype, bool) {
+	if requirements, ok := ParseSecurityRequirements(name); ok {
+		return Archetype{
+			Lens: directProfileLens,
+			CR:   requirements.CR,
+			IR:   requirements.IR,
+			AR:   requirements.AR,
+		}, true
+	}
 	if strings.Contains(name, ".") {
 		return c.reasonCodes.archetype(name)
 	}
@@ -142,4 +153,34 @@ func rejectReasonCodeOverride(data []byte) error {
 		return fmt.Errorf("reasonCodes are governed by the embedded canonical policy and cannot be overridden")
 	}
 	return nil
+}
+
+func rejectRetiredProfileTransports(data []byte) error {
+	var document any
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	var walk func(any) error
+	walk = func(value any) error {
+		switch typed := value.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				switch key {
+				case "archetype", "assetValue", "asset-value":
+					return fmt.Errorf("%s is retired; use securityImpactProfile", key)
+				}
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range typed {
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(document)
 }

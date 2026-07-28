@@ -3,7 +3,8 @@
 // given asset.
 //
 // PAIN = f(SEVERITY, SCOPE), where SEVERITY is the CVSS impact vector (C/I/A)
-// re-weighted by the asset's CR/IR/AR requirements (driven by its archetype),
+// re-weighted by the asset's independently assigned CR/IR/AR security-impact
+// profile,
 // and SCOPE is whether the asset serves one agency or more than one.
 //
 // The remediation deadline is the FedRAMP VDR-TFR-PVR matrix entry selected by
@@ -15,9 +16,10 @@
 //
 // The built-in Default() rubric is self-contained; an optional YAML or JSON
 // config file may be layered on top (deep-merged) to add tenant-specific rules
-// (namespace/name archetype assignment for workloads that cannot carry labels)
-// or to tune legacy/custom catalog entries, the EPSS threshold, or default
-// Class. Compositional reason mappings remain governed by the embedded policy.
+// (namespace/name profile assignment for workloads that cannot carry labels)
+// or to tune optional named-archetype catalog entries, the EPSS threshold, or
+// default Class. Compositional reason mappings remain governed by the embedded
+// policy.
 package scoring
 
 import (
@@ -38,7 +40,8 @@ import (
 // High-centered maximum instead of CVSS v3.1's Medium-requirement MISS cap.
 const painNormalizationDivisor = 0.995904
 
-// Archetype maps an asset class to its CVSS environmental requirements.
+// Archetype is the retained internal shape for a security-impact profile and
+// for entries in the optional named-archetype catalog.
 type Archetype struct {
 	Lens string `json:"lens" yaml:"lens"`
 	CR   string `json:"cr" yaml:"cr"`
@@ -46,54 +49,49 @@ type Archetype struct {
 	AR   string `json:"ar" yaml:"ar"`
 }
 
-// NamespaceRule assigns an archetype to all workloads in namespaces matching a
+// NamespaceRule assigns a security-impact profile to all workloads in namespaces matching a
 // glob (e.g. "kube-system", "gke-managed-*"). Used for workloads that cannot
 // carry in-cluster labels (managed, shared-responsibility components).
 type NamespaceRule struct {
-	Match      string `json:"match" yaml:"match"`
-	Archetype  string `json:"archetype" yaml:"archetype"`
-	AssetValue string `json:"assetValue" yaml:"assetValue"`
+	Match                 string `json:"match" yaml:"match"`
+	SecurityImpactProfile string `json:"securityImpactProfile" yaml:"securityImpactProfile"`
 }
 
-// NameRule assigns an archetype to workloads whose name matches a glob, optionally
+// NameRule assigns a security-impact profile to workloads whose name matches a glob, optionally
 // scoped to a namespace glob. Evaluated before namespace rules.
 type NameRule struct {
-	Namespace  string `json:"namespace" yaml:"namespace"`
-	Match      string `json:"match" yaml:"match"`
-	Archetype  string `json:"archetype" yaml:"archetype"`
-	AssetValue string `json:"assetValue" yaml:"assetValue"`
+	Namespace             string `json:"namespace" yaml:"namespace"`
+	Match                 string `json:"match" yaml:"match"`
+	SecurityImpactProfile string `json:"securityImpactProfile" yaml:"securityImpactProfile"`
 }
 
-// KindRule assigns an archetype to workloads whose kind matches a glob (e.g.
+// KindRule assigns a security-impact profile to workloads whose kind matches a glob (e.g.
 // "Job", "Pod"), optionally scoped to namespace and name globs. Evaluated after
 // name rules and before namespace rules, so a specific name rule or label can
 // still override it. Typical use: standalone Jobs (Helm hooks, one-shot
 // migrations) that carry no labels and whose generated names defeat name globs.
 type KindRule struct {
-	Kind       string `json:"kind" yaml:"kind"`
-	Namespace  string `json:"namespace" yaml:"namespace"`
-	Match      string `json:"match" yaml:"match"`
-	Archetype  string `json:"archetype" yaml:"archetype"`
-	AssetValue string `json:"assetValue" yaml:"assetValue"`
+	Kind                  string `json:"kind" yaml:"kind"`
+	Namespace             string `json:"namespace" yaml:"namespace"`
+	Match                 string `json:"match" yaml:"match"`
+	SecurityImpactProfile string `json:"securityImpactProfile" yaml:"securityImpactProfile"`
 }
 
 // LabelKeys are the label keys read from a workload (or its namespace) to resolve
-// its archetype, multi-agency scope, and Certification Class.
+// its security-impact profile, multi-agency scope, and Certification Class.
 type LabelKeys struct {
-	Archetype   string `json:"archetype" yaml:"archetype"`
-	AssetValue  string `json:"assetValue" yaml:"assetValue"`
-	MultiAgency string `json:"multiAgency" yaml:"multiAgency"`
-	Class       string `json:"class" yaml:"class"`
+	SecurityImpactProfile string `json:"securityImpactProfile" yaml:"securityImpactProfile"`
+	MultiAgency           string `json:"multiAgency" yaml:"multiAgency"`
+	Class                 string `json:"class" yaml:"class"`
 }
 
 // Defaults hold the cluster-wide fallbacks applied when a workload (or its
 // namespace) carries no explicit signal. Class and MultiAgency here are the
 // cluster-wide defaults; main may populate them from a cluster ConfigMap.
 type Defaults struct {
-	MultiAgency bool   `json:"multiAgency" yaml:"multiAgency"`
-	Archetype   string `json:"archetype" yaml:"archetype"`
-	AssetValue  string `json:"assetValue" yaml:"assetValue"`
-	Class       string `json:"class" yaml:"class"`
+	MultiAgency           bool   `json:"multiAgency" yaml:"multiAgency"`
+	SecurityImpactProfile string `json:"securityImpactProfile" yaml:"securityImpactProfile"`
+	Class                 string `json:"class" yaml:"class"`
 }
 
 // WordThresholds are the (calibratable) cut points on the normalized
@@ -122,8 +120,8 @@ type Config struct {
 	// Likely Exploitable (LEV). FedRAMP leaves the framework to the provider.
 	LEVEPSSThreshold float64 `json:"levEpssThreshold" yaml:"levEpssThreshold"`
 	// SecurityRequirementsCeiling is an optional system-and-agency CR/IR/AR
-	// ceiling. It caps the resolved archetype requirements per objective before
-	// PAIN is calculated. Empty preserves archetype scoring exactly.
+	// ceiling. It caps the resolved profile requirements per objective before
+	// PAIN is calculated. Empty preserves profile scoring exactly.
 	SecurityRequirementsCeiling string `json:"securityRequirementsCeiling,omitempty" yaml:"securityRequirementsCeiling,omitempty"`
 
 	// reasonCodes is loaded only from the embedded canonical policy. Keeping it
@@ -167,17 +165,17 @@ type Input struct {
 // Result is the computed PAIN and remediation plus the inputs that produced them.
 type Result struct {
 	// PAIN
-	Tier            string
-	Word            string
-	Severity        float64
-	Archetype       string
-	ArchetypeSource string
-	// ArchetypeRequirements is the uncapped CR/IR/AR vector supplied by the
-	// resolved archetype. It is populated when a ceiling is declared.
-	ArchetypeRequirements string
+	Tier                        string
+	Word                        string
+	Severity                    float64
+	SecurityImpactProfile       string
+	SecurityImpactProfileSource string
+	// SecurityImpactProfileRequirements is the uncapped CR/IR/AR vector supplied
+	// by the resolved profile. It is populated when a ceiling is declared.
+	SecurityImpactProfileRequirements string
 	// SecurityRequirementsCeiling is the normalized optional ceiling considered
 	// during PAIN calculation. Recalculated is true only when it lowered at
-	// least one archetype requirement.
+	// least one profile requirement.
 	SecurityRequirementsCeiling       string
 	SecurityRequirementsCeilingSource string
 	Recalculated                      bool
@@ -246,25 +244,24 @@ func mustLoadBuiltinPolicy() embeddedPolicy {
 }
 
 // Default returns the built-in rubric: the compositional reason registry and
-// legacy archetype catalog loaded from the embedded canonical policy, standard
-// label keys, an EPSS LEV threshold of 0.50, and a default Certification Class
-// of B. It carries no namespace/name rules (those are tenant-specific) and
-// assumes a single-tenant (single-agency) offering.
+// optional named-archetype catalog loaded from the embedded canonical policy,
+// standard label keys, an EPSS LEV threshold of 0.50, and a default
+// Certification Class of B. It carries no namespace/name rules (those are
+// tenant-specific) and assumes a single-tenant (single-agency) offering.
 func Default() *Config {
 	policy := mustLoadBuiltinPolicy()
 	return &Config{
 		Archetypes:  policy.Archetypes,
 		reasonCodes: policy.ReasonCodes,
 		LabelKeys: LabelKeys{
-			Archetype:   "vdr.fedramp.io/asset-archetype",
-			AssetValue:  "vdr.fedramp.io/asset-value",
-			MultiAgency: "vdr.fedramp.io/multi-agency",
-			Class:       "vdr.fedramp.io/class",
+			SecurityImpactProfile: "vdr.fedramp.io/security-impact-profile",
+			MultiAgency:           "vdr.fedramp.io/multi-agency",
+			Class:                 "vdr.fedramp.io/class",
 		},
 		Defaults: Defaults{
-			MultiAgency: false,
-			Archetype:   "unclassified",
-			Class:       "B",
+			MultiAgency:           false,
+			SecurityImpactProfile: "unclassified",
+			Class:                 "B",
 		},
 		WordThresholds:   defaultWordThresholds,
 		LEVEPSSThreshold: 0.50,
@@ -283,6 +280,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	if err := rejectReasonCodeOverride(data); err != nil {
+		return nil, fmt.Errorf("scoring config %q: %w", path, err)
+	}
+	if err := rejectRetiredProfileTransports(data); err != nil {
 		return nil, fmt.Errorf("scoring config %q: %w", path, err)
 	}
 	pre := cfg.Defaults
@@ -333,6 +333,9 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 		if err := rejectReasonCodeOverride([]byte(doc)); err != nil {
 			return fmt.Errorf("cluster scoring config (%s): %w", key, err)
 		}
+		if err := rejectRetiredProfileTransports([]byte(doc)); err != nil {
+			return fmt.Errorf("cluster scoring config (%s): %w", key, err)
+		}
 		if err := yaml.Unmarshal([]byte(doc), c); err != nil {
 			return fmt.Errorf("parse cluster scoring config (%s): %w", key, err)
 		}
@@ -344,6 +347,11 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 		}
 		embeddedCeilingPresent = declared.SecurityRequirementsCeiling != nil
 		break
+	}
+	for _, retired := range []string{"assetValue", "asset-value"} {
+		if _, present := data[retired]; present {
+			return fmt.Errorf("ConfigMap key %s is retired; use securityImpactProfile in scoring.yaml", retired)
+		}
 	}
 	c.WordThresholds = savedThresholds
 	if c.Defaults.Class != pre.Class {
@@ -358,13 +366,6 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	if v := normalizeClass(data["class"]); v != "" {
 		c.Defaults.Class = v
 		c.classOrigin = "configMap"
-	}
-	av := data["assetValue"]
-	if av == "" {
-		av = data["asset-value"]
-	}
-	if v := normalizeAssetValue(av); v != "" {
-		c.Defaults.AssetValue = v
 	}
 	ma, ok := data["multiAgency"]
 	if !ok {
@@ -416,56 +417,47 @@ func (c *Config) validate() error {
 		return err
 	}
 	for i, r := range c.NamespaceRules {
-		if r.Archetype == "" && r.AssetValue == "" {
-			return fmt.Errorf("namespaceRules[%d] must set archetype or assetValue", i)
+		profile := strings.TrimSpace(r.SecurityImpactProfile)
+		if profile == "" {
+			return fmt.Errorf("namespaceRules[%d] must set securityImpactProfile", i)
 		}
-		if r.Archetype != "" {
-			if _, ok := c.lookupArchetype(r.Archetype); !ok {
-				return fmt.Errorf("namespaceRules[%d] references unknown archetype %q", i, r.Archetype)
+		if profile != "" {
+			if _, ok := c.lookupArchetype(profile); !ok {
+				return fmt.Errorf("namespaceRules[%d] references unknown securityImpactProfile %q", i, profile)
 			}
-		}
-		if r.AssetValue != "" && normalizeAssetValue(r.AssetValue) == "" {
-			return fmt.Errorf("namespaceRules[%d] references unknown assetValue %q", i, r.AssetValue)
 		}
 	}
 	for i, r := range c.NameRules {
-		if r.Archetype == "" && r.AssetValue == "" {
-			return fmt.Errorf("nameRules[%d] must set archetype or assetValue", i)
+		profile := strings.TrimSpace(r.SecurityImpactProfile)
+		if profile == "" {
+			return fmt.Errorf("nameRules[%d] must set securityImpactProfile", i)
 		}
-		if r.Archetype != "" {
-			if _, ok := c.lookupArchetype(r.Archetype); !ok {
-				return fmt.Errorf("nameRules[%d] references unknown archetype %q", i, r.Archetype)
+		if profile != "" {
+			if _, ok := c.lookupArchetype(profile); !ok {
+				return fmt.Errorf("nameRules[%d] references unknown securityImpactProfile %q", i, profile)
 			}
-		}
-		if r.AssetValue != "" && normalizeAssetValue(r.AssetValue) == "" {
-			return fmt.Errorf("nameRules[%d] references unknown assetValue %q", i, r.AssetValue)
 		}
 	}
 	for i, r := range c.KindRules {
 		if r.Kind == "" {
 			return fmt.Errorf("kindRules[%d] must set kind", i)
 		}
-		if r.Archetype == "" && r.AssetValue == "" {
-			return fmt.Errorf("kindRules[%d] must set archetype or assetValue", i)
+		profile := strings.TrimSpace(r.SecurityImpactProfile)
+		if profile == "" {
+			return fmt.Errorf("kindRules[%d] must set securityImpactProfile", i)
 		}
-		if r.Archetype != "" {
-			if _, ok := c.lookupArchetype(r.Archetype); !ok {
-				return fmt.Errorf("kindRules[%d] references unknown archetype %q", i, r.Archetype)
+		if profile != "" {
+			if _, ok := c.lookupArchetype(profile); !ok {
+				return fmt.Errorf("kindRules[%d] references unknown securityImpactProfile %q", i, profile)
 			}
 		}
-		if r.AssetValue != "" && normalizeAssetValue(r.AssetValue) == "" {
-			return fmt.Errorf("kindRules[%d] references unknown assetValue %q", i, r.AssetValue)
-		}
-	}
-	if c.Defaults.AssetValue != "" && normalizeAssetValue(c.Defaults.AssetValue) == "" {
-		return fmt.Errorf("defaults.assetValue %q must be one of H, M, L, High, Medium, Moderate, Low", c.Defaults.AssetValue)
 	}
 	if c.Defaults.Class != "" && normalizeClass(c.Defaults.Class) == "" {
 		return fmt.Errorf("defaults.class %q must be one of A, B, C, D", c.Defaults.Class)
 	}
-	if c.Defaults.Archetype != "" {
-		if _, ok := c.lookupArchetype(c.Defaults.Archetype); !ok {
-			return fmt.Errorf("defaults.archetype %q is not a known archetype", c.Defaults.Archetype)
+	if profile := c.defaultSecurityImpactProfile(); profile != "" {
+		if _, ok := c.lookupArchetype(profile); !ok {
+			return fmt.Errorf("defaults.securityImpactProfile %q is not a known profile", profile)
 		}
 	}
 	if c.SecurityRequirementsCeiling != "" {
@@ -486,34 +478,39 @@ func (c *Config) validate() error {
 	return nil
 }
 
+func (c *Config) defaultSecurityImpactProfile() string {
+	return strings.TrimSpace(c.Defaults.SecurityImpactProfile)
+}
+
+// DefaultSecurityImpactProfile returns the effective cluster-wide SIP fallback.
+func (c *Config) DefaultSecurityImpactProfile() string {
+	return c.defaultSecurityImpactProfile()
+}
+
 // Score computes the PAIN and FedRAMP remediation deadline for a finding-on-asset.
 func (c *Config) Score(in Input) Result {
-	arch, source, assetValue, found := c.resolveClassification(in.Namespace, in.WorkloadName, in.WorkloadKind, in.Labels, in.NamespaceLabels)
+	profile, source, found := c.resolveClassification(in.Namespace, in.WorkloadName, in.WorkloadKind, in.Labels, in.NamespaceLabels)
 
 	var a Archetype
 	forceMulti := false
 	if found {
-		if assetValue != "" {
-			a = archetypeForAssetValue(assetValue)
-		} else {
-			a, _ = c.lookupArchetype(arch)
-		}
+		a, _ = c.lookupArchetype(profile)
 	} else {
 		// Fail-safe: an unclassified asset is treated as CR/IR/AR=High and
 		// multi-agency=true, which floors the finding toward N5. Missing metadata
 		// never lowers PAIN; it surfaces the asset for classification.
 		a = Archetype{Lens: "control", CR: "H", IR: "H", AR: "H"}
-		arch = c.Defaults.Archetype
+		profile = c.defaultSecurityImpactProfile()
 		forceMulti = true
 	}
 
-	archetypeRequirements := requirementsFromArchetype(a)
-	effectiveRequirements := archetypeRequirements
-	var archetypeRequirementsDisplay, ceilingDisplay, ceilingSource string
+	profileRequirements := requirementsFromArchetype(a)
+	effectiveRequirements := profileRequirements
+	var profileRequirementsDisplay, ceilingDisplay, ceilingSource string
 	var recalculated bool
 	if ceiling, ok := ParseSecurityRequirements(c.SecurityRequirementsCeiling); ok {
-		effectiveRequirements, recalculated = capRequirements(archetypeRequirements, ceiling)
-		archetypeRequirementsDisplay = archetypeRequirements.String()
+		effectiveRequirements, recalculated = capRequirements(profileRequirements, ceiling)
+		profileRequirementsDisplay = profileRequirements.String()
 		ceilingDisplay = ceiling.String()
 		ceilingSource = c.ceilingOrigin
 		if ceilingSource == "" {
@@ -548,9 +545,9 @@ func (c *Config) Score(in Input) Result {
 		Tier:                              tier,
 		Word:                              word,
 		Severity:                          s,
-		Archetype:                         arch,
-		ArchetypeSource:                   source,
-		ArchetypeRequirements:             archetypeRequirementsDisplay,
+		SecurityImpactProfile:             profile,
+		SecurityImpactProfileSource:       source,
+		SecurityImpactProfileRequirements: profileRequirementsDisplay,
 		SecurityRequirementsCeiling:       ceilingDisplay,
 		SecurityRequirementsCeilingSource: ceilingSource,
 		Recalculated:                      recalculated,
@@ -570,39 +567,30 @@ func (c *Config) Score(in Input) Result {
 	}
 }
 
-// resolveClassification prefers the richer asset-archetype path, then falls back
-// to asset-value (H/M/L mapped uniformly across CR/IR/AR), then the default
-// archetype/fail-safe path. The returned bool is false only for the fail-safe
-// path (no usable signal).
-func (c *Config) resolveClassification(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, string, bool) {
-	if arch, source, found := c.resolveArchetypeSignal(namespace, name, kind, labels, nsLabels); found || source == "label-unknown" {
-		return arch, source, "", found
+// resolveClassification prefers the independently dimensional security-impact
+// profile path, then the default/fail-safe path. The returned bool is false
+// only for the fail-safe path (no usable signal).
+func (c *Config) resolveClassification(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
+	if profile, source, found := c.resolveSecurityImpactProfileSignal(namespace, name, kind, labels, nsLabels); found || source == "label-unknown" {
+		return profile, source, found
 	}
-	if value, source, found := c.resolveAssetValueSignal(namespace, name, kind, labels, nsLabels); found || source == "assetValueLabelUnknown" {
-		return "asset-value-" + strings.ToLower(value), source, value, found
-	}
-	if c.Defaults.AssetValue != "" {
-		if value := normalizeAssetValue(c.Defaults.AssetValue); value != "" {
-			return "asset-value-" + strings.ToLower(value), "assetValueDefault", value, true
+	if profile := c.defaultSecurityImpactProfile(); profile != "" {
+		if _, known := c.lookupArchetype(profile); known {
+			return profile, "default", true
 		}
 	}
-	if c.Defaults.Archetype != "" {
-		if _, known := c.lookupArchetype(c.Defaults.Archetype); known {
-			return c.Defaults.Archetype, "default", "", true
-		}
-	}
-	return "", "failsafe", "", false
+	return "", "failsafe", false
 }
 
-func (c *Config) resolveArchetypeSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
-	if v, ok := labels[c.LabelKeys.Archetype]; ok {
+func (c *Config) resolveSecurityImpactProfileSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
+	if v, ok := labels[c.LabelKeys.SecurityImpactProfile]; ok {
 		v = strings.TrimSpace(v)
 		if _, known := c.lookupArchetype(v); known {
 			return v, "label", true
 		}
 		return "", "label-unknown", false
 	}
-	if v, ok := nsLabels[c.LabelKeys.Archetype]; ok {
+	if v, ok := nsLabels[c.LabelKeys.SecurityImpactProfile]; ok {
 		v = strings.TrimSpace(v)
 		if _, known := c.lookupArchetype(v); known {
 			return v, "namespaceLabel", true
@@ -616,8 +604,9 @@ func (c *Config) resolveArchetypeSignal(namespace, name, kind string, labels, ns
 			}
 		}
 		if ok, _ := path.Match(r.Match, name); ok {
-			if _, known := c.lookupArchetype(r.Archetype); known {
-				return r.Archetype, "nameRule", true
+			profile := strings.TrimSpace(r.SecurityImpactProfile)
+			if _, known := c.lookupArchetype(profile); known {
+				return profile, "nameRule", true
 			}
 		}
 	}
@@ -625,14 +614,16 @@ func (c *Config) resolveArchetypeSignal(namespace, name, kind string, labels, ns
 		if !kindRuleMatches(r, namespace, name, kind) {
 			continue
 		}
-		if _, known := c.lookupArchetype(r.Archetype); known {
-			return r.Archetype, "kindRule", true
+		profile := strings.TrimSpace(r.SecurityImpactProfile)
+		if _, known := c.lookupArchetype(profile); known {
+			return profile, "kindRule", true
 		}
 	}
 	for _, r := range c.NamespaceRules {
 		if ok, _ := path.Match(r.Match, namespace); ok {
-			if _, known := c.lookupArchetype(r.Archetype); known {
-				return r.Archetype, "namespaceRule", true
+			profile := strings.TrimSpace(r.SecurityImpactProfile)
+			if _, known := c.lookupArchetype(profile); known {
+				return profile, "namespaceRule", true
 			}
 		}
 	}
@@ -659,58 +650,6 @@ func kindRuleMatches(r KindRule, namespace, name, kind string) bool {
 		}
 	}
 	return true
-}
-
-func (c *Config) resolveAssetValueSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
-	if v, ok := labels[c.LabelKeys.AssetValue]; ok {
-		if value := normalizeAssetValue(v); value != "" {
-			return value, "assetValueLabel", true
-		}
-		return "", "assetValueLabelUnknown", false
-	}
-	if v, ok := nsLabels[c.LabelKeys.AssetValue]; ok {
-		if value := normalizeAssetValue(v); value != "" {
-			return value, "assetValueNamespaceLabel", true
-		}
-		return "", "assetValueLabelUnknown", false
-	}
-	for _, r := range c.NameRules {
-		if r.AssetValue == "" {
-			continue
-		}
-		if r.Namespace != "" {
-			if ok, _ := path.Match(r.Namespace, namespace); !ok {
-				continue
-			}
-		}
-		if ok, _ := path.Match(r.Match, name); ok {
-			if value := normalizeAssetValue(r.AssetValue); value != "" {
-				return value, "assetValueNameRule", true
-			}
-		}
-	}
-	for _, r := range c.KindRules {
-		if r.AssetValue == "" {
-			continue
-		}
-		if !kindRuleMatches(r, namespace, name, kind) {
-			continue
-		}
-		if value := normalizeAssetValue(r.AssetValue); value != "" {
-			return value, "assetValueKindRule", true
-		}
-	}
-	for _, r := range c.NamespaceRules {
-		if r.AssetValue == "" {
-			continue
-		}
-		if ok, _ := path.Match(r.Match, namespace); ok {
-			if value := normalizeAssetValue(r.AssetValue); value != "" {
-				return value, "assetValueNamespaceRule", true
-			}
-		}
-	}
-	return "", "", false
 }
 
 // resolveMultiAgency: workload label > namespace label > multiAgencyNamespaces
@@ -803,32 +742,6 @@ func normalizeClass(v string) string {
 		return "D"
 	default:
 		return ""
-	}
-}
-
-func normalizeAssetValue(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "h", "high":
-		return "high"
-	case "m", "medium", "moderate":
-		return "medium"
-	case "l", "low":
-		return "low"
-	default:
-		return ""
-	}
-}
-
-func archetypeForAssetValue(value string) Archetype {
-	switch normalizeAssetValue(value) {
-	case "high":
-		return Archetype{Lens: "asset-value", CR: "H", IR: "H", AR: "H"}
-	case "medium":
-		return Archetype{Lens: "asset-value", CR: "M", IR: "M", AR: "M"}
-	case "low":
-		return Archetype{Lens: "asset-value", CR: "L", IR: "L", AR: "L"}
-	default:
-		return Archetype{Lens: "asset-value", CR: "H", IR: "H", AR: "H"}
 	}
 }
 

@@ -118,7 +118,8 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 }
 
 // collectNamespaceMetadata records each in-scope namespace's object labels so
-// scoring can resolve namespace-level archetype/multi-agency/class metadata.
+// scoring can resolve namespace-level security-impact-profile, multi-agency,
+// and Class metadata.
 func (c *Collector) collectNamespaceMetadata(ctx context.Context, opts Options, builder *inventoryBuilder) {
 	labels := map[string]map[string]string{}
 	if opts.AllNamespaces || len(opts.Namespaces) == 0 {
@@ -161,7 +162,7 @@ func (c *Collector) collectClusterDefaults(ctx context.Context, opts Options, bu
 	cm, err := c.Client.CoreV1().ConfigMaps(nsName).Get(ctx, cmName, metav1.GetOptions{})
 	if err != nil {
 		builder.inventory.Warnings = append(builder.inventory.Warnings, fmt.Sprintf(
-			"cluster FedRAMP ConfigMap %s/%s not read (%v); PAIN scoring uses built-in defaults (Class B, single-agency) and has no tenant archetype rules",
+			"cluster FedRAMP ConfigMap %s/%s not read (%v); PAIN scoring uses built-in defaults (Class B, single-agency) and has no tenant security-impact-profile rules",
 			nsName, cmName, err))
 		return
 	}
@@ -362,7 +363,7 @@ type inventoryBuilder struct {
 // addResource records a workload. workloadLabels are the labels on the workload
 // object itself (e.g. Deployment.metadata.labels) and templateLabels are the pod
 // template labels. They are merged into ResourceInventory.Labels with the pod
-// template winning on conflict, so VDR archetype tags applied at either level
+// template winning on conflict, so VDR security-impact-profile labels applied at either level
 // (Helm values.labels render to the workload object) are visible to scoring.
 func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string, replicas *int32) {
 	resourceInventory := model.ResourceInventory{

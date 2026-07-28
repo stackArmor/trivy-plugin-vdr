@@ -28,27 +28,27 @@ func TestWorkedExamples(t *testing.T) {
 	}{
 		{
 			name:  "1 RCE on data-sensitive multi",
-			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "data-sensitive", "vdr.fedramp.io/multi-agency": "true"}},
+			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "data-sensitive", "vdr.fedramp.io/multi-agency": "true"}},
 			wantS: 1.00, wantWord: "Debilitating", wantTier: "N5",
 		},
 		{
 			name:  "2 same RCE on dev-test single",
-			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "dev-test", "vdr.fedramp.io/multi-agency": "false"}},
+			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "dev-test", "vdr.fedramp.io/multi-agency": "false"}},
 			wantS: 0.63, wantWord: "Disruptive", wantTier: "N3",
 		},
 		{
 			name:  "3 info-leak on data-sensitive multi",
-			in:    Input{CVSSVector: vecInfoLow, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "data-sensitive", "vdr.fedramp.io/multi-agency": "true"}},
+			in:    Input{CVSSVector: vecInfoLow, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "data-sensitive", "vdr.fedramp.io/multi-agency": "true"}},
 			wantS: 0.33, wantWord: "Narrow", wantTier: "N2",
 		},
 		{
 			name:  "4 RCE on cicd-pipeline tagged multi-agency",
-			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "cicd-pipeline", "vdr.fedramp.io/multi-agency": "true"}},
+			in:    Input{CVSSVector: vecCIAHigh, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "cicd-pipeline", "vdr.fedramp.io/multi-agency": "true"}},
 			wantS: 1.00, wantWord: "Debilitating", wantTier: "N5",
 		},
 		{
 			name:  "5 DoS on public-edge single",
-			in:    Input{CVSSVector: vecDoSHigh, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "public-edge", "vdr.fedramp.io/multi-agency": "false"}},
+			in:    Input{CVSSVector: vecDoSHigh, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "public-edge", "vdr.fedramp.io/multi-agency": "false"}},
 			wantS: 0.84, wantWord: "Disruptive", wantTier: "N3",
 		},
 		{
@@ -78,11 +78,11 @@ func TestWorkedExamples(t *testing.T) {
 
 func TestBuiltInDefaultArchetype(t *testing.T) {
 	cfg := Default() // single-tenant default (multiAgency=false)
-	// Untagged resources resolve to the built-in H/H/H "unclassified" archetype:
+	// Untagged resources resolve to the built-in H/H/H "unclassified" securityImpactProfile:
 	// noisy (single-agency H/H/H + C:H/I:H/A:H => N4) but not the forced-multi N5.
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "weird", WorkloadName: "mystery"})
-	if got.ArchetypeSource != "default" || got.Archetype != "unclassified" {
-		t.Errorf("source=%s archetype=%s, want default/unclassified", got.ArchetypeSource, got.Archetype)
+	if got.SecurityImpactProfileSource != "default" || got.SecurityImpactProfile != "unclassified" {
+		t.Errorf("source=%s archetype=%s, want default/unclassified", got.SecurityImpactProfileSource, got.SecurityImpactProfile)
 	}
 	if got.Tier != "N4" {
 		t.Errorf("untagged Tier = %s, want N4 (noisy default, not forced-multi N5)", got.Tier)
@@ -94,13 +94,13 @@ func TestBuiltInDefaultArchetype(t *testing.T) {
 
 func TestFailSafeForcesN5WhenNoDefault(t *testing.T) {
 	cfg := Default()
-	cfg.Defaults.Archetype = "" // clear the default => true fail-safe takes over
+	cfg.Defaults.SecurityImpactProfile = "" // clear the default => true fail-safe takes over
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "weird", WorkloadName: "mystery"})
 	if got.Tier != "N5" {
 		t.Errorf("untagged Tier = %s, want N5 (fail-safe must force multi-agency)", got.Tier)
 	}
-	if got.ArchetypeSource != "failsafe" {
-		t.Errorf("ArchetypeSource = %s, want failsafe", got.ArchetypeSource)
+	if got.SecurityImpactProfileSource != "failsafe" {
+		t.Errorf("SecurityImpactProfileSource = %s, want failsafe", got.SecurityImpactProfileSource)
 	}
 }
 
@@ -109,8 +109,8 @@ func TestSingleAgencyControlPlaneCapsAtN4(t *testing.T) {
 	// A critical control-plane archetype tagged single-agency caps at N4 (Debilitating,
 	// one agency); only an explicit multi-agency tag reaches N5.
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Labels: map[string]string{
-		"vdr.fedramp.io/asset-archetype": "cicd-pipeline",
-		"vdr.fedramp.io/multi-agency":    "false",
+		"vdr.fedramp.io/security-impact-profile": "cicd-pipeline",
+		"vdr.fedramp.io/multi-agency":            "false",
 	}})
 	if got.Tier != "N4" {
 		t.Errorf("Tier = %s, want N4 (single-agency must not reach N5)", got.Tier)
@@ -119,85 +119,47 @@ func TestSingleAgencyControlPlaneCapsAtN4(t *testing.T) {
 
 func TestResolutionOrder(t *testing.T) {
 	cfg := Default()
-	cfg.NameRules = []NameRule{{Namespace: "kube-system", Match: "calico*", Archetype: "orchestrator"}}
-	cfg.NamespaceRules = []NamespaceRule{{Match: "kube-system", Archetype: "internal-tooling"}}
+	cfg.NameRules = []NameRule{{Namespace: "kube-system", Match: "calico*", SecurityImpactProfile: "orchestrator"}}
+	cfg.NamespaceRules = []NamespaceRule{{Match: "kube-system", SecurityImpactProfile: "internal-tooling"}}
 
 	// Label wins over everything.
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "calico-node",
-		Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "app-tier"}})
-	if r.ArchetypeSource != "label" || r.Archetype != "app-tier" {
-		t.Errorf("label precedence failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+		Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "app-tier"}})
+	if r.SecurityImpactProfileSource != "label" || r.SecurityImpactProfile != "app-tier" {
+		t.Errorf("label precedence failed: source=%s archetype=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 
 	// Name rule wins over namespace rule.
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "calico-node"})
-	if r.ArchetypeSource != "nameRule" || r.Archetype != "orchestrator" {
-		t.Errorf("nameRule precedence failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityImpactProfileSource != "nameRule" || r.SecurityImpactProfile != "orchestrator" {
+		t.Errorf("nameRule precedence failed: source=%s archetype=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 
 	// Namespace rule when no name rule matches.
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "metrics-server"})
-	if r.ArchetypeSource != "namespaceRule" || r.Archetype != "internal-tooling" {
-		t.Errorf("namespaceRule fallback failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityImpactProfileSource != "namespaceRule" || r.SecurityImpactProfile != "internal-tooling" {
+		t.Errorf("namespaceRule fallback failed: source=%s archetype=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 
 	// Nothing matches => built-in cluster-default archetype.
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "thing"})
-	if r.ArchetypeSource != "default" || r.Archetype != "unclassified" {
-		t.Errorf("expected default/unclassified, got source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityImpactProfileSource != "default" || r.SecurityImpactProfile != "unclassified" {
+		t.Errorf("expected default/unclassified, got source=%s archetype=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 }
 
-func TestAssetValueResolution(t *testing.T) {
+func TestSIPOnlyTransport(t *testing.T) {
 	cfg := Default()
-	cfg.NameRules = []NameRule{{Namespace: "ops", Match: "batch-*", AssetValue: "Moderate"}}
-	cfg.NamespaceRules = []NamespaceRule{{Match: "shared-*", AssetValue: "H"}}
-
 	r := cfg.Score(Input{
-		CVSSVector: vecConfHi,
-		Labels:     map[string]string{"vdr.fedramp.io/asset-value": "Low"},
-	})
-	if r.Archetype != "asset-value-low" || r.ArchetypeSource != "assetValueLabel" || r.CR != "L" || r.IR != "L" || r.AR != "L" {
-		t.Fatalf("asset-value label result = %+v, want low/L/L/L from label", r)
-	}
-	if r.Tier != "N2" {
-		t.Errorf("low asset-value confidentiality Tier = %s, want N2", r.Tier)
-	}
-
-	r = cfg.Score(Input{
-		CVSSVector:      vecCIAHigh,
-		NamespaceLabels: map[string]string{"vdr.fedramp.io/asset-value": "medium"},
-	})
-	if r.Archetype != "asset-value-medium" || r.ArchetypeSource != "assetValueNamespaceLabel" || r.CR != "M" || r.IR != "M" || r.AR != "M" {
-		t.Fatalf("namespace asset-value result = %+v, want medium/M/M/M", r)
-	}
-
-	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "ops", WorkloadName: "batch-sync"})
-	if r.Archetype != "asset-value-medium" || r.ArchetypeSource != "assetValueNameRule" {
-		t.Errorf("asset-value nameRule result = %s/%s, want asset-value-medium/assetValueNameRule", r.Archetype, r.ArchetypeSource)
-	}
-
-	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "shared-prod", WorkloadName: "api"})
-	if r.Archetype != "asset-value-high" || r.ArchetypeSource != "assetValueNamespaceRule" || r.CR != "H" || r.IR != "H" || r.AR != "H" {
-		t.Errorf("asset-value namespaceRule result = %+v, want high/H/H/H", r)
-	}
-}
-
-func TestAssetArchetypeWinsOverAssetValue(t *testing.T) {
-	cfg := Default()
-	cfg.NameRules = []NameRule{{Namespace: "ops", Match: "api", Archetype: "data-sensitive", AssetValue: "Low"}}
-	r := cfg.Score(Input{
-		CVSSVector:   vecCIAHigh,
-		Namespace:    "ops",
-		WorkloadName: "api",
+		CVSSVector: vecCIAHigh,
 		Labels: map[string]string{
-			"vdr.fedramp.io/asset-archetype": "dev-test",
-			"vdr.fedramp.io/asset-value":     "High",
+			"vdr.fedramp.io/security-impact-profile": "cr-l_ir-l_ar-l",
+			"vdr.fedramp.io/asset-archetype":         "generic-high",
+			"vdr.fedramp.io/asset-value":             "High",
 		},
-		NamespaceLabels: map[string]string{"vdr.fedramp.io/asset-value": "Low"},
 	})
-	if r.Archetype != "dev-test" || r.ArchetypeSource != "label" || r.CR != "L" || r.IR != "L" || r.AR != "L" {
-		t.Fatalf("asset-archetype should win over asset-value: %+v", r)
+	if r.SecurityImpactProfile != "cr-l_ir-l_ar-l" || r.SecurityImpactProfileSource != "label" || r.CR != "L" || r.IR != "L" || r.AR != "L" {
+		t.Fatalf("SIP label should be the only transport: %+v", r)
 	}
 }
 
@@ -205,13 +167,13 @@ func TestAssetArchetypeWinsOverAssetValue(t *testing.T) {
 // classified by a namespace rule is scored on its merits (not floored to N5).
 func TestManagedNamespaceNoFalseN5(t *testing.T) {
 	cfg := Default()
-	cfg.NamespaceRules = []NamespaceRule{{Match: "kube-system", Archetype: "internal-tooling"}}
+	cfg.NamespaceRules = []NamespaceRule{{Match: "kube-system", SecurityImpactProfile: "internal-tooling"}}
 	got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "metrics-server-v1"})
 	if got.Tier == "N5" {
-		t.Errorf("managed-ns workload floored to N5; expected lower (got source=%s)", got.ArchetypeSource)
+		t.Errorf("managed-ns workload floored to N5; expected lower (got source=%s)", got.SecurityImpactProfileSource)
 	}
-	if got.ArchetypeSource != "namespaceRule" {
-		t.Errorf("ArchetypeSource = %s, want namespaceRule", got.ArchetypeSource)
+	if got.SecurityImpactProfileSource != "namespaceRule" {
+		t.Errorf("SecurityImpactProfileSource = %s, want namespaceRule", got.SecurityImpactProfileSource)
 	}
 }
 
@@ -223,11 +185,11 @@ defaults:
   multiAgency: false
 namespaceRules:
   - match: kube-system
-    archetype: internal-tooling
+    securityImpactProfile: internal-tooling
 nameRules:
   - namespace: kube-system
     match: "gke-metadata-server"
-    archetype: privileged-identity
+    securityImpactProfile: privileged-identity
 `
 	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -241,13 +203,13 @@ nameRules:
 		t.Error("expected built-in archetype catalog to survive merge")
 	}
 	// Label keys default survives.
-	if cfg.LabelKeys.Archetype != "vdr.fedramp.io/asset-archetype" {
-		t.Errorf("LabelKeys.Archetype = %s, want default", cfg.LabelKeys.Archetype)
+	if cfg.LabelKeys.SecurityImpactProfile != "vdr.fedramp.io/security-impact-profile" {
+		t.Errorf("LabelKeys.SecurityImpactProfile = %s, want default", cfg.LabelKeys.SecurityImpactProfile)
 	}
 	// File rules are applied.
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "gke-metadata-server"})
-	if r.Archetype != "privileged-identity" {
-		t.Errorf("Archetype = %s, want privileged-identity from nameRule", r.Archetype)
+	if r.SecurityImpactProfile != "privileged-identity" {
+		t.Errorf("Archetype = %s, want privileged-identity from nameRule", r.SecurityImpactProfile)
 	}
 }
 
@@ -285,7 +247,7 @@ func TestTechnicalImpactFloor(t *testing.T) {
 func TestTechnicalImpactRaisesTier(t *testing.T) {
 	cfg := Default()
 	weakRCE := "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-	base := Input{CVSSVector: weakRCE, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "data-sensitive"}}
+	base := Input{CVSSVector: weakRCE, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "data-sensitive"}}
 
 	if got := cfg.Score(base).Tier; got != "N3" {
 		t.Fatalf("baseline Tier = %s, want N3 (precondition)", got)
@@ -305,11 +267,11 @@ func TestDefaultArchetypeFallback(t *testing.T) {
 	cfg := Default()
 	// A noisy H/H/H cluster default archetype catches new/unclassified resources.
 	cfg.Archetypes["cluster-default"] = Archetype{Lens: "control", CR: "H", IR: "H", AR: "H"}
-	cfg.Defaults.Archetype = "cluster-default"
+	cfg.Defaults.SecurityImpactProfile = "cluster-default"
 
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "new-ns", WorkloadName: "thing"})
-	if r.ArchetypeSource != "default" || r.Archetype != "cluster-default" {
-		t.Fatalf("source=%s archetype=%s, want default/cluster-default", r.ArchetypeSource, r.Archetype)
+	if r.SecurityImpactProfileSource != "default" || r.SecurityImpactProfile != "cluster-default" {
+		t.Fatalf("source=%s archetype=%s, want default/cluster-default", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 	// H/H/H + C:H/I:H/A:H but single-agency (not forced multi) => N4, not the N5 fail-safe.
 	if r.Tier != "N4" {
@@ -328,11 +290,11 @@ func TestApplyClusterDefaultsEmbeddedDoc(t *testing.T) {
 archetypes:
   cluster-default: {lens: control, cr: H, ir: H, ar: H}
 defaults:
-  archetype: cluster-default
+  securityImpactProfile: cluster-default
 nameRules:
-  - {namespace: rally, match: postgres, archetype: data-backbone}
+  - {namespace: rally, match: postgres, securityImpactProfile: data-backbone}
 namespaceRules:
-  - {match: kube-system, archetype: internal-tooling}
+  - {match: kube-system, securityImpactProfile: internal-tooling}
 `,
 	}
 	if err := cfg.ApplyClusterDefaults(data); err != nil {
@@ -341,11 +303,11 @@ namespaceRules:
 	if cfg.Defaults.Class != "C" {
 		t.Errorf("Class = %s, want C (scalar override)", cfg.Defaults.Class)
 	}
-	if cfg.Defaults.Archetype != "cluster-default" {
-		t.Errorf("default archetype = %s, want cluster-default (from embedded doc)", cfg.Defaults.Archetype)
+	if cfg.Defaults.SecurityImpactProfile != "cluster-default" {
+		t.Errorf("default archetype = %s, want cluster-default (from embedded doc)", cfg.Defaults.SecurityImpactProfile)
 	}
-	if r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "postgres"}); r.Archetype != "data-backbone" || r.ArchetypeSource != "nameRule" {
-		t.Errorf("embedded nameRule not applied: %s/%s", r.Archetype, r.ArchetypeSource)
+	if r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "postgres"}); r.SecurityImpactProfile != "data-backbone" || r.SecurityImpactProfileSource != "nameRule" {
+		t.Errorf("embedded nameRule not applied: %s/%s", r.SecurityImpactProfile, r.SecurityImpactProfileSource)
 	}
 	if _, ok := cfg.Archetypes["data-sensitive"]; !ok {
 		t.Error("built-in archetype catalog should survive ConfigMap merge")
@@ -353,36 +315,23 @@ namespaceRules:
 
 	// An embedded doc referencing an unknown archetype is rejected.
 	bad := Default()
-	if err := bad.ApplyClusterDefaults(map[string]string{"scoring": "namespaceRules:\n  - {match: x, archetype: nope}\n"}); err == nil {
+	if err := bad.ApplyClusterDefaults(map[string]string{"scoring": "namespaceRules:\n  - {match: x, securityImpactProfile: nope}\n"}); err == nil {
 		t.Error("expected validate error for unknown archetype in ConfigMap doc")
 	}
 }
 
-func TestApplyClusterDefaultsAssetValue(t *testing.T) {
+func TestRetiredConfigTransportsAreRejected(t *testing.T) {
 	cfg := Default()
-	err := cfg.ApplyClusterDefaults(map[string]string{
-		"assetValue": "Medium",
-		"scoring.yaml": `
-nameRules:
-  - {namespace: jobs, match: nightly, assetValue: Low}
-namespaceRules:
-  - {match: shared-*, assetValue: High}
-`,
-	})
-	if err != nil {
-		t.Fatalf("ApplyClusterDefaults: %v", err)
-	}
-	if cfg.Defaults.AssetValue != "medium" {
-		t.Errorf("Defaults.AssetValue = %q, want medium", cfg.Defaults.AssetValue)
-	}
-	if r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "jobs", WorkloadName: "nightly"}); r.Archetype != "asset-value-low" || r.ArchetypeSource != "assetValueNameRule" {
-		t.Errorf("embedded assetValue nameRule not applied: %+v", r)
-	}
-	if r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "shared-a", WorkloadName: "api"}); r.Archetype != "asset-value-high" || r.ArchetypeSource != "assetValueNamespaceRule" {
-		t.Errorf("embedded assetValue namespaceRule not applied: %+v", r)
-	}
-	if r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "api"}); r.Archetype != "asset-value-medium" || r.ArchetypeSource != "assetValueDefault" {
-		t.Errorf("assetValue default not applied before built-in archetype: %+v", r)
+	for name, data := range map[string]map[string]string{
+		"scalar assetValue": {"assetValue": "Medium"},
+		"rule assetValue":   {"scoring.yaml": "nameRules:\n  - {match: api, assetValue: Low}\n"},
+		"rule archetype":    {"scoring.yaml": "nameRules:\n  - {match: api, archetype: generic-low}\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := cfg.ApplyClusterDefaults(data); err == nil {
+				t.Fatal("retired transport was accepted")
+			}
+		})
 	}
 }
 
@@ -395,7 +344,7 @@ func TestPlatformFoundationArchetype(t *testing.T) {
 	if a.CR != "L" || a.IR != "H" || a.AR != "H" {
 		t.Errorf("platform-foundation = %+v, want CR:L IR:H AR:H", a)
 	}
-	lbl := map[string]string{"vdr.fedramp.io/asset-archetype": "platform-foundation"}
+	lbl := map[string]string{"vdr.fedramp.io/security-impact-profile": "platform-foundation"}
 	// One A:H/AR:H alignment is Disruptive under the compound-impact boundary.
 	if got := cfg.Score(Input{CVSSVector: vecDoSHigh, Labels: lbl}).Tier; got != "N3" {
 		t.Errorf("A:H DoS Tier = %s, want N3", got)
@@ -492,7 +441,7 @@ func TestCalibratedImpactAnchors(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := cfg.Score(Input{CVSSVector: tc.vector, Labels: map[string]string{
-				"vdr.fedramp.io/asset-archetype": tc.archetype,
+				"vdr.fedramp.io/security-impact-profile": tc.archetype,
 			}})
 			if math.Abs(got.Severity-tc.wantS) > 1e-12 || got.Word != tc.wantWord || got.Tier != tc.wantTier {
 				t.Fatalf("Score() = S %.15f, %s/%s; want %.15f, %s/%s", got.Severity, got.Word, got.Tier, tc.wantS, tc.wantWord, tc.wantTier)
@@ -539,7 +488,7 @@ func TestClusterConfigMapCannotSetThresholds(t *testing.T) {
 	// A ConfigMap embedded doc that tries to lower the Debilitating bar must be ignored.
 	err := cfg.ApplyClusterDefaults(map[string]string{
 		"class":        "C",
-		"scoring.yaml": "wordThresholds:\n  debilitating: 0.50\nnameRules:\n  - {namespace: kube-system, match: \"calico*\", archetype: orchestrator}\n",
+		"scoring.yaml": "wordThresholds:\n  debilitating: 0.50\nnameRules:\n  - {namespace: kube-system, match: \"calico*\", securityImpactProfile: orchestrator}\n",
 	})
 	if err != nil {
 		t.Fatalf("ApplyClusterDefaults: %v", err)
@@ -551,14 +500,14 @@ func TestClusterConfigMapCannotSetThresholds(t *testing.T) {
 	if cfg.Defaults.Class != "C" {
 		t.Errorf("Class = %s, want C (other ConfigMap keys still apply)", cfg.Defaults.Class)
 	}
-	if got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "calico-node"}).Archetype; got != "orchestrator" {
+	if got := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "kube-system", WorkloadName: "calico-node"}).SecurityImpactProfile; got != "orchestrator" {
 		t.Errorf("nameRule from ConfigMap not applied: archetype=%s", got)
 	}
 }
 
 func TestValidateRejectsUnknownDefaultArchetype(t *testing.T) {
 	cfg := Default()
-	cfg.Defaults.Archetype = "does-not-exist"
+	cfg.Defaults.SecurityImpactProfile = "does-not-exist"
 	if err := cfg.validate(); err == nil {
 		t.Error("expected error for unknown defaults.archetype")
 	}
@@ -571,7 +520,7 @@ func TestValidateRejectsUnknownDefaultArchetype(t *testing.T) {
 func TestLoadRejectsUnknownArchetype(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "bad.yaml")
-	if err := os.WriteFile(file, []byte("namespaceRules:\n  - match: foo\n    archetype: nope\n"), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte("namespaceRules:\n  - match: foo\n    securityImpactProfile: nope\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(file); err == nil {
@@ -581,62 +530,62 @@ func TestLoadRejectsUnknownArchetype(t *testing.T) {
 
 func TestKindRules(t *testing.T) {
 	cfg := Default()
-	cfg.NameRules = []NameRule{{Namespace: "rally", Match: "special-job", Archetype: "data-backbone"}}
-	cfg.KindRules = []KindRule{{Kind: "Job", Archetype: "internal-tooling"}}
-	cfg.NamespaceRules = []NamespaceRule{{Match: "rally", Archetype: "app-tier"}}
+	cfg.NameRules = []NameRule{{Namespace: "rally", Match: "special-job", SecurityImpactProfile: "data-backbone"}}
+	cfg.KindRules = []KindRule{{Kind: "Job", SecurityImpactProfile: "internal-tooling"}}
+	cfg.NamespaceRules = []NamespaceRule{{Match: "rally", SecurityImpactProfile: "app-tier"}}
 
 	// A standalone Job with no label or name rule gets the kind rule, which wins
 	// over the namespace rule.
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "postgres-admin-migrations", WorkloadKind: "Job"})
-	if r.ArchetypeSource != "kindRule" || r.Archetype != "internal-tooling" {
-		t.Errorf("kindRule match failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityImpactProfileSource != "kindRule" || r.SecurityImpactProfile != "internal-tooling" {
+		t.Errorf("kindRule match failed: source=%s archetype=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 
 	// A name rule still wins over the kind rule.
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "special-job", WorkloadKind: "Job"})
-	if r.ArchetypeSource != "nameRule" || r.Archetype != "data-backbone" {
-		t.Errorf("nameRule precedence over kindRule failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityImpactProfileSource != "nameRule" || r.SecurityImpactProfile != "data-backbone" {
+		t.Errorf("nameRule precedence over kindRule failed: source=%s archetype=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 
 	// Other kinds fall through to the namespace rule.
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "web", WorkloadKind: "Deployment"})
-	if r.ArchetypeSource != "namespaceRule" || r.Archetype != "app-tier" {
-		t.Errorf("non-matching kind fallthrough failed: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityImpactProfileSource != "namespaceRule" || r.SecurityImpactProfile != "app-tier" {
+		t.Errorf("non-matching kind fallthrough failed: source=%s archetype=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 
 	// An empty kind never matches a kind rule.
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "thing"})
-	if r.ArchetypeSource != "default" || r.Archetype != "unclassified" {
-		t.Errorf("empty kind should skip kind rules: source=%s archetype=%s", r.ArchetypeSource, r.Archetype)
+	if r.SecurityImpactProfileSource != "default" || r.SecurityImpactProfile != "unclassified" {
+		t.Errorf("empty kind should skip kind rules: source=%s archetype=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
 	}
 }
 
 func TestKindRuleScoping(t *testing.T) {
 	cfg := Default()
-	cfg.KindRules = []KindRule{{Kind: "Job", Namespace: "rally", Match: "*-generate-secrets", AssetValue: "Low"}}
+	cfg.KindRules = []KindRule{{Kind: "Job", Namespace: "rally", Match: "*-generate-secrets", SecurityImpactProfile: "cr-l_ir-l_ar-l"}}
 
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "rally", WorkloadName: "kafka-generate-secrets", WorkloadKind: "Job"})
-	if r.ArchetypeSource != "assetValueKindRule" || r.CR != "L" || r.IR != "L" || r.AR != "L" {
-		t.Errorf("scoped assetValue kindRule failed: source=%s CR/IR/AR=%s/%s/%s", r.ArchetypeSource, r.CR, r.IR, r.AR)
+	if r.SecurityImpactProfileSource != "kindRule" || r.CR != "L" || r.IR != "L" || r.AR != "L" {
+		t.Errorf("scoped SIP kindRule failed: source=%s CR/IR/AR=%s/%s/%s", r.SecurityImpactProfileSource, r.CR, r.IR, r.AR)
 	}
 
 	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "other", WorkloadName: "kafka-generate-secrets", WorkloadKind: "Job"})
-	if r.ArchetypeSource == "assetValueKindRule" {
-		t.Errorf("kindRule namespace scope not honored: source=%s", r.ArchetypeSource)
+	if r.SecurityImpactProfileSource == "kindRule" {
+		t.Errorf("kindRule namespace scope not honored: source=%s", r.SecurityImpactProfileSource)
 	}
 }
 
 func TestKindRuleValidation(t *testing.T) {
 	cfg := Default()
-	cfg.KindRules = []KindRule{{Archetype: "internal-tooling"}}
+	cfg.KindRules = []KindRule{{SecurityImpactProfile: "internal-tooling"}}
 	if err := cfg.validate(); err == nil {
 		t.Error("expected error for kindRule without kind")
 	}
 	cfg.KindRules = []KindRule{{Kind: "Job"}}
 	if err := cfg.validate(); err == nil {
-		t.Error("expected error for kindRule without archetype or assetValue")
+		t.Error("expected error for kindRule without securityImpactProfile")
 	}
-	cfg.KindRules = []KindRule{{Kind: "Job", Archetype: "not-a-real-archetype"}}
+	cfg.KindRules = []KindRule{{Kind: "Job", SecurityImpactProfile: "not-a-real-archetype"}}
 	if err := cfg.validate(); err == nil {
 		t.Error("expected error for kindRule with unknown archetype")
 	}
@@ -705,11 +654,11 @@ func TestClassAndMultiAgencySources(t *testing.T) {
 
 func TestFailsafeForcesMultiAgencySource(t *testing.T) {
 	cfg := Default()
-	cfg.Defaults.Archetype = "" // no default archetype => fail-safe path
+	cfg.Defaults.SecurityImpactProfile = "" // no default archetype => fail-safe path
 
 	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "x", WorkloadName: "y"})
-	if r.ArchetypeSource != "failsafe" {
-		t.Fatalf("ArchetypeSource = %s, want failsafe", r.ArchetypeSource)
+	if r.SecurityImpactProfileSource != "failsafe" {
+		t.Fatalf("SecurityImpactProfileSource = %s, want failsafe", r.SecurityImpactProfileSource)
 	}
 	if !r.MultiAgency || r.MultiAgencySource != "failsafe" {
 		t.Errorf("MultiAgency/Source = %v/%s, want true/failsafe (forced by fail-safe)", r.MultiAgency, r.MultiAgencySource)

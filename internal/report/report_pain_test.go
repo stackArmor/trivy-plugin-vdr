@@ -18,7 +18,7 @@ func labeledInventory(ns, name, archetype string) (*model.Inventory, model.Resou
 	container.ContainerType = "container"
 	labels := map[string]string{}
 	if archetype != "" {
-		labels["vdr.fedramp.io/asset-archetype"] = archetype
+		labels["vdr.fedramp.io/security-impact-profile"] = archetype
 	}
 	inv := &model.Inventory{
 		ContextName: "test",
@@ -55,8 +55,8 @@ func TestBuildAssignsPainFromLabel(t *testing.T) {
 	if got.Findings[0].Pain.Tier != "N3" {
 		t.Errorf("Tier = %s, want N3", got.Findings[0].Pain.Tier)
 	}
-	if got.Findings[0].Pain.ArchetypeSource != "label" {
-		t.Errorf("ArchetypeSource = %s, want label", got.Findings[0].Pain.ArchetypeSource)
+	if got.Findings[0].Pain.SecurityImpactProfileSource != "label" {
+		t.Errorf("SecurityImpactProfileSource = %s, want label", got.Findings[0].Pain.SecurityImpactProfileSource)
 	}
 
 	// Resources view scopes PAIN to the single resource as well.
@@ -86,8 +86,8 @@ func TestBuildReportsOptionalSecurityRequirementsCeiling(t *testing.T) {
 	if pain == nil {
 		t.Fatal("Pain = nil")
 	}
-	if pain.Archetype != "data-sensitive" ||
-		pain.ArchetypeRequirements != "CR:H/IR:H/AR:M" ||
+	if pain.SecurityImpactProfile != "data-sensitive" ||
+		pain.SecurityImpactProfileRequirements != "CR:H/IR:H/AR:M" ||
 		pain.SecurityRequirementsCeiling != "CR:M/IR:L/AR:H" ||
 		pain.SecurityRequirementsCeilingSource != "runtime" ||
 		!pain.Recalculated ||
@@ -102,8 +102,8 @@ func TestBuildReportsOptionalSecurityRequirementsCeiling(t *testing.T) {
 		t.Fatalf("RenderJSON: %v", err)
 	}
 	for _, want := range []string{
-		`"archetype": "data-sensitive"`,
-		`"archetypeRequirements": "CR:H/IR:H/AR:M"`,
+		`"securityImpactProfile": "data-sensitive"`,
+		`"securityImpactProfileRequirements": "CR:H/IR:H/AR:M"`,
 		`"securityRequirementsCeiling": "CR:M/IR:L/AR:H"`,
 		`"securityRequirementsCeilingSource": "runtime"`,
 		`"recalculated": true`,
@@ -128,8 +128,8 @@ func TestBuildPainWorstAcrossAffected(t *testing.T) {
 
 	inv := &model.Inventory{
 		Resources: []model.ResourceInventory{
-			{Resource: privilegedWorkload, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "privileged-identity"}, Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}}},
-			{Resource: devWorkload, Labels: map[string]string{"vdr.fedramp.io/asset-archetype": "dev-test"}, Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}}},
+			{Resource: privilegedWorkload, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "privileged-identity"}, Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}}},
+			{Resource: devWorkload, Labels: map[string]string{"vdr.fedramp.io/security-impact-profile": "dev-test"}, Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}}},
 		},
 		Images: []model.ImageInventory{{ImageRef: "example/app:v1", Resources: []model.ResourceRef{privilegedRef, devRef}}},
 	}
@@ -188,17 +188,17 @@ func TestBuildCloudRunResourceLabelsOverrideProjectLabels(t *testing.T) {
 		ContextName: "cloudrun/p",
 		Namespaces: map[string]map[string]string{
 			"cloudrun/p": {
-				"vdr.fedramp.io/asset-archetype": "data-sensitive",
-				"vdr.fedramp.io/multi-agency":    "true",
-				"vdr.fedramp.io/class":           "D",
+				"vdr.fedramp.io/security-impact-profile": "data-sensitive",
+				"vdr.fedramp.io/multi-agency":            "true",
+				"vdr.fedramp.io/class":                   "D",
 			},
 		},
 		Resources: []model.ResourceInventory{{
 			Resource: workload,
 			Labels: map[string]string{
-				"vdr.fedramp.io/asset-archetype": "dev-test",
-				"vdr.fedramp.io/multi-agency":    "false",
-				"vdr.fedramp.io/class":           "B",
+				"vdr.fedramp.io/security-impact-profile": "dev-test",
+				"vdr.fedramp.io/multi-agency":            "false",
+				"vdr.fedramp.io/class":                   "B",
 			},
 			Images: []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/app:v1"}},
 		}},
@@ -216,7 +216,7 @@ func TestBuildCloudRunResourceLabelsOverrideProjectLabels(t *testing.T) {
 	if pain == nil || rem == nil {
 		t.Fatalf("expected PAIN/remediation, got pain=%#v remediation=%#v", pain, rem)
 	}
-	if pain.Archetype != "dev-test" || pain.ArchetypeSource != "label" || pain.MultiAgency {
+	if pain.SecurityImpactProfile != "dev-test" || pain.SecurityImpactProfileSource != "label" || pain.MultiAgency {
 		t.Fatalf("PAIN = %#v, want resource labels dev-test/single-agency", pain)
 	}
 	if rem.Class != "B" {
@@ -240,9 +240,9 @@ func TestBuildCloudRunUsesProjectLabelsAsFallback(t *testing.T) {
 		ContextName: "cloudrun/p",
 		Namespaces: map[string]map[string]string{
 			"cloudrun/p": {
-				"vdr.fedramp.io/asset-archetype": "data-sensitive",
-				"vdr.fedramp.io/multi-agency":    "true",
-				"vdr.fedramp.io/class":           "D",
+				"vdr.fedramp.io/security-impact-profile": "data-sensitive",
+				"vdr.fedramp.io/multi-agency":            "true",
+				"vdr.fedramp.io/class":                   "D",
 			},
 		},
 		Resources: []model.ResourceInventory{{
@@ -263,7 +263,7 @@ func TestBuildCloudRunUsesProjectLabelsAsFallback(t *testing.T) {
 	if pain == nil || rem == nil {
 		t.Fatalf("expected PAIN/remediation, got pain=%#v remediation=%#v", pain, rem)
 	}
-	if pain.Archetype != "data-sensitive" || pain.ArchetypeSource != "namespaceLabel" || !pain.MultiAgency {
+	if pain.SecurityImpactProfile != "data-sensitive" || pain.SecurityImpactProfileSource != "namespaceLabel" || !pain.MultiAgency {
 		t.Fatalf("PAIN = %#v, want project fallback labels data-sensitive/multi-agency", pain)
 	}
 	if rem.Class != "D" {
@@ -277,17 +277,17 @@ func TestBuildManagedNamespaceRuleNoFalseN5(t *testing.T) {
 	finding.Severity = "HIGH"
 
 	sc := scoring.Default()
-	sc.NamespaceRules = []scoring.NamespaceRule{{Match: "kube-system", Archetype: "internal-tooling"}}
+	sc.NamespaceRules = []scoring.NamespaceRule{{Match: "kube-system", SecurityImpactProfile: "internal-tooling"}}
 
 	got := Build(inv, []model.Finding{finding}, nil, Options{GeneratedAt: fixedTime(), View: ViewFindings, Scoring: sc})
 	if len(got.Findings) != 1 || got.Findings[0].Pain == nil {
 		t.Fatalf("expected one finding with PAIN, got %#v", got.Findings)
 	}
 	if got.Findings[0].Pain.Tier == "N5" {
-		t.Errorf("managed-ns workload floored to N5; want lower (source=%s)", got.Findings[0].Pain.ArchetypeSource)
+		t.Errorf("managed-ns workload floored to N5; want lower (source=%s)", got.Findings[0].Pain.SecurityImpactProfileSource)
 	}
-	if got.Findings[0].Pain.ArchetypeSource != "namespaceRule" {
-		t.Errorf("ArchetypeSource = %s, want namespaceRule", got.Findings[0].Pain.ArchetypeSource)
+	if got.Findings[0].Pain.SecurityImpactProfileSource != "namespaceRule" {
+		t.Errorf("SecurityImpactProfileSource = %s, want namespaceRule", got.Findings[0].Pain.SecurityImpactProfileSource)
 	}
 }
 
@@ -328,7 +328,7 @@ func TestBuildUntaggedUsesDefaultArchetype(t *testing.T) {
 	if got.Findings[0].Pain.Tier != "N4" {
 		t.Errorf("untagged Tier = %s, want N4 (built-in default archetype)", got.Findings[0].Pain.Tier)
 	}
-	if got.Findings[0].Pain.ArchetypeSource != "default" {
-		t.Errorf("ArchetypeSource = %s, want default", got.Findings[0].Pain.ArchetypeSource)
+	if got.Findings[0].Pain.SecurityImpactProfileSource != "default" {
+		t.Errorf("SecurityImpactProfileSource = %s, want default", got.Findings[0].Pain.SecurityImpactProfileSource)
 	}
 }

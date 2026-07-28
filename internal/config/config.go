@@ -213,7 +213,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.HTMLOutput, "html-output", cfg.HTMLOutput, "write optional standalone HTML report to file")
 	fs.StringVar(&cfg.HTMLTemplate, "html-template", cfg.HTMLTemplate, "custom HTML report template path")
 	fs.StringVar(&cfg.ScoringConfig, "scoring-config", cfg.ScoringConfig, "optional FedRAMP PAIN scoring config (YAML or JSON); built-in defaults are used when omitted")
-	fs.StringVar(&cfg.SecurityRequirementsCeiling, "security-requirements-ceiling", cfg.SecurityRequirementsCeiling, "optional system-and-agency CR/IR/AR ceiling for archetype-based PAIN scoring (for example cr-m_ir-m_ar-l)")
+	fs.StringVar(&cfg.SecurityRequirementsCeiling, "security-requirements-ceiling", cfg.SecurityRequirementsCeiling, "optional system-and-agency CR/IR/AR ceiling for security-impact-profile PAIN scoring (for example cr-m_ir-m_ar-l)")
 	fs.StringVar(&cfg.MinSeverity, "min-severity", cfg.MinSeverity, "minimum severity")
 	fs.StringVar(&minEPSS, "min-epss", minEPSS, "minimum EPSS score from 0 to 1")
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")

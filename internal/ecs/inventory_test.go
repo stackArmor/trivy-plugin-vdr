@@ -17,7 +17,7 @@ func TestInventoryCollectsTaskDefinitions(t *testing.T) {
 				Family:   "api",
 				Revision: 7,
 				Status:   "ACTIVE",
-				Tags:     map[string]string{"vdr.fedramp.io/asset-value": "High"},
+				Tags:     map[string]string{"vdr.fedramp.io/security-impact-profile": "cr-h_ir-h_ar-h"},
 				Containers: []ContainerDefinition{{
 					Name:                           "api",
 					Image:                          "123.dkr.ecr.us-gov-west-1.amazonaws.com/api:1",
@@ -40,7 +40,7 @@ func TestInventoryCollectsTaskDefinitions(t *testing.T) {
 	if len(got.Images) != 1 {
 		t.Fatalf("images = %d, want 1: %#v", len(got.Images), got.Images)
 	}
-	if !reflect.DeepEqual(got.Resources[0].Labels, map[string]string{"vdr.fedramp.io/asset-value": "High"}) {
+	if !reflect.DeepEqual(got.Resources[0].Labels, map[string]string{"vdr.fedramp.io/security-impact-profile": "cr-h_ir-h_ar-h"}) {
 		t.Fatalf("resource labels = %#v, want task definition tags", got.Resources[0].Labels)
 	}
 

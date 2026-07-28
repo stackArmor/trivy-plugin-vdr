@@ -287,7 +287,7 @@ func TestBuildResourceViewIncludesCleanInventoryResources(t *testing.T) {
 
 func TestBuildScanReachabilityReportSuppressesScoringAndEnrichmentButKeepsExposureAndClassification(t *testing.T) {
 	inv := sampleInventory()
-	inv.Resources[0].Labels = map[string]string{"vdr.fedramp.io/asset-archetype": "dev-test"}
+	inv.Resources[0].Labels = map[string]string{"vdr.fedramp.io/security-impact-profile": "dev-test"}
 	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
 	finding.Suppressed = true
 	finding.Suppression = &model.Suppression{Source: "vex", Status: "affected"}
@@ -328,7 +328,7 @@ func TestBuildScanReachabilityReportSuppressesScoringAndEnrichmentButKeepsExposu
 	if affected.Classification == nil {
 		t.Fatalf("Classification missing from affected resource: %#v", affected)
 	}
-	if affected.Classification.Class != "B" || affected.Classification.Archetype != "dev-test" || affected.Classification.ArchetypeSource != "label" {
+	if affected.Classification.Class != "B" || affected.Classification.SecurityImpactProfile != "dev-test" || affected.Classification.SecurityImpactProfileSource != "label" {
 		t.Fatalf("Classification = %#v, want class B dev-test from label", affected.Classification)
 	}
 
@@ -337,7 +337,7 @@ func TestBuildScanReachabilityReportSuppressesScoringAndEnrichmentButKeepsExposu
 		t.Fatalf("RenderJSON returned error: %v", err)
 	}
 	output := buf.String()
-	for _, want := range []string{`"exposure"`, `"internetAccessible"`, `"classification"`, `"class"`, `"archetype"`} {
+	for _, want := range []string{`"exposure"`, `"internetAccessible"`, `"classification"`, `"class"`, `"securityImpactProfile"`} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("JSON output missing %s:\n%s", want, output)
 		}
@@ -510,7 +510,7 @@ func TestBuildSummaryCountsFindingsWithSpecificCWE(t *testing.T) {
 }
 
 func TestRenderClassificationOnlyTableOmitsScoringAndEnrichmentColumns(t *testing.T) {
-	classification := &model.AssetClassification{Class: "B", Archetype: "dev-test", ArchetypeSource: "label"}
+	classification := &model.AssetClassification{Class: "B", SecurityImpactProfile: "dev-test", SecurityImpactProfileSource: "label"}
 	report := model.Report{
 		ClassificationOnly: true,
 		Findings: []model.Finding{{
@@ -536,7 +536,7 @@ func TestRenderClassificationOnlyTableOmitsScoringAndEnrichmentColumns(t *testin
 	}
 
 	output := buf.String()
-	for _, want := range []string{"CLASS", "ASSET ARCHETYPE", "EXPOSED", "B", "dev-test (label)", "yes"} {
+	for _, want := range []string{"CLASS", "SECURITY-IMPACT PROFILE", "EXPOSED", "B", "dev-test (label)", "yes"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("table output missing %q:\n%s", want, output)
 		}

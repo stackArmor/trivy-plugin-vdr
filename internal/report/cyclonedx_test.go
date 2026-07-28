@@ -87,8 +87,8 @@ func sampleCycloneDXReport() model.Report {
 						Pain: &model.Pain{
 							Tier:                              "N4",
 							Word:                              "Debilitating",
-							Archetype:                         "web-service",
-							ArchetypeRequirements:             "CR:H/IR:H/AR:M",
+							SecurityImpactProfile:             "web-service",
+							SecurityImpactProfileRequirements: "CR:H/IR:H/AR:M",
 							SecurityRequirementsCeiling:       "CR:M/IR:M/AR:L",
 							SecurityRequirementsCeilingSource: "configMap",
 							Recalculated:                      true,
@@ -111,7 +111,7 @@ func sampleCycloneDXReport() model.Report {
 					Status:        "not_affected",
 					Justification: "code_not_reachable",
 				},
-				WouldHaveBeenPain:        &model.Pain{Tier: "N5", Word: "Debilitating", Archetype: "web-service"},
+				WouldHaveBeenPain:        &model.Pain{Tier: "N5", Word: "Debilitating", SecurityImpactProfile: "web-service"},
 				WouldHaveBeenRemediation: &model.Remediation{Column: "LEV+IRV", LEV: true, IRV: true, DeadlineDays: 1},
 				Affected: []model.Affected{{
 					Resource: model.ResourceRef{
@@ -226,8 +226,8 @@ func TestToCycloneDXVDRProperties(t *testing.T) {
 	vulnProps := propMap(active.Properties)
 	wantVuln := map[string]string{
 		"vdr:pain":                                     "N4",
-		"vdr:archetype":                                "web-service",
-		"vdr:archetypeRequirements":                    "CR:H/IR:H/AR:M",
+		"vdr:securityImpactProfile":                    "web-service",
+		"vdr:securityImpactProfileRequirements":        "CR:H/IR:H/AR:M",
 		"vdr:securityRequirementsCeiling":              "CR:M/IR:M/AR:L",
 		"vdr:securityRequirementsCeilingSource":        "configMap",
 		"vdr:painRecalculated":                         "true",

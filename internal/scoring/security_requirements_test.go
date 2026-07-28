@@ -55,20 +55,20 @@ func TestOptionalCeilingRecalculatesArchetypeScore(t *testing.T) {
 	input := Input{
 		CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 		Labels: map[string]string{
-			"vdr.fedramp.io/asset-archetype": "data-sensitive",
+			"vdr.fedramp.io/security-impact-profile": "data-sensitive",
 		},
 	}
 
 	uncapped := cfg.Score(input)
-	if uncapped.Archetype != "data-sensitive" ||
+	if uncapped.SecurityImpactProfile != "data-sensitive" ||
 		uncapped.CR != "H" ||
 		uncapped.IR != "H" ||
 		uncapped.AR != "M" {
-		t.Fatalf("uncapped archetype result = %+v", uncapped)
+		t.Fatalf("uncapped profile result = %+v", uncapped)
 	}
 	if uncapped.SecurityRequirementsCeiling != "" ||
 		uncapped.SecurityRequirementsCeilingSource != "" ||
-		uncapped.ArchetypeRequirements != "" ||
+		uncapped.SecurityImpactProfileRequirements != "" ||
 		uncapped.Recalculated {
 		t.Fatalf("absent ceiling must be silent: %+v", uncapped)
 	}
@@ -79,16 +79,16 @@ func TestOptionalCeilingRecalculatesArchetypeScore(t *testing.T) {
 		t.Fatalf("ApplyClusterDefaults: %v", err)
 	}
 	capped := cfg.Score(input)
-	if capped.Archetype != "data-sensitive" ||
-		capped.ArchetypeSource != "label" ||
-		capped.ArchetypeRequirements != "CR:H/IR:H/AR:M" ||
+	if capped.SecurityImpactProfile != "data-sensitive" ||
+		capped.SecurityImpactProfileSource != "label" ||
+		capped.SecurityImpactProfileRequirements != "CR:H/IR:H/AR:M" ||
 		capped.SecurityRequirementsCeiling != "CR:M/IR:L/AR:H" ||
 		capped.SecurityRequirementsCeilingSource != "configMap" ||
 		!capped.Recalculated ||
 		capped.CR != "M" ||
 		capped.IR != "L" ||
 		capped.AR != "M" {
-		t.Fatalf("ConfigMap-capped archetype result = %+v", capped)
+		t.Fatalf("ConfigMap-capped profile result = %+v", capped)
 	}
 
 	if err := cfg.SetRuntimeSecurityRequirementsCeiling("CR:H/IR:M/AR:L"); err != nil {
@@ -101,7 +101,7 @@ func TestOptionalCeilingRecalculatesArchetypeScore(t *testing.T) {
 		runtime.CR != "H" ||
 		runtime.IR != "M" ||
 		runtime.AR != "L" {
-		t.Fatalf("runtime-capped archetype result = %+v", runtime)
+		t.Fatalf("runtime-capped profile result = %+v", runtime)
 	}
 }
 
