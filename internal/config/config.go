@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	SourceK8s      = "k8s"
-	SourceCloudRun = "cloudrun"
-	SourceECS      = "ecs"
-	SourceImage    = "image"
-	SourceHelm     = "helm"
+	SourceK8s           = "k8s"
+	SourceK8sCompliance = "k8s-compliance"
+	SourceCloudRun      = "cloudrun"
+	SourceECS           = "ecs"
+	SourceImage         = "image"
+	SourceHelm          = "helm"
 
 	FormatJSON      = "json"
 	FormatTable     = "table"
@@ -77,6 +78,7 @@ type Config struct {
 	MinEPSS                      float64
 	SkipEnrichment               bool
 	RefreshEnrichment            bool
+	IncludeChainTaxonomy         bool
 	SkipExposure                 bool
 	ReachabilityOnly             bool
 	ScanReachabilityOnly         bool
@@ -218,6 +220,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&minEPSS, "min-epss", minEPSS, "minimum EPSS score from 0 to 1")
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")
 	fs.BoolVar(&cfg.RefreshEnrichment, "refresh-enrichment", cfg.RefreshEnrichment, "force EPSS and Vulnrichment enrichment refresh")
+	fs.BoolVar(&cfg.IncludeChainTaxonomy, "include-chain-taxonomy", cfg.IncludeChainTaxonomy, "include optional embedded CAPEC/ATT&CK taxonomy evidence and transition candidates")
 	fs.BoolVar(&cfg.SkipExposure, "skip-exposure", cfg.SkipExposure, "skip exposure analysis")
 	fs.BoolVar(&cfg.ReachabilityOnly, "reachability-only", cfg.ReachabilityOnly, "collect internet reachability metadata only and skip Trivy image scans")
 	fs.BoolVar(&cfg.ScanReachabilityOnly, "scan-reachability-only", cfg.ScanReachabilityOnly, "scan images and include internet reachability plus asset classification, without EPSS, Vulnrichment, PAIN, or remediation scoring output")
@@ -253,10 +256,10 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	source := fs.Arg(0)
 	cfg.Source = source
 	if source == "" {
-		return Config{}, errors.New("source is required; expected one of: k8s, cloudrun, ecs, image, helm")
+		return Config{}, errors.New("source is required; expected one of: k8s, k8s-compliance, cloudrun, ecs, image, helm")
 	}
-	if source != SourceK8s && source != SourceCloudRun && source != SourceECS && source != SourceImage && source != SourceHelm {
-		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, cloudrun, ecs, image, helm", source)
+	if source != SourceK8s && source != SourceK8sCompliance && source != SourceCloudRun && source != SourceECS && source != SourceImage && source != SourceHelm {
+		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, k8s-compliance, cloudrun, ecs, image, helm", source)
 	}
 	helpSource = source
 
@@ -289,6 +292,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	htmlOutputSet := false
 	htmlTemplateSet := false
 	minEPSSSet := false
+	formatSet := false
+	complianceUnsupportedFlag := ""
 	helmSpecificFlag := ""
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -308,8 +313,13 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			htmlTemplateSet = true
 		case "min-epss":
 			minEPSSSet = true
+		case "format", "f":
+			formatSet = true
 		case "values", "release-name", "chart-version", "repo", "ingress-chart", "ingress-chart-version", "ingress-repo", "ingress-values", "ingress-release-name", "ingress-namespace", "config-map", "kube-version", "api-versions", "include-crds":
 			helmSpecificFlag = f.Name
+		}
+		if source == SourceK8sCompliance && !complianceFlagAllowed(f.Name) && complianceUnsupportedFlag == "" {
+			complianceUnsupportedFlag = f.Name
 		}
 	})
 
@@ -335,16 +345,30 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	cfg.ValuesFiles = []string(valuesFiles)
 	cfg.IngressValuesFiles = []string(ingressValuesFiles)
 	cfg.APIVersions = []string(apiVersions)
+	if source == SourceK8sCompliance && !formatSet {
+		cfg.Format = FormatTable
+	}
 	cfg.Format = strings.ToLower(strings.TrimSpace(cfg.Format))
 	cfg.View = strings.ToLower(strings.TrimSpace(cfg.View))
 	cfg.CacheCleanup = strings.ToLower(strings.TrimSpace(cfg.CacheCleanup))
 	cfg.MinSeverity = strings.ToUpper(strings.TrimSpace(cfg.MinSeverity))
+	if source == SourceK8sCompliance {
+		if complianceUnsupportedFlag != "" {
+			return Config{}, fmt.Errorf("--%s is not supported for source k8s-compliance", complianceUnsupportedFlag)
+		}
+		if cfg.Format == FormatCycloneDX {
+			return Config{}, errors.New("--format cyclonedx is not supported for source k8s-compliance; use table or json")
+		}
+	}
 	if cfg.ReachabilityOnly {
 		if cfg.ScanReachabilityOnly {
 			return Config{}, errors.New("--reachability-only cannot be used with --scan-reachability-only")
 		}
 		if cfg.SkipExposure {
 			return Config{}, errors.New("--reachability-only cannot be used with --skip-exposure")
+		}
+		if cfg.IncludeChainTaxonomy {
+			return Config{}, errors.New("--reachability-only cannot be used with --include-chain-taxonomy")
 		}
 		if cfg.Source == SourceImage {
 			return Config{}, errors.New("--reachability-only is only valid for sources k8s, cloudrun, and ecs, not image")
@@ -366,6 +390,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		}
 		if minEPSSSet {
 			return Config{}, errors.New("--scan-reachability-only cannot be used with --min-epss")
+		}
+		if cfg.IncludeChainTaxonomy {
+			return Config{}, errors.New("--scan-reachability-only cannot be used with --include-chain-taxonomy")
 		}
 	}
 	if cfg.Source == SourceCloudRun {
@@ -556,6 +583,23 @@ func validateCacheCleanup(value string) error {
 		return nil
 	default:
 		return fmt.Errorf("invalid cache-cleanup %q: must be auto, always, or never", value)
+	}
+}
+
+func complianceFlagAllowed(name string) bool {
+	switch name {
+	case "namespace", "n",
+		"all-namespaces",
+		"format", "f",
+		"output", "o",
+		"cache-dir",
+		"timeout", "t",
+		"min-severity",
+		"quiet", "q",
+		"debug":
+		return true
+	default:
+		return false
 	}
 }
 

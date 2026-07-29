@@ -42,7 +42,8 @@ Usage:
   vdr enrich-report --input REPORT.json [--output ENRICHED.json]
 
 Sources:
-  k8s       Scan workloads in the current Kubernetes context
+  k8s       Scan workloads and container vulnerabilities in the current Kubernetes context
+  k8s-compliance  Scan Kubernetes resources with Trivy's built-in compliance rules
   cloudrun  Scan Cloud Run services and jobs in a Google Cloud project
   ecs       Scan active AWS ECS task definitions
   image     Scan one or more container image references
@@ -54,6 +55,8 @@ Post-processing:
 Examples:
   vdr k8s -n default --format table
   vdr k8s --all-namespaces --min-severity HIGH --output vdr-k8s.json
+  vdr k8s-compliance -n default
+  vdr k8s-compliance --all-namespaces --format json --output compliance.json
   vdr cloudrun --project my-project --region us-east4 --reachability-only
   vdr ecs --region us-east-1 --region us-west-2 --output vdr-ecs.json
   vdr image nginx:1.25 ghcr.io/acme/api:v2
@@ -73,6 +76,8 @@ func sourceDescription(source string) string {
 	switch source {
 	case SourceK8s:
 		return "Inventory and scan workloads from the current Kubernetes context."
+	case SourceK8sCompliance:
+		return "Scan Kubernetes resource definitions with Trivy's built-in misconfiguration and RBAC rules."
 	case SourceCloudRun:
 		return "Inventory and scan Cloud Run services and jobs in selected regions."
 	case SourceECS:
@@ -88,6 +93,8 @@ func sourceDescription(source string) string {
 
 func sourceUsage(source string) string {
 	switch source {
+	case SourceK8sCompliance:
+		return "vdr k8s-compliance [flags]"
 	case SourceCloudRun:
 		return "vdr cloudrun --project PROJECT --region REGION [flags]"
 	case SourceECS:
@@ -107,6 +114,10 @@ func sourceExamples(source string) string {
 		return `  vdr k8s -n default --format table
   vdr k8s --all-namespaces --min-severity HIGH --output vdr-k8s.json
   vdr k8s --all-namespaces --reachability-only --output reachability.json`
+	case SourceK8sCompliance:
+		return `  vdr k8s-compliance -n default
+  vdr k8s-compliance --all-namespaces --min-severity HIGH
+  vdr k8s-compliance --all-namespaces --format json --output compliance.json`
 	case SourceCloudRun:
 		return `  vdr cloudrun --project my-project --region us-east4
   vdr cloudrun --project my-project --region us-east4 --region us-central1 --output cloudrun.json
@@ -132,6 +143,8 @@ func sourceHelpNote(source string) string {
 	switch source {
 	case SourceK8s:
 		return "Credentials are loaded automatically from workload imagePullSecrets and the local Docker config."
+	case SourceK8sCompliance:
+		return ""
 	case SourceHelm:
 		return "Credentials are loaded automatically from rendered imagePullSecrets and the local Docker config."
 	case SourceECS:
@@ -151,6 +164,21 @@ func sourceHelpSections(source string) []helpSection {
 			title: "Kubernetes source",
 			flags: []string{"namespace", "all-namespaces", "include-zero-daemonsets"},
 		})
+	case SourceK8sCompliance:
+		return []helpSection{
+			{
+				title: "Kubernetes compliance scan",
+				flags: []string{"namespace", "all-namespaces", "min-severity", "timeout", "cache-dir"},
+			},
+			{
+				title: "Report output",
+				flags: []string{"format", "output"},
+			},
+			{
+				title: "Logging",
+				flags: []string{"quiet", "debug"},
+			},
+		}
 	case SourceCloudRun:
 		sections = append(sections, helpSection{
 			title: "Cloud Run source",
@@ -192,7 +220,7 @@ func sourceHelpSections(source string) []helpSection {
 		},
 		helpSection{
 			title: "Filtering, enrichment, and scoring",
-			flags: []string{"min-severity", "min-epss", "skip-enrichment", "refresh-enrichment", "scoring-config", "security-requirements-ceiling"},
+			flags: []string{"min-severity", "min-epss", "skip-enrichment", "refresh-enrichment", "include-chain-taxonomy", "scoring-config", "security-requirements-ceiling"},
 		},
 		helpSection{
 			title: "Registry authentication and VEX",
@@ -242,6 +270,9 @@ func printHelpFlag(fs *flag.FlagSet, source, name string) {
 	helpFprintf(fs.Output(), "  %s\n", strings.Join(names, ", "))
 
 	description := f.Usage + helpDefault(f)
+	if source == SourceK8sCompliance && name == "format" {
+		description = "output format: table or json (default \"table\")"
+	}
 	for _, line := range wrapHelpText(description, 74) {
 		helpFprintf(fs.Output(), "      %s\n", line)
 	}

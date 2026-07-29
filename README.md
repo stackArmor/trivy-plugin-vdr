@@ -1,6 +1,6 @@
 # vdr
 
-`vdr` is a Trivy plugin for vulnerability detection and response workflows. It can inventory Kubernetes workloads from the current Kubernetes context or rendered Helm charts, Google Cloud Run services and jobs from a Google Cloud project, or AWS ECS task definitions from selected regions, scan each unique full image reference once, and report findings back against the resources and containers that use each image. It can also scan standalone image references directly.
+`vdr` is a Trivy plugin for vulnerability detection and response workflows. It can inventory Kubernetes workloads from the current Kubernetes context or rendered Helm charts, Google Cloud Run services and jobs from a Google Cloud project, or AWS ECS task definitions from selected regions, scan each unique full image reference once, and report findings back against the resources and containers that use each image. It can also scan standalone image references directly. A separate `k8s-compliance` source runs Trivy's built-in Kubernetes misconfiguration and RBAC rules without changing the vulnerability-report schema.
 
 The Kubernetes source collects workload image inventory, scans each unique image with Trivy, enriches CVEs with EPSS and CISA Vulnrichment data, analyzes public ingress/gateway exposure, and emits JSON, table, and optional standalone HTML reports. The Helm source applies the same pipeline to rendered deployment intent. The Cloud Run source collects every container image used by Cloud Run services and jobs in the selected regions, analyzes service reachability through Cloud Run IAM/ingress and external load balancers/IAP, and emits the same report shapes. The ECS source inventories active task-definition revisions, records runtime and ECS security metadata, resolves ECR and repository credential auth for scans, and conservatively reports reachability only from collected runtime/exposure evidence. Use `--reachability-only` with Kubernetes, Helm, Cloud Run, or ECS to collect internet-reachability metadata without registry auth, Trivy scans, EPSS, or Vulnrichment enrichment. Use `--scan-reachability-only` to run vulnerability scans with internet reachability and asset classification, while omitting EPSS, Vulnrichment, PAIN, and remediation scoring from the final JSON or table output.
 
@@ -8,6 +8,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 
 - Trivy plugin entrypoint named `vdr`.
 - Kubernetes source subcommand named `k8s`.
+- Separate Kubernetes compliance source named `k8s-compliance`, with a dedicated versioned JSON contract and Trivy-style table output by default.
 - Google Cloud Run source subcommand named `cloudrun`.
 - AWS ECS source subcommand named `ecs`.
 - Standalone image source subcommand named `image`.
@@ -18,6 +19,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Finding-centric and resource-centric view flags.
 - Per-finding FedRAMP Rev5 VDR **PAIN** (Potential Agency Impact, N1–N5) and **VDR-TFR-PVR** remediation deadline, driven by an independently dimensional asset security-impact profile (see [PAIN scoring and remediation](#pain-scoring-and-remediation)).
 - Optional standalone HTML report with per-finding PAIN and FedRAMP remediation deadlines, plus filter controls for severity (multi-select), PAIN, namespace, internet exposure, automatable, exploitation status, EPSS score, technical impact, and remediation deadline (multi-select).
+- Optional CAPEC/ATT&CK chain-taxonomy evidence and same-resource transition candidates, enabled with `--include-chain-taxonomy`.
 - Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
 - Automatic private-registry authentication from the local Docker config, Kubernetes `imagePullSecrets`, ECS task `repositoryCredentials`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
 - Resilient scanning: a single image that fails to pull or scan is reported as a warning and the run continues, producing a partial (still enriched) report.
@@ -38,6 +40,7 @@ trivy vdr k8s --skip-enrichment --skip-exposure --debug
 trivy vdr k8s --reachability-only --output vdr-k8s-reachability.json
 trivy vdr k8s --scan-reachability-only --output vdr-k8s-scan-reachability.json
 trivy vdr k8s --refresh-enrichment
+trivy vdr k8s --include-chain-taxonomy --output vdr-k8s-capec.json
 trivy vdr k8s --skip-registry-auth
 trivy vdr k8s --no-gcloud-auth --no-ecr-auth
 trivy vdr k8s --oci-vex-included
@@ -47,6 +50,9 @@ trivy vdr k8s --quiet
 trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.html
 trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
 trivy vdr k8s --all-namespaces --scoring-config vdr-scoring.yaml
+trivy vdr k8s-compliance --namespace default
+trivy vdr k8s-compliance --all-namespaces --min-severity HIGH
+trivy vdr k8s-compliance --all-namespaces --format json --output vdr-k8s-compliance.json
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --region us-central1 --output vdr-cloudrun.json
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --view resources --html-output vdr-cloudrun.html
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --reachability-only --output vdr-cloudrun-reachability.json
@@ -69,6 +75,51 @@ existing VDR JSON report without rescanning images. Legacy reports without
 `reportSchemaVersion` are accepted; unknown future schemas fail closed. Existing
 vulnerability, exposure, PAIN, and remediation fields are preserved. Retired
 legacy `chainableEntrypoint` fields are not copied into the current schema.
+
+## Kubernetes compliance scanning
+
+`trivy vdr k8s-compliance` is intentionally separate from `trivy vdr k8s`. It runs Trivy's built-in Kubernetes misconfiguration and RBAC scanners with image scanning disabled, so compliance findings cannot be mixed into the existing VDR vulnerability, PAIN, or CAPEC calculations. It uses the default built-in check bundle rather than selecting a named `--compliance` profile.
+
+Table is the default format for this source. It follows Trivy's resource-oriented Kubernetes presentation: each failing resource has a namespace/kind/name heading, test success/failure counts, and an ID/severity/status/title/message table. When a resource is controller-owned, the heading also shows its resolved top-level parent, such as `Pod/api-abc (parent: Deployment/api)` or `Job/nightly-123 (parent: CronJob/nightly)`.
+
+Use `--format json` for the separate `k8s-compliance/v1` contract:
+
+```json
+{
+  "reportSchemaVersion": "k8s-compliance/v1",
+  "clusterName": "my-context",
+  "summary": {
+    "resources": 10,
+    "failedResources": 3,
+    "failedChecks": 7,
+    "bySeverity": {
+      "HIGH": 2,
+      "MEDIUM": 5
+    }
+  },
+  "resources": [
+    {
+      "resource": {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "namespace": "default",
+        "name": "api-abc"
+      },
+      "parentController": {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "namespace": "default",
+        "name": "api"
+      },
+      "results": []
+    }
+  ]
+}
+```
+
+The individual scanned resource is always retained. Parent mapping is enriched read-only from Kubernetes owner references and resolves common controller chains including Pod → ReplicaSet → Deployment and Job → CronJob. A denied mapping read becomes a warning and does not discard Trivy's finding.
+
+The command passes `--disable-node-collector` so it remains read-only and does not create Trivy's temporary node-collector Job. As a result, node-infrastructure checks that require that collector are not included; workload-definition and RBAC checks still use Trivy's built-in rules. See Trivy's [Kubernetes scanning guide](https://trivy.dev/docs/dev/guide/target/kubernetes/) and [built-in checks documentation](https://trivy.dev/docs/latest/scanner/misconfiguration/check/builtin/).
 
 ## Helm chart scanning
 
@@ -130,13 +181,13 @@ metadata:
   name: vdr-read
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "pods", "services", "configmaps"]
+    resources: ["namespaces", "pods", "replicationcontrollers", "services", "configmaps"]
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
     verbs: ["list"]
   - apiGroups: ["batch"]
     resources: ["jobs", "cronjobs"]
@@ -173,6 +224,7 @@ Notes:
 - `configmaps/get` is used for the optional `fedramp-vdr-trivy/vdr-fedramp` scoring ConfigMap.
 - Exposure resources are optional for vulnerability scan reports. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis. `--reachability-only` requires exposure resources and cannot be combined with `--skip-exposure`.
 - If you never use AWS ALB/Gateway resources, the `elbv2.k8s.aws` and `gateway.k8s.aws` rules can be omitted. If you never use GKE ingress/gateway IAP metadata, the `cloud.google.com/backendconfigs` and `networking.gke.io/gcpbackendpolicies` rules can be omitted.
+- `k8s-compliance` also requires read access to every resource type Trivy evaluates. The Pod, ReplicationController, Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob list permissions above provide VDR's parent-controller enrichment; other resource permissions depend on the built-in Trivy checks and APIs installed in the cluster.
 
 ### GKE IAM alternative
 
@@ -389,9 +441,9 @@ JSON output defaults to a finding-centric report. Each finding includes `affecte
 
 The top-level JSON metadata includes `scannerVersion` for the Trivy binary used by the plugin and `pluginVersion` for the VDR plugin build.
 
-Every enriched finding includes informational `chainTaxonomy` evidence projected through a release-pinned, embedded CAPEC/ATT&CK catalog. The projection preserves each `CWE -> CAPEC -> ATT&CK` path, structured CAPEC consequence impacts, and explicit CAPEC predecessor/successor IDs. `taxonomyRole` is `producer_candidate`, `consumer_candidate`, `bridge_candidate`, `isolated_in_capec`, or `unknown`; these are pattern-level evidence labels, not proof of a CVE-specific exploit chain.
+CAPEC/ATT&CK chain-taxonomy enrichment is disabled by default. Use `--include-chain-taxonomy` to opt a scan into loading the release-pinned embedded catalog, calculating transition candidates, and emitting the related report fields. When enabled, every finding includes informational `chainTaxonomy` evidence projected through the catalog. The projection preserves each `CWE -> CAPEC -> ATT&CK` path, structured CAPEC consequence impacts, and explicit CAPEC predecessor/successor IDs. `taxonomyRole` is `producer_candidate`, `consumer_candidate`, `bridge_candidate`, `isolated_in_capec`, or `unknown`; these are pattern-level evidence labels, not proof of a CVE-specific exploit chain.
 
-The report also emits top-level `capecTransitions` for a deliberately narrow external-to-follow-on review case: two distinct active CVEs affect the same exact internet-accessible resource, the upstream is `AV:N/PR:N`, and their path-specific CAPEC patterns match an explicit `CanPrecede` edge. The downstream may have any CVSS attack vector; its AV/PR values are retained only as context. Inside each concrete pair, the upstream endpoint is labeled `candidate_entrypoint` and the downstream endpoint `candidate_follower`; neither role is copied onto a CVE as a standalone classification. Candidates are aggregated by resource, CVE pair, and CAPEC edge while retaining all package occurrences and CWE paths. Each transition also retains source consequence impacts, target prerequisite prose, exposure, and exact resource identity. Because broad CWEs can over-project into CAPEC, every candidate is explicitly low-confidence and review-required. These are review candidates only: they do not infer a capability match or change IRV, PAIN, or remediation. The top-level `chainCatalog` records corpus versions and SHA-256 hashes, while `summary.chainTaxonomy` reports coverage, transition pairs, distinct resource-specific entrypoint candidates, and unique upstream CVEs. `reportSchemaVersion` versions the JSON contract. CycloneDX carries the taxonomy projection and transition set as `vdr:*` properties. See [CAPEC and ATT&CK chain-taxonomy enrichment](docs/chain-taxonomy.md).
+With that option enabled, the report also emits top-level `capecTransitions` for a deliberately narrow external-to-follow-on review case: two distinct active CVEs affect the same exact internet-accessible resource, the upstream is `AV:N/PR:N`, and their path-specific CAPEC patterns match an explicit `CanPrecede` edge. The downstream may have any CVSS attack vector; its AV/PR values are retained only as context. Inside each concrete pair, the upstream endpoint is labeled `candidate_entrypoint` and the downstream endpoint `candidate_follower`; neither role is copied onto a CVE as a standalone classification. Candidates are aggregated by resource, CVE pair, and CAPEC edge while retaining all package occurrences and CWE paths. Each transition also retains source consequence impacts, target prerequisite prose, exposure, and exact resource identity. Because broad CWEs can over-project into CAPEC, every candidate is explicitly low-confidence and review-required. These are review candidates only: they do not infer a capability match or change IRV, PAIN, or remediation. The top-level `chainCatalog` records corpus versions and SHA-256 hashes, while `summary.chainTaxonomy` reports coverage, transition pairs, distinct resource-specific entrypoint candidates, and unique upstream CVEs. `reportSchemaVersion` versions the JSON contract. CycloneDX carries the taxonomy projection and transition set as `vdr:*` properties. See [CAPEC and ATT&CK chain-taxonomy enrichment](docs/chain-taxonomy.md).
 
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
@@ -401,13 +453,13 @@ Duplicate findings are merged by default (since v2.0.0): findings that share the
 
 Use `--reachability-only` with `k8s`, `cloudrun`, or `ecs` for an internet-reachability metadata report without vulnerability findings. This mode emits the resources view, skips registry authentication and Trivy scanning, and does not fetch EPSS or Vulnrichment data.
 
-Use `--scan-reachability-only` with `k8s`, `cloudrun`, or `ecs` to run Trivy vulnerability scans and exposure analysis without EPSS, Vulnrichment, PAIN, or remediation scoring output. JSON findings keep scanner vulnerability data plus `affected[].resource`, `affected[].exposure`, and `affected[].classification` with the effective Certification Class and security-impact profile. Resource-view reports also include each resource's `classification`. Table output replaces PAIN/remediation/enrichment columns with Class and Security-Impact Profile columns. This mode does not support `--html-output`, `--html-template`, `--skip-exposure`, `--min-epss`, or the standalone `image` source.
+Use `--scan-reachability-only` with `k8s`, `cloudrun`, or `ecs` to run Trivy vulnerability scans and exposure analysis without EPSS, Vulnrichment, PAIN, or remediation scoring output. JSON findings keep scanner vulnerability data plus `affected[].resource`, `affected[].exposure`, and `affected[].classification` with the effective Certification Class and security-impact profile. Resource-view reports also include each resource's `classification`. Table output replaces PAIN/remediation/enrichment columns with Class and Security-Impact Profile columns. This mode does not support `--html-output`, `--html-template`, `--skip-exposure`, `--min-epss`, `--include-chain-taxonomy`, or the standalone `image` source.
 
 Use `--html-output <path>` to write a standalone HTML report. The default HTML template is embedded in the plugin and requires no remote CDN assets. It supports light/dark mode (following the OS preference, with a toggle that is remembered), a multi-select severity filter, a Trivy fix-status filter (including `will_not_fix`), a PAIN filter, a multi-select remediation-deadline filter, and click-to-sort on every column (severity sorts by rank, EPSS numerically).
 
 Each finding shows its **PAIN** tier and a FedRAMP **Remediation** deadline (see [PAIN scoring and remediation](#pain-scoring-and-remediation)). Automatable, Exploitation, and Technical impact from CISA Vulnrichment are also shown for context; CVSS-derived Automatable and Technical impact values are rendered in italics with a `†` marker so they are distinguishable from authoritative Vulnrichment values. Hover any value or column header for an in-report explanation. Use `--html-template <path>` to override the template with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 
-The HTML report provides a **CAPEC chain role** filter and CAPEC evidence badges beside mapped CVEs. When external-to-follow-on candidates exist, a separate **CAPEC transition candidates** table displays the aggregated upstream CWE/CAPEC → `CanPrecede` → downstream CAPEC/CWE path and observed AV/PR/exposure context.
+When `--include-chain-taxonomy` is enabled, the HTML report provides a **CAPEC chain role** filter and CAPEC evidence badges beside mapped CVEs. When external-to-follow-on candidates exist, a separate **CAPEC transition candidates** table displays the aggregated upstream CWE/CAPEC → `CanPrecede` → downstream CAPEC/CWE path and observed AV/PR/exposure context.
 
 ## PAIN scoring and remediation
 

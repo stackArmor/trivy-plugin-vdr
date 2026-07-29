@@ -71,11 +71,52 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.SkipEnrichment || cfg.RefreshEnrichment || cfg.SkipExposure || cfg.Debug {
 		t.Fatalf("SkipEnrichment/RefreshEnrichment/SkipExposure/Debug = %v/%v/%v/%v, want all false", cfg.SkipEnrichment, cfg.RefreshEnrichment, cfg.SkipExposure, cfg.Debug)
 	}
+	if cfg.IncludeChainTaxonomy {
+		t.Fatal("IncludeChainTaxonomy = true, want false by default")
+	}
 	if cfg.SkipRegistryAuth || cfg.NoGcloudAuth || cfg.NoECRAuth || cfg.Quiet {
 		t.Fatalf("registry auth/quiet flags = %v/%v/%v/%v, want all false", cfg.SkipRegistryAuth, cfg.NoGcloudAuth, cfg.NoECRAuth, cfg.Quiet)
 	}
 	if !cfg.Dedupe {
 		t.Fatal("Dedupe = false, want true")
+	}
+}
+
+func TestParseK8sComplianceDefaultsToTableAndSeparateOutputContract(t *testing.T) {
+	cfg, err := Parse([]string{"k8s-compliance"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Source != SourceK8sCompliance {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceK8sCompliance)
+	}
+	if cfg.Format != FormatTable {
+		t.Fatalf("Format = %q, want %q", cfg.Format, FormatTable)
+	}
+	if !cfg.AllNamespaces {
+		t.Fatal("AllNamespaces = false, want true")
+	}
+}
+
+func TestParseK8sComplianceAcceptsJSONAndNamespace(t *testing.T) {
+	cfg, err := Parse([]string{"k8s-compliance", "--namespace", "prod", "--format", "json"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Format != FormatJSON || cfg.AllNamespaces || !reflect.DeepEqual(cfg.Namespaces, []string{"prod"}) {
+		t.Fatalf("config = %#v", cfg)
+	}
+}
+
+func TestParseK8sComplianceRejectsVulnerabilityReportFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"k8s-compliance", "--view", "resources"},
+		{"k8s-compliance", "--include-chain-taxonomy"},
+		{"k8s-compliance", "--format", "cyclonedx"},
+	} {
+		if _, err := Parse(args); err == nil {
+			t.Fatalf("Parse(%#v) returned nil error", args)
+		}
 	}
 }
 
@@ -224,6 +265,16 @@ func TestParseRefreshEnrichment(t *testing.T) {
 	}
 	if !cfg.RefreshEnrichment {
 		t.Fatal("RefreshEnrichment = false, want true")
+	}
+}
+
+func TestParseIncludeChainTaxonomy(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--include-chain-taxonomy"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.IncludeChainTaxonomy {
+		t.Fatal("IncludeChainTaxonomy = false, want true")
 	}
 }
 
@@ -486,6 +537,16 @@ func TestParseReachabilityOnlyRejectsSkipExposure(t *testing.T) {
 	}
 }
 
+func TestParseReachabilityOnlyRejectsChainTaxonomy(t *testing.T) {
+	_, err := Parse([]string{"k8s", "--reachability-only", "--include-chain-taxonomy"})
+	if err == nil {
+		t.Fatal("Parse returned nil error, want chain taxonomy conflict")
+	}
+	if !strings.Contains(err.Error(), "reachability-only") || !strings.Contains(err.Error(), "include-chain-taxonomy") {
+		t.Fatalf("error = %q, want reachability-only/include-chain-taxonomy context", err.Error())
+	}
+}
+
 func TestParseScanReachabilityOnly(t *testing.T) {
 	cfg, err := Parse([]string{"k8s", "--scan-reachability-only"})
 	if err != nil {
@@ -509,6 +570,7 @@ func TestParseScanReachabilityOnlyRejectsConflictingFlags(t *testing.T) {
 		{name: "html output", args: []string{"k8s", "--scan-reachability-only", "--html-output", "report.html"}, want: "html-output"},
 		{name: "html template", args: []string{"k8s", "--scan-reachability-only", "--html-template", "template.html"}, want: "html-template"},
 		{name: "min epss", args: []string{"k8s", "--scan-reachability-only", "--min-epss", "0.5"}, want: "min-epss"},
+		{name: "chain taxonomy", args: []string{"k8s", "--scan-reachability-only", "--include-chain-taxonomy"}, want: "include-chain-taxonomy"},
 		{name: "reachability only", args: []string{"k8s", "--scan-reachability-only", "--reachability-only"}, want: "reachability-only"},
 	}
 	for _, tt := range tests {
@@ -865,6 +927,7 @@ func TestParseRootHelpOrganizesSourcesFlagsAndExamples(t *testing.T) {
 	for _, want := range []string{
 		"Sources:",
 		"k8s       Scan workloads",
+		"k8s-compliance  Scan Kubernetes resources",
 		"cloudrun  Scan Cloud Run",
 		"enrich-report  Add embedded CAPEC/ATT&CK taxonomy evidence",
 		"Examples:",
@@ -880,6 +943,37 @@ func TestParseRootHelpOrganizesSourcesFlagsAndExamples(t *testing.T) {
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help output missing %q:\n%s", want, help)
+		}
+	}
+}
+
+func TestParseK8sComplianceHelpShowsOnlyComplianceFlags(t *testing.T) {
+	var out strings.Builder
+	_, err := ParseWithOutput([]string{"k8s-compliance", "--help"}, &out)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("Parse error = %v, want flag.ErrHelp", err)
+	}
+	help := out.String()
+	for _, want := range []string{
+		"Usage:\n  vdr k8s-compliance [flags]",
+		"Kubernetes compliance scan:",
+		"--min-severity SEVERITY",
+		`output format: table or json (default "table")`,
+		"Report output:",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("compliance help missing %q:\n%s", want, help)
+		}
+	}
+	for _, unwanted := range []string{
+		"Vulnerability scanning:",
+		"--view VIEW",
+		"--include-chain-taxonomy",
+		"--html-output",
+		"--parallel-scans",
+	} {
+		if strings.Contains(help, unwanted) {
+			t.Fatalf("compliance help unexpectedly contains %q:\n%s", unwanted, help)
 		}
 	}
 }
@@ -900,6 +994,7 @@ func TestParseSourceHelpOnlyShowsRelevantFlags(t *testing.T) {
 		"local Docker config",
 		"Exposure and scan modes:",
 		"Vulnerability scanning:",
+		"--include-chain-taxonomy",
 		"Registry authentication and VEX:",
 		"Cache management:",
 		"Report output:",

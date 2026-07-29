@@ -17,7 +17,7 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	finding.CWEs = []string{"CWE-94"}
 	scanReport := Build(sampleInventory(), []model.Finding{finding}, map[model.ResourceRef]model.Exposure{
 		sampleContainerRef(): {InternetAccessible: true},
-	}, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	}, Options{GeneratedAt: fixedTime(), View: ViewResources, IncludeChainTaxonomy: true})
 	var buf bytes.Buffer
 
 	if err := RenderHTML(&buf, scanReport, ""); err != nil {
@@ -95,7 +95,7 @@ func TestRenderHTMLIncludesExactCAPECTransitionTable(t *testing.T) {
 	downstream.CWEs = []string{"CWE-648"}
 	scanReport := Build(sampleInventory(), []model.Finding{upstream, downstream}, map[model.ResourceRef]model.Exposure{
 		sampleContainerRef(): {InternetAccessible: true},
-	}, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+	}, Options{GeneratedAt: fixedTime(), View: ViewFindings, IncludeChainTaxonomy: true})
 	var buf bytes.Buffer
 
 	if err := RenderHTML(&buf, scanReport, ""); err != nil {
@@ -116,6 +116,33 @@ func TestRenderHTMLIncludesExactCAPECTransitionTable(t *testing.T) {
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("HTML transition output missing %q", want)
+		}
+	}
+}
+
+func TestRenderHTMLHidesChainTaxonomyByDefault(t *testing.T) {
+	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	finding.CWEs = []string{"CWE-94"}
+	scanReport := Build(sampleInventory(), []model.Finding{finding}, nil, Options{
+		GeneratedAt: fixedTime(),
+		View:        ViewFindings,
+	})
+	var buf bytes.Buffer
+
+	if err := RenderHTML(&buf, scanReport, ""); err != nil {
+		t.Fatalf("RenderHTML returned error: %v", err)
+	}
+
+	output := buf.String()
+	for _, unwanted := range []string{
+		`id="chain-taxonomy-role"`,
+		`"chainCatalog":`,
+		`"chainTaxonomy":`,
+		`id="capec-transitions"`,
+		"CAPEC badges preserve",
+	} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("default HTML output unexpectedly contains %q", unwanted)
 		}
 	}
 }

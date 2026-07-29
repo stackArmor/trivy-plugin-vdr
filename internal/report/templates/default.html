@@ -118,7 +118,7 @@
       {{ end }}
       <label>Image<input id="image" type="search" placeholder="Name contains…"></label>
       <label>Internet exposed<select id="exposed"><option value="">All</option><option value="true">Yes</option><option value="false">No</option></select></label>
-      <label>CAPEC chain role<select id="chain-taxonomy-role"><option value="">All</option><option value="producer_candidate">Producer candidate</option><option value="consumer_candidate">Consumer candidate</option><option value="bridge_candidate">Bridge candidate</option><option value="isolated_in_capec">No explicit CAPEC edge</option><option value="unknown">Unknown</option></select></label>
+      {{ if .Report.ChainCatalog }}<label>CAPEC chain role<select id="chain-taxonomy-role"><option value="">All</option><option value="producer_candidate">Producer candidate</option><option value="consumer_candidate">Consumer candidate</option><option value="bridge_candidate">Bridge candidate</option><option value="isolated_in_capec">No explicit CAPEC edge</option><option value="unknown">Unknown</option></select></label>{{ end }}
       <label>Automatable<select id="automatable"><option value="">All</option></select></label>
       <label>Exploitation<select id="exploitation"><option value="">All</option></select></label>
       <label>EPSS score<input id="epss" type="number" min="0" max="1" step="0.01" placeholder="Minimum"></label>
@@ -149,7 +149,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the security-impact profile's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50, active exploitation, or the FedRAMP unauthenticated-automation floor (internet-reachable plus AV:N/AC:L/PR:N/UI:N), and IRV = internet-reachable. CAPEC badges preserve the offline CWE → CAPEC → ATT&amp;CK evidence and explicit CAPEC predecessor/successor role; they do not prove a CVE-specific chain. CAPEC transition candidates below require two distinct active CVEs on the same exact internet-reachable resource: an AV:N/PR:N upstream CVE and an explicit CAPEC <em>CanPrecede</em> edge between their mapped paths. The downstream CVE can have any attack vector; its AV/PR values are shown only as review context. Package occurrences are aggregated by CVE pair and CAPEC edge. Candidates are pattern-level review evidence and do not alter IRV, PAIN, or remediation. Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
+    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the security-impact profile's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50, active exploitation, or the FedRAMP unauthenticated-automation floor (internet-reachable plus AV:N/AC:L/PR:N/UI:N), and IRV = internet-reachable. {{ if .Report.ChainCatalog }}CAPEC badges preserve the offline CWE → CAPEC → ATT&amp;CK evidence and explicit CAPEC predecessor/successor role; they do not prove a CVE-specific chain. CAPEC transition candidates below require two distinct active CVEs on the same exact internet-reachable resource: an AV:N/PR:N upstream CVE and an explicit CAPEC <em>CanPrecede</em> edge between their mapped paths. The downstream CVE can have any attack vector; its AV/PR values are shown only as review context. Package occurrences are aggregated by CVE pair and CAPEC edge. Candidates are pattern-level review evidence and do not alter IRV, PAIN, or remediation. {{ end }}Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
     {{ if .Report.CAPECTransitions }}
     <section aria-labelledby="capec-transitions-heading">
       <h2 id="capec-transitions-heading">CAPEC transition candidates</h2>
@@ -486,7 +486,7 @@
     const controlIDs = ["pain", "status"];
     if (!isCloudRun) controlIDs.push("namespace");
     controlIDs.push("fix-available", "exposed", "chain-taxonomy-role", "automatable", "exploitation", "epss", "impact", "image");
-    const controls = controlIDs.map(id => document.getElementById(id));
+    const controls = controlIDs.map(id => document.getElementById(id)).filter(Boolean);
     controls.forEach(control => control.addEventListener("input", render));
     controls.forEach(control => control.addEventListener("change", render));
 
