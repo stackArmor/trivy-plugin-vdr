@@ -33,6 +33,9 @@ type Options struct {
 	Warnings            []string
 	ClassificationOnly  bool
 	SuppressEnrichments bool
+	// IncludeChainTaxonomy opts into the embedded CAPEC/ATT&CK projection and
+	// same-resource transition analysis. It is disabled by default.
+	IncludeChainTaxonomy bool
 	// Dedupe merges findings that share the same vulnerability ID, package name,
 	// and installed version across images and scan targets (findings view), and
 	// collapses duplicate findings within each resource (resources view).
@@ -73,7 +76,8 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 
 	warnings := append([]string(nil), options.Warnings...)
 	var catalog *chaincatalog.Catalog
-	if !options.SuppressEnrichments {
+	includeChainTaxonomy := options.IncludeChainTaxonomy && !options.SuppressEnrichments
+	if includeChainTaxonomy {
 		catalog = options.ChainCatalog
 		if catalog == nil {
 			var catalogErr error
@@ -86,8 +90,12 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 
 	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS, options.SuppressEnrichments)
 	for i := range filtered {
-		if !options.SuppressEnrichments {
+		if includeChainTaxonomy {
 			filtered[i].ChainTaxonomy = chainanalysis.ClassifyTaxonomy(filtered[i], catalog)
+		} else {
+			// Do not leak taxonomy attached by an upstream caller when this report
+			// did not explicitly opt into CAPEC/ATT&CK enrichment.
+			filtered[i].ChainTaxonomy = nil
 		}
 	}
 	active, suppressed := partitionFindings(filtered)

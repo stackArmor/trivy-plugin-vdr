@@ -65,8 +65,9 @@ func TestBuildIncludesPathPreservingChainTaxonomyAndCoverage(t *testing.T) {
 	unknown := sampleFinding("CVE-2026-0000", "MEDIUM", 0.2)
 
 	got := Build(sampleInventory(), []model.Finding{mapped, unknown}, nil, Options{
-		GeneratedAt: fixedTime(),
-		View:        ViewFindings,
+		GeneratedAt:          fixedTime(),
+		View:                 ViewFindings,
+		IncludeChainTaxonomy: true,
 	})
 
 	if got.ChainCatalog == nil || got.ChainCatalog.CAPECVersion != "3.9" || got.ChainCatalog.ATTACKVersion != "19.1" {
@@ -117,14 +118,33 @@ func TestBuildIncludesPathPreservingChainTaxonomyAndCoverage(t *testing.T) {
 	}
 }
 
+func TestBuildOmitsChainTaxonomyByDefault(t *testing.T) {
+	finding := sampleFinding("CVE-2026-0094", "HIGH", 0.7)
+	finding.CWEs = []string{"CWE-94"}
+	finding.ChainTaxonomy = &model.ChainTaxonomyEvidence{Status: "mapped"}
+
+	got := Build(sampleInventory(), []model.Finding{finding}, nil, Options{
+		GeneratedAt: fixedTime(),
+		View:        ViewFindings,
+	})
+
+	if got.ChainCatalog != nil || got.Summary.ChainTaxonomy != nil || len(got.CAPECTransitions) != 0 {
+		t.Fatalf("catalog/summary/transitions = %#v/%#v/%#v, want taxonomy omitted by default", got.ChainCatalog, got.Summary.ChainTaxonomy, got.CAPECTransitions)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].ChainTaxonomy != nil {
+		t.Fatalf("Findings = %#v, want taxonomy omitted by default", got.Findings)
+	}
+}
+
 func TestBuildSuppressEnrichmentsOmitsChainTaxonomy(t *testing.T) {
 	finding := sampleFinding("CVE-2026-0094", "HIGH", 0.7)
 	finding.CWEs = []string{"CWE-94"}
 
 	got := Build(sampleInventory(), []model.Finding{finding}, nil, Options{
-		GeneratedAt:         fixedTime(),
-		View:                ViewFindings,
-		SuppressEnrichments: true,
+		GeneratedAt:          fixedTime(),
+		View:                 ViewFindings,
+		SuppressEnrichments:  true,
+		IncludeChainTaxonomy: true,
 	})
 
 	if got.ChainCatalog != nil || got.Summary.ChainTaxonomy != nil {
@@ -148,13 +168,15 @@ func TestBuildIncludesExactSameResourceCAPECTransitions(t *testing.T) {
 	exposures := map[model.ResourceRef]model.Exposure{
 		sampleContainerRef(): {InternetAccessible: true},
 	}
-	got := Build(sampleInventory(), []model.Finding{upstream, downstream}, exposures, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+	got := Build(sampleInventory(), []model.Finding{upstream, downstream}, exposures, Options{
+		GeneratedAt: fixedTime(), View: ViewFindings, IncludeChainTaxonomy: true,
+	})
 	emptyCatalog, err := chaincatalog.Parse([]byte(`{"schemaVersion":"1","patterns":{},"cwes":{}}`))
 	if err != nil {
 		t.Fatalf("parse empty comparison catalog: %v", err)
 	}
 	baseline := Build(sampleInventory(), []model.Finding{upstream, downstream}, exposures, Options{
-		GeneratedAt: fixedTime(), View: ViewFindings, ChainCatalog: emptyCatalog,
+		GeneratedAt: fixedTime(), View: ViewFindings, IncludeChainTaxonomy: true, ChainCatalog: emptyCatalog,
 	})
 
 	var matched *model.CAPECTransitionCandidate

@@ -1,9 +1,18 @@
 # CAPEC and ATT&CK Chain-Taxonomy Enrichment
 
-`vdr` projects each finding's specific CWE assignments through the official
-CAPEC and Enterprise ATT&CK corpora. The projection is informational: it
-preserves taxonomy evidence for review and future capability modeling, but it
-does not change PAIN, IRV, remediation deadlines, or another finding.
+CAPEC/ATT&CK projection is disabled by default. Enable it for a scan with:
+
+```bash
+trivy vdr k8s --include-chain-taxonomy --output vdr-capec.json
+```
+
+When enabled, `vdr` projects each finding's specific CWE assignments through
+the official CAPEC and Enterprise ATT&CK corpora. Without the flag, normal
+scans do not load the embedded catalog, calculate transition candidates, or
+emit `chainCatalog`, `chainTaxonomy`, or `capecTransitions`. The projection is
+informational: it preserves taxonomy evidence for review and future capability
+modeling, but it does not change PAIN, IRV, remediation deadlines, or another
+finding.
 
 ## What the result means
 
@@ -16,7 +25,7 @@ CVE -> CWE -> active Standard/Detailed CAPEC pattern
                   -> explicit CAPEC predecessor/successor
 ```
 
-Every finding receives `chainTaxonomy` unless enrichment is suppressed:
+When chain taxonomy is enabled, every finding receives `chainTaxonomy`:
 
 - `status: mapped` means at least one active Standard/Detailed CAPEC pattern
   references one of the finding's CWEs.

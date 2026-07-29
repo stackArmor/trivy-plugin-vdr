@@ -19,6 +19,7 @@ import (
 	helmsource "github.com/stackArmor/trivy-plugin-vdr/internal/helm"
 	imageinventory "github.com/stackArmor/trivy-plugin-vdr/internal/image"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/k8s"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/k8scompliance"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/manifest"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
@@ -58,6 +59,8 @@ func run(args []string) error {
 	switch cfg.Source {
 	case config.SourceK8s:
 		return runK8s(context.Background(), cfg, logger, os.Stdout)
+	case config.SourceK8sCompliance:
+		return runK8sCompliance(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceCloudRun:
 		return runCloudRun(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceECS:
@@ -69,6 +72,54 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("source %q is not implemented yet", cfg.Source)
 	}
+}
+
+func runK8sCompliance(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+	collector, contextName, err := k8s.NewForCurrentContext()
+	if err != nil {
+		return err
+	}
+	namespaces := cfg.Namespaces
+	if cfg.AllNamespaces {
+		namespaces = nil
+	}
+
+	logger.Info("scanning Kubernetes compliance in context %q with Trivy's built-in rules", contextName)
+	resources, clusterName, err := (k8scompliance.TrivyRunner{
+		CacheDir: cfg.CacheDir,
+	}).Scan(ctx, k8scompliance.ScanOptions{
+		ContextName: contextName,
+		Namespaces:  namespaces,
+		Timeout:     cfg.Timeout,
+		MinSeverity: cfg.MinSeverity,
+	})
+	if err != nil {
+		return err
+	}
+
+	logger.Info("mapping compliance results to Kubernetes resources and parent controllers")
+	controllerIndex, warnings := k8scompliance.BuildControllerIndex(ctx, collector.Client, namespaces)
+	controllerIndex.Enrich(resources)
+	for _, warning := range warnings {
+		logger.Warn("%s", warning)
+	}
+
+	scannerVersion, versionErr := (scanner.TrivyRunner{}).Version(ctx)
+	if versionErr != nil {
+		scannerVersion = "unknown"
+		logger.Warn("could not determine Trivy version: %v", versionErr)
+	}
+	if clusterName == "" {
+		clusterName = contextName
+	}
+	complianceReport := k8scompliance.BuildReport(resources, k8scompliance.ReportOptions{
+		ScannerVersion: scannerVersion,
+		PluginVersion:  buildinfo.PluginVersion,
+		ClusterName:    clusterName,
+		Warnings:       warnings,
+	})
+	logger.Info("compliance scan: %d resources, %d failed checks", complianceReport.Summary.Resources, complianceReport.Summary.FailedChecks)
+	return writeK8sComplianceReport(stdout, cfg.Output, cfg.Format, complianceReport)
 }
 
 func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
@@ -559,32 +610,34 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 		logger.Warn("could not determine Trivy version: %v", versionErr)
 	}
 	primary := report.Build(inventory, findings, exposures, report.Options{
-		ScannerVersion:      scannerVersion,
-		PluginVersion:       buildinfo.PluginVersion,
-		View:                primaryView,
-		MinSeverity:         cfg.MinSeverity,
-		MinEPSS:             cfg.MinEPSS,
-		Warnings:            warnings,
-		Scoring:             scoringConfig,
-		ClassificationOnly:  cfg.ScanReachabilityOnly,
-		SuppressEnrichments: cfg.ScanReachabilityOnly,
-		Dedupe:              cfg.Dedupe,
+		ScannerVersion:       scannerVersion,
+		PluginVersion:        buildinfo.PluginVersion,
+		View:                 primaryView,
+		MinSeverity:          cfg.MinSeverity,
+		MinEPSS:              cfg.MinEPSS,
+		Warnings:             warnings,
+		Scoring:              scoringConfig,
+		ClassificationOnly:   cfg.ScanReachabilityOnly,
+		SuppressEnrichments:  cfg.ScanReachabilityOnly,
+		IncludeChainTaxonomy: cfg.IncludeChainTaxonomy,
+		Dedupe:               cfg.Dedupe,
 	})
 	if err := writePrimaryReport(stdout, cfg.Output, cfg.Format, primary); err != nil {
 		return err
 	}
 	if cfg.HTMLOutput != "" {
 		htmlReport := report.Build(inventory, findings, exposures, report.Options{
-			ScannerVersion:      scannerVersion,
-			PluginVersion:       buildinfo.PluginVersion,
-			View:                report.ViewResources,
-			MinSeverity:         cfg.MinSeverity,
-			MinEPSS:             cfg.MinEPSS,
-			Warnings:            warnings,
-			Scoring:             scoringConfig,
-			ClassificationOnly:  cfg.ScanReachabilityOnly,
-			SuppressEnrichments: cfg.ScanReachabilityOnly,
-			Dedupe:              cfg.Dedupe,
+			ScannerVersion:       scannerVersion,
+			PluginVersion:        buildinfo.PluginVersion,
+			View:                 report.ViewResources,
+			MinSeverity:          cfg.MinSeverity,
+			MinEPSS:              cfg.MinEPSS,
+			Warnings:             warnings,
+			Scoring:              scoringConfig,
+			ClassificationOnly:   cfg.ScanReachabilityOnly,
+			SuppressEnrichments:  cfg.ScanReachabilityOnly,
+			IncludeChainTaxonomy: cfg.IncludeChainTaxonomy,
+			Dedupe:               cfg.Dedupe,
 		})
 		if err := writeHTMLReport(cfg.HTMLOutput, cfg.HTMLTemplate, htmlReport); err != nil {
 			return err
@@ -602,6 +655,28 @@ func logIncompatibleClusterConfig(logger *log.Logger, err error) {
 		err,
 		vdrConfigMapAIHelpURL,
 	)
+}
+
+func writeK8sComplianceReport(stdout io.Writer, path, format string, scanReport k8scompliance.Report) error {
+	writer := stdout
+	var file *os.File
+	if path != "" {
+		var err error
+		file, err = os.Create(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		writer = file
+	}
+	switch format {
+	case config.FormatJSON:
+		return k8scompliance.RenderJSON(writer, scanReport)
+	case config.FormatTable:
+		return k8scompliance.RenderTable(writer, scanReport)
+	default:
+		return fmt.Errorf("unsupported Kubernetes compliance output format %q", format)
+	}
 }
 
 func writePrimaryReport(stdout io.Writer, path, format string, scanReport model.Report) error {
