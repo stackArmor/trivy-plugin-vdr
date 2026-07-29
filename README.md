@@ -61,7 +61,14 @@ trivy vdr helm nginx --repo https://charts.example.com --chart-version 1.2.3
 trivy vdr helm oci://registry.example.com/charts/app --chart-version 1.2.3
 trivy vdr helm ./charts/app --ingress-chart ./charts/edge --ingress-values values/edge.yaml
 trivy vdr helm ./charts/app --config-map examples/configmaps/vdr-fedramp-configmap.gke.yaml
+trivy vdr enrich-report --input vdr.json --output vdr-enriched.json --html-output vdr-enriched.html
 ```
+
+`enrich-report` adds the embedded CAPEC/ATT&CK taxonomy projection to an
+existing VDR JSON report without rescanning images. Legacy reports without
+`reportSchemaVersion` are accepted; unknown future schemas fail closed. Existing
+vulnerability, exposure, PAIN, and remediation fields are preserved. Retired
+legacy `chainableEntrypoint` fields are not copied into the current schema.
 
 ## Helm chart scanning
 
@@ -382,7 +389,9 @@ JSON output defaults to a finding-centric report. Each finding includes `affecte
 
 The top-level JSON metadata includes `scannerVersion` for the Trivy binary used by the plugin and `pluginVersion` for the VDR plugin build.
 
-Every vulnerability finding also includes informational `chainableEntrypoint` metadata. `candidateStatus` (`high_confidence`, `possible`, or `none`) records the CVE-level execution classification. Every heuristic branch requires `AV:N`: a high-signal execution CWE is `high_confidence` directly, while full vulnerable-system impact must be combined with moderate-signal `CWE-97` or `CWE-494` to reach `high_confidence`. Lower-confidence or context-dependent execution signals remain `possible`. The deployed `classification` is `high_confidence` only when the finding is active, the affected asset is internet-accessible, and the candidate status is `high_confidence`; an active, exposed possible candidate remains `possible`, and every other combination is `none`. Finding-centric output retains the result per `affected[]` asset and surfaces the strongest result at the finding level. The metadata does not promote downstream vulnerabilities or alter IRV, PAIN, or remediation deadlines. The evaluator uses only metadata present in the scan, so `--skip-enrichment` can remove CWE signals and produce a less specific candidate result. CycloneDX output carries the classification inputs and result as `vdr:chainableEntrypoint*` properties.
+Every enriched finding includes informational `chainTaxonomy` evidence projected through a release-pinned, embedded CAPEC/ATT&CK catalog. The projection preserves each `CWE -> CAPEC -> ATT&CK` path, structured CAPEC consequence impacts, and explicit CAPEC predecessor/successor IDs. `taxonomyRole` is `producer_candidate`, `consumer_candidate`, `bridge_candidate`, `isolated_in_capec`, or `unknown`; these are pattern-level evidence labels, not proof of a CVE-specific exploit chain.
+
+The report also emits top-level `capecTransitions` for a deliberately narrow external-to-follow-on review case: two distinct active CVEs affect the same exact internet-accessible resource, the upstream is `AV:N/PR:N`, and their path-specific CAPEC patterns match an explicit `CanPrecede` edge. The downstream may have any CVSS attack vector; its AV/PR values are retained only as context. Inside each concrete pair, the upstream endpoint is labeled `candidate_entrypoint` and the downstream endpoint `candidate_follower`; neither role is copied onto a CVE as a standalone classification. Candidates are aggregated by resource, CVE pair, and CAPEC edge while retaining all package occurrences and CWE paths. Each transition also retains source consequence impacts, target prerequisite prose, exposure, and exact resource identity. Because broad CWEs can over-project into CAPEC, every candidate is explicitly low-confidence and review-required. These are review candidates only: they do not infer a capability match or change IRV, PAIN, or remediation. The top-level `chainCatalog` records corpus versions and SHA-256 hashes, while `summary.chainTaxonomy` reports coverage, transition pairs, distinct resource-specific entrypoint candidates, and unique upstream CVEs. `reportSchemaVersion` versions the JSON contract. CycloneDX carries the taxonomy projection and transition set as `vdr:*` properties. See [CAPEC and ATT&CK chain-taxonomy enrichment](docs/chain-taxonomy.md).
 
 Use `--view resources` for resource-centric JSON or table output. Resource reports include the matching container image inventory, container security metadata, resource labels, exposure state, and findings scoped to that resource/container.
 
@@ -398,7 +407,7 @@ Use `--html-output <path>` to write a standalone HTML report. The default HTML t
 
 Each finding shows its **PAIN** tier and a FedRAMP **Remediation** deadline (see [PAIN scoring and remediation](#pain-scoring-and-remediation)). Automatable, Exploitation, and Technical impact from CISA Vulnrichment are also shown for context; CVSS-derived Automatable and Technical impact values are rendered in italics with a `†` marker so they are distinguishable from authoritative Vulnrichment values. Hover any value or column header for an in-report explanation. Use `--html-template <path>` to override the template with a local Go `html/template`; the template receives `.Report` and `.ReportJSON`.
 
-The HTML report provides a **Chainable entrypoint** filter without adding another table column. High-confidence and possible findings appear as a small badge beside the CVE; hover or focus the badge to see the finding's active state, asset exposure, CVE candidate classification, reasons, source facts, execution context, and policy version.
+The HTML report provides a **CAPEC chain role** filter and CAPEC evidence badges beside mapped CVEs. When external-to-follow-on candidates exist, a separate **CAPEC transition candidates** table displays the aggregated upstream CWE/CAPEC → `CanPrecede` → downstream CAPEC/CWE path and observed AV/PR/exposure context.
 
 ## PAIN scoring and remediation
 

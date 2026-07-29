@@ -39,6 +39,7 @@ Usage:
   vdr <source> [flags]
   vdr image [flags] IMAGE...
   vdr helm [flags] CHART
+  vdr enrich-report --input REPORT.json [--output ENRICHED.json]
 
 Sources:
   k8s       Scan workloads in the current Kubernetes context
@@ -47,6 +48,9 @@ Sources:
   image     Scan one or more container image references
   helm      Render and scan a Helm chart without a live cluster
 
+Post-processing:
+  enrich-report  Add embedded CAPEC/ATT&CK taxonomy evidence to a VDR JSON report
+
 Examples:
   vdr k8s -n default --format table
   vdr k8s --all-namespaces --min-severity HIGH --output vdr-k8s.json
@@ -54,6 +58,7 @@ Examples:
   vdr ecs --region us-east-1 --region us-west-2 --output vdr-ecs.json
   vdr image nginx:1.25 ghcr.io/acme/api:v2
   vdr helm ./charts/app -f values/prod.yaml --format json
+  vdr enrich-report --input vdr.json --output vdr-enriched.json
 
 `)
 	printHelpSections(fs, "", []helpSection{{

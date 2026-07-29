@@ -66,8 +66,8 @@ func dedupeFindings(findings []model.Finding) []model.Finding {
 			continue
 		}
 		merged[at].AffectedResources = append(merged[at].AffectedResources, finding.AffectedResources...)
-		if chainableEntrypointRank(finding.ChainableEntrypoint) > chainableEntrypointRank(merged[at].ChainableEntrypoint) {
-			merged[at].ChainableEntrypoint = cloneChainableEntrypoint(finding.ChainableEntrypoint)
+		if chainTaxonomyRank(finding.ChainTaxonomy) > chainTaxonomyRank(merged[at].ChainTaxonomy) {
+			merged[at].ChainTaxonomy = cloneChainTaxonomy(finding.ChainTaxonomy)
 		}
 		if finding.ImageRef != "" {
 			images[at][finding.ImageRef] = struct{}{}
@@ -88,20 +88,12 @@ func dedupeFindings(findings []model.Finding) []model.Finding {
 	return merged
 }
 
-// chainableEntrypointRank makes deduplication conservative when two scanner
-// records for the same CVE/package version carry different source metadata.
-func chainableEntrypointRank(value *model.ChainableEntrypoint) int {
+func chainTaxonomyRank(value *model.ChainTaxonomyEvidence) int {
 	if value == nil {
 		return 0
 	}
-	switch value.CandidateStatus {
-	case "high_confidence":
-		return 3
-	case "possible":
-		return 2
-	case "none":
-		return 1
-	default:
-		return 0
+	if value.Status == "mapped" {
+		return 1000 + len(value.Paths)
 	}
+	return 1
 }

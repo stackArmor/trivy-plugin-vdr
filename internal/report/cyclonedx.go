@@ -142,6 +142,44 @@ func ToCycloneDX(report model.Report) cdxDocument {
 			Name:   report.ContextName,
 		}
 	}
+	toolProperties := []cdxProperty{}
+	if report.ReportSchemaVersion != "" {
+		toolProperties = append(toolProperties, cdxProperty{Name: "vdr:reportSchemaVersion", Value: report.ReportSchemaVersion})
+	}
+	if catalog := report.ChainCatalog; catalog != nil {
+		toolProperties = append(toolProperties,
+			cdxProperty{Name: "vdr:chainCatalogSchema", Value: catalog.SchemaVersion},
+			cdxProperty{Name: "vdr:chainCatalogCAPECVersion", Value: catalog.CAPECVersion},
+			cdxProperty{Name: "vdr:chainCatalogCAPECSHA256", Value: catalog.CAPECSHA256},
+			cdxProperty{Name: "vdr:chainCatalogATTACKVersion", Value: catalog.ATTACKVersion},
+			cdxProperty{Name: "vdr:chainCatalogATTACKSHA256", Value: catalog.ATTACKSHA256},
+		)
+	}
+	if len(report.CAPECTransitions) > 0 {
+		toolProperties = append(toolProperties, cdxProperty{
+			Name:  "vdr:capecTransitionCandidateCount",
+			Value: strconv.Itoa(len(report.CAPECTransitions)),
+		})
+		if summary := report.Summary.ChainTaxonomy; summary != nil {
+			toolProperties = append(toolProperties,
+				cdxProperty{
+					Name:  "vdr:capecEntrypointCandidateCount",
+					Value: strconv.Itoa(summary.EntrypointCandidates),
+				},
+				cdxProperty{
+					Name:  "vdr:capecUniqueEntrypointCVECount",
+					Value: strconv.Itoa(summary.UniqueEntrypointCVEs),
+				},
+			)
+		}
+		if encoded, err := json.Marshal(report.CAPECTransitions); err == nil {
+			toolProperties = append(toolProperties, cdxProperty{
+				Name:  "vdr:capecTransitionCandidates",
+				Value: string(encoded),
+			})
+		}
+	}
+	doc.Metadata.Tools.Components[0].Properties = toolProperties
 
 	components := map[string]*cdxComponent{}
 	order := []string{}
@@ -421,16 +459,22 @@ func vulnerabilityFor(finding model.Finding, assetRef string, exposure *model.Ex
 		}
 	}
 	add("vdr:cwes", strings.Join(finding.CWEs, ","))
-	if entrypoint := finding.ChainableEntrypoint; entrypoint != nil {
-		add("vdr:chainableEntrypointClassification", entrypoint.Classification)
-		add("vdr:chainableEntrypointHighConfidence", strconv.FormatBool(entrypoint.HighConfidence))
-		add("vdr:chainableEntrypointActiveFinding", strconv.FormatBool(entrypoint.ActiveFinding))
-		add("vdr:chainableEntrypointInternetAccessible", strconv.FormatBool(entrypoint.InternetAccessible))
-		add("vdr:chainableEntrypointCandidateStatus", entrypoint.CandidateStatus)
-		add("vdr:chainableEntrypointReasons", strings.Join(entrypoint.ReasonCodes, ","))
-		add("vdr:chainableEntrypointClassificationReasons", strings.Join(entrypoint.ClassificationReasonCodes, ","))
-		add("vdr:chainableEntrypointPolicy", entrypoint.PolicyVersion)
-		add("vdr:chainableEntrypointExecutionContext", entrypoint.ExecutionContext)
+	if taxonomy := finding.ChainTaxonomy; taxonomy != nil {
+		add("vdr:chainTaxonomyStatus", taxonomy.Status)
+		add("vdr:chainTaxonomyRole", taxonomy.TaxonomyRole)
+		add("vdr:chainTaxonomyAmbiguity", taxonomy.Ambiguity)
+		add("vdr:chainTaxonomyPredecessorStatus", taxonomy.PredecessorStatus)
+		add("vdr:chainTaxonomySuccessorStatus", taxonomy.SuccessorStatus)
+		add("vdr:chainTaxonomyCAPECs", strings.Join(taxonomy.CAPECIDs, ","))
+		add("vdr:chainTaxonomyATTACKTechniques", strings.Join(taxonomy.ATTACKTechniqueIDs, ","))
+		add("vdr:chainTaxonomyATTACKTactics", strings.Join(taxonomy.ATTACKTactics, ","))
+		add("vdr:chainTaxonomyPredecessors", strings.Join(taxonomy.PredecessorCAPECIDs, ","))
+		add("vdr:chainTaxonomySuccessors", strings.Join(taxonomy.SuccessorCAPECIDs, ","))
+		add("vdr:chainTaxonomyReasons", strings.Join(taxonomy.ReasonCodes, ","))
+		add("vdr:chainTaxonomyPolicy", taxonomy.PolicyVersion)
+		if encoded, err := json.Marshal(taxonomy.Paths); err == nil && len(taxonomy.Paths) > 0 {
+			add("vdr:chainTaxonomyPaths", string(encoded))
+		}
 	}
 	if rem != nil {
 		add("vdr:remediationTrack", rem.Column)

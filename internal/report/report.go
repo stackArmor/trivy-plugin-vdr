@@ -10,14 +10,17 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/chainanalysis"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/chaincatalog"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
-	"github.com/stackArmor/trivy-plugin-vdr/internal/reachability"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
 
 const (
 	ViewFindings  = "findings"
 	ViewResources = "resources"
+
+	ReportSchemaVersion = "3"
 )
 
 type Options struct {
@@ -37,6 +40,9 @@ type Options struct {
 	// Scoring is the FedRAMP PAIN rubric. When nil, the built-in default rubric
 	// (scoring.Default) is used.
 	Scoring *scoring.Config
+	// ChainCatalog overrides the built-in generated CAPEC/ATT&CK catalog. Tests
+	// and offline evaluators can supply a pinned fixture catalog.
+	ChainCatalog *chaincatalog.Catalog
 }
 
 func Build(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, options Options) model.Report {
@@ -65,9 +71,24 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		contextName = inventory.ContextName
 	}
 
+	warnings := append([]string(nil), options.Warnings...)
+	var catalog *chaincatalog.Catalog
+	if !options.SuppressEnrichments {
+		catalog = options.ChainCatalog
+		if catalog == nil {
+			var catalogErr error
+			catalog, catalogErr = chaincatalog.Builtin()
+			if catalogErr != nil {
+				warnings = append(warnings, "chain taxonomy catalog unavailable: "+catalogErr.Error())
+			}
+		}
+	}
+
 	filtered := filterFindings(findings, options.MinSeverity, options.MinEPSS, options.SuppressEnrichments)
 	for i := range filtered {
-		filtered[i].ChainableEntrypoint = reachability.EvaluateChainableEntrypoint(filtered[i])
+		if !options.SuppressEnrichments {
+			filtered[i].ChainTaxonomy = chainanalysis.ClassifyTaxonomy(filtered[i], catalog)
+		}
 	}
 	active, suppressed := partitionFindings(filtered)
 	resourceReports := buildResourceReports(inventory, active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly, options.Dedupe)
@@ -79,16 +100,22 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		active = dedupeFindings(active)
 		suppressed = dedupeFindings(suppressed)
 	}
+	transitions := chainanalysis.FindReportTransitions(active, resourceReports, catalog)
+	summary := buildSummary(inventory, active, resourceReports)
+	chainanalysis.AddTransitionSummary(summary.ChainTaxonomy, transitions)
 	report := model.Report{
-		GeneratedAt:        options.GeneratedAt,
-		ScannerVersion:     options.ScannerVersion,
-		PluginVersion:      options.PluginVersion,
-		ContextName:        contextName,
-		Class:              class,
-		Summary:            buildSummary(inventory, active, resourceReports),
-		SuppressedFindings: suppressedWithWouldHaveBeen(suppressed, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly),
-		Warnings:           append([]string(nil), options.Warnings...),
-		ClassificationOnly: options.ClassificationOnly,
+		ReportSchemaVersion: ReportSchemaVersion,
+		GeneratedAt:         options.GeneratedAt,
+		ScannerVersion:      options.ScannerVersion,
+		PluginVersion:       options.PluginVersion,
+		ChainCatalog:        chainanalysis.CatalogMetadata(catalog),
+		ContextName:         contextName,
+		Class:               class,
+		Summary:             summary,
+		CAPECTransitions:    transitions,
+		SuppressedFindings:  suppressedWithWouldHaveBeen(suppressed, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly),
+		Warnings:            warnings,
+		ClassificationOnly:  options.ClassificationOnly,
 	}
 	if options.View == ViewResources {
 		report.Resources = resourceReports
@@ -487,8 +514,6 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 				scoped.Affected[0].Exposure = &value
 			}
 			assetInternetAccessible := internetReachable(scoped.Exposure)
-			scoped.ChainableEntrypoint = reachability.ClassifyChainableEntrypoint(scoped.ChainableEntrypoint, assetInternetAccessible)
-			scoped.Affected[0].ChainableEntrypoint = cloneChainableEntrypoint(scoped.ChainableEntrypoint)
 			pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, assetInternetAccessible)
 			if classificationOnly {
 				scoped.Affected[0].Classification = classificationFromScore(pain, rem)
@@ -576,6 +601,7 @@ func buildSummary(inventory *model.Inventory, findings []model.Finding, resource
 			summary.FindingsWithSpecificCWE++
 		}
 	}
+	summary.ChainTaxonomy = chainanalysis.SummarizeTaxonomy(findings)
 	for _, resource := range resources {
 		if resource.Exposure != nil && resource.Exposure.InternetAccessible {
 			summary.InternetAccessible++
@@ -592,7 +618,6 @@ func findingsWithBestExposure(findings []model.Finding, exposures map[model.Reso
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
-		enriched[i].ChainableEntrypoint = bestChainableEntrypoint(enriched[i].Affected, enriched[i].ChainableEntrypoint)
 		if !classificationOnly {
 			pain, rem := worstAsset(enriched[i].Affected)
 			enriched[i].Pain = pain
@@ -610,7 +635,6 @@ func suppressedWithWouldHaveBeen(findings []model.Finding, exposures map[model.R
 		if exposure, ok := bestExposure(finding.AffectedResources, exposures); ok {
 			enriched[i].Exposure = &exposure
 		}
-		enriched[i].ChainableEntrypoint = bestChainableEntrypoint(enriched[i].Affected, enriched[i].ChainableEntrypoint)
 		if !classificationOnly {
 			pain, rem := worstAsset(enriched[i].Affected)
 			enriched[i].WouldHaveBeenPain = pain
@@ -635,7 +659,6 @@ func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]mode
 			detail.Exposure = &value
 		}
 		assetInternetAccessible := internetReachable(detail.Exposure)
-		detail.ChainableEntrypoint = reachability.ClassifyChainableEntrypoint(finding.ChainableEntrypoint, assetInternetAccessible)
 		pain, rem := scoreAsset(sc, idx, nsLabels, ref, finding, assetInternetAccessible)
 		if classificationOnly {
 			detail.Classification = classificationFromScore(pain, rem)
@@ -645,35 +668,6 @@ func affectedDetails(finding model.Finding, exposures map[model.ResourceRef]mode
 		details = append(details, detail)
 	}
 	return details
-}
-
-func bestChainableEntrypoint(affected []model.Affected, fallback *model.ChainableEntrypoint) *model.ChainableEntrypoint {
-	var best *model.ChainableEntrypoint
-	for _, item := range affected {
-		if chainableClassificationRank(item.ChainableEntrypoint) > chainableClassificationRank(best) {
-			best = item.ChainableEntrypoint
-		}
-	}
-	if best != nil {
-		return cloneChainableEntrypoint(best)
-	}
-	return reachability.ClassifyChainableEntrypoint(fallback, false)
-}
-
-func chainableClassificationRank(value *model.ChainableEntrypoint) int {
-	if value == nil {
-		return 0
-	}
-	switch value.Classification {
-	case "high_confidence":
-		return 3
-	case "possible":
-		return 2
-	case "none":
-		return 1
-	default:
-		return 0
-	}
 }
 
 func classificationFromScore(pain *model.Pain, remediation *model.Remediation) *model.AssetClassification {
@@ -761,6 +755,7 @@ func stripEnrichmentFields(finding *model.Finding) {
 	finding.EPSS = nil
 	finding.Vulnrichment = nil
 	finding.CWEs = nil
+	finding.ChainTaxonomy = nil
 }
 
 // worstAsset returns the PAIN and remediation of the most urgent affected
@@ -867,8 +862,8 @@ func cloneFinding(finding model.Finding) model.Finding {
 		value := *finding.Vulnrichment
 		clone.Vulnrichment = &value
 	}
-	if finding.ChainableEntrypoint != nil {
-		clone.ChainableEntrypoint = cloneChainableEntrypoint(finding.ChainableEntrypoint)
+	if finding.ChainTaxonomy != nil {
+		clone.ChainTaxonomy = cloneChainTaxonomy(finding.ChainTaxonomy)
 	}
 	if finding.Exposure != nil {
 		value := *finding.Exposure
@@ -897,14 +892,29 @@ func cloneFinding(finding model.Finding) model.Finding {
 	return clone
 }
 
-func cloneChainableEntrypoint(in *model.ChainableEntrypoint) *model.ChainableEntrypoint {
+func cloneChainTaxonomy(in *model.ChainTaxonomyEvidence) *model.ChainTaxonomyEvidence {
 	if in == nil {
 		return nil
 	}
 	out := *in
+	out.CAPECIDs = append([]string(nil), in.CAPECIDs...)
+	out.ATTACKTechniqueIDs = append([]string(nil), in.ATTACKTechniqueIDs...)
+	out.ATTACKTactics = append([]string(nil), in.ATTACKTactics...)
+	out.PredecessorCAPECIDs = append([]string(nil), in.PredecessorCAPECIDs...)
+	out.SuccessorCAPECIDs = append([]string(nil), in.SuccessorCAPECIDs...)
 	out.ReasonCodes = append([]string(nil), in.ReasonCodes...)
-	out.ClassificationReasonCodes = append([]string(nil), in.ClassificationReasonCodes...)
-	out.SourceFacts.CWEs = append([]string(nil), in.SourceFacts.CWEs...)
+	out.Paths = make([]model.ChainTaxonomyPath, len(in.Paths))
+	for i, path := range in.Paths {
+		out.Paths[i] = path
+		out.Paths[i].PredecessorCAPECIDs = append([]string(nil), path.PredecessorCAPECIDs...)
+		out.Paths[i].SuccessorCAPECIDs = append([]string(nil), path.SuccessorCAPECIDs...)
+		out.Paths[i].ConsequenceImpacts = append([]string(nil), path.ConsequenceImpacts...)
+		out.Paths[i].ATTACKTechniques = make([]model.ChainATTACKTechnique, len(path.ATTACKTechniques))
+		for j, technique := range path.ATTACKTechniques {
+			out.Paths[i].ATTACKTechniques[j] = technique
+			out.Paths[i].ATTACKTechniques[j].Tactics = append([]string(nil), technique.Tactics...)
+		}
+	}
 	return &out
 }
 
@@ -918,9 +928,6 @@ func cloneAffected(affected []model.Affected) []model.Affected {
 		if item.Exposure != nil {
 			value := *item.Exposure
 			clone[i].Exposure = &value
-		}
-		if item.ChainableEntrypoint != nil {
-			clone[i].ChainableEntrypoint = cloneChainableEntrypoint(item.ChainableEntrypoint)
 		}
 		if item.Classification != nil {
 			value := *item.Classification

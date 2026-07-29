@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/chaincatalog"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
@@ -42,6 +43,9 @@ func TestBuildAndRenderJSONIncludeVersionMetadata(t *testing.T) {
 	if got.ScannerVersion != "0.72.0" || got.PluginVersion != "2.3.1" {
 		t.Fatalf("versions = scanner %q, plugin %q", got.ScannerVersion, got.PluginVersion)
 	}
+	if got.ReportSchemaVersion != ReportSchemaVersion {
+		t.Fatalf("ReportSchemaVersion = %q, want %q", got.ReportSchemaVersion, ReportSchemaVersion)
+	}
 	var output bytes.Buffer
 	if err := RenderJSON(&output, got); err != nil {
 		t.Fatalf("RenderJSON returned error: %v", err)
@@ -50,50 +54,146 @@ func TestBuildAndRenderJSONIncludeVersionMetadata(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode rendered JSON: %v", err)
 	}
-	if decoded["scannerVersion"] != "0.72.0" || decoded["pluginVersion"] != "2.3.1" {
+	if decoded["reportSchemaVersion"] != ReportSchemaVersion || decoded["scannerVersion"] != "0.72.0" || decoded["pluginVersion"] != "2.3.1" {
 		t.Fatalf("rendered version metadata = %#v", decoded)
 	}
 }
 
-func TestBuildAndRenderJSONIncludeChainableEntrypointMetadata(t *testing.T) {
-	finding := sampleFinding("CVE-2026-0094", "HIGH", 0.7)
-	finding.CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:L"
-	finding.CWEs = []string{"CWE-94"}
+func TestBuildIncludesPathPreservingChainTaxonomyAndCoverage(t *testing.T) {
+	mapped := sampleFinding("CVE-2026-0094", "HIGH", 0.7)
+	mapped.CWEs = []string{"CWE-94"}
+	unknown := sampleFinding("CVE-2026-0000", "MEDIUM", 0.2)
 
-	got := Build(sampleInventory(), []model.Finding{finding}, nil, Options{
+	got := Build(sampleInventory(), []model.Finding{mapped, unknown}, nil, Options{
 		GeneratedAt: fixedTime(),
 		View:        ViewFindings,
 	})
 
-	if len(got.Findings) != 1 || got.Findings[0].ChainableEntrypoint == nil {
-		t.Fatalf("Findings = %#v, want chainable-entrypoint metadata", got.Findings)
+	if got.ChainCatalog == nil || got.ChainCatalog.CAPECVersion != "3.9" || got.ChainCatalog.ATTACKVersion != "19.1" {
+		t.Fatalf("ChainCatalog = %#v, want pinned CAPEC/ATT&CK metadata", got.ChainCatalog)
 	}
-	entrypoint := got.Findings[0].ChainableEntrypoint
-	if entrypoint.CandidateStatus != "high_confidence" || entrypoint.Classification != "none" || entrypoint.HighConfidence || entrypoint.PolicyVersion != "chainable-entrypoint-v2" {
-		t.Fatalf("ChainableEntrypoint = %#v, want unexposed high-confidence candidate classified as none", entrypoint)
+	if got.Summary.ChainTaxonomy == nil {
+		t.Fatal("Summary.ChainTaxonomy = nil")
 	}
-	if got.Findings[0].Remediation == nil || got.Findings[0].Remediation.IRV {
-		t.Fatalf("Remediation = %#v, want chainable-entrypoint metadata to leave IRV false", got.Findings[0].Remediation)
+	if got.Summary.ChainTaxonomy.MappedFindings != 1 || got.Summary.ChainTaxonomy.UnknownFindings != 1 ||
+		got.Summary.ChainTaxonomy.FindingsWithATTACKTechnique != 1 {
+		t.Fatalf("ChainTaxonomy summary = %#v", got.Summary.ChainTaxonomy)
+	}
+
+	var evidence *model.ChainTaxonomyEvidence
+	for i := range got.Findings {
+		if got.Findings[i].ID == mapped.ID {
+			evidence = got.Findings[i].ChainTaxonomy
+		}
+	}
+	if evidence == nil || evidence.Status != "mapped" || evidence.PredecessorStatus == "" ||
+		evidence.SuccessorStatus == "" || len(evidence.Paths) != 2 {
+		t.Fatalf("mapped ChainTaxonomy = %#v, want two CWE-94 CAPEC paths", evidence)
+	}
+	for _, path := range evidence.Paths {
+		if path.CWEID != "CWE-94" || path.CAPECID == "" || path.CAPECName == "" {
+			t.Fatalf("path = %#v, want preserved CWE-94 -> CAPEC evidence", path)
+		}
 	}
 
 	var output bytes.Buffer
 	if err := RenderJSON(&output, got); err != nil {
 		t.Fatalf("RenderJSON returned error: %v", err)
 	}
-	for _, want := range []string{`"chainableEntrypoint"`, `"classification": "none"`, `"candidateStatus": "high_confidence"`, `"strict-execution-cwe"`, `"policyVersion": "chainable-entrypoint-v2"`} {
+	for _, want := range []string{
+		`"reportSchemaVersion": "3"`,
+		`"chainCatalog"`,
+		`"chainTaxonomy"`,
+		`"taxonomyRole"`,
+		`"predecessorStatus"`,
+		`"successorStatus"`,
+		`"CAPEC-35"`,
+		`"attackTechniqueIds"`,
+		`"chain-taxonomy-v1"`,
+	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("rendered JSON missing %q:\n%s", want, output.String())
 		}
 	}
+}
 
-	exposed := Build(sampleInventory(), []model.Finding{finding}, map[model.ResourceRef]model.Exposure{
-		sampleContainerRef(): {InternetAccessible: true},
-	}, Options{GeneratedAt: fixedTime(), View: ViewFindings})
-	if len(exposed.Findings) != 1 || exposed.Findings[0].ChainableEntrypoint == nil || !exposed.Findings[0].ChainableEntrypoint.HighConfidence {
-		t.Fatalf("exposed Findings = %#v, want high-confidence chainable entrypoint", exposed.Findings)
+func TestBuildSuppressEnrichmentsOmitsChainTaxonomy(t *testing.T) {
+	finding := sampleFinding("CVE-2026-0094", "HIGH", 0.7)
+	finding.CWEs = []string{"CWE-94"}
+
+	got := Build(sampleInventory(), []model.Finding{finding}, nil, Options{
+		GeneratedAt:         fixedTime(),
+		View:                ViewFindings,
+		SuppressEnrichments: true,
+	})
+
+	if got.ChainCatalog != nil || got.Summary.ChainTaxonomy != nil {
+		t.Fatalf("catalog/summary = %#v/%#v, want taxonomy omitted", got.ChainCatalog, got.Summary.ChainTaxonomy)
 	}
-	if len(exposed.Findings[0].Affected) != 1 || exposed.Findings[0].Affected[0].ChainableEntrypoint == nil || !exposed.Findings[0].Affected[0].ChainableEntrypoint.HighConfidence {
-		t.Fatalf("exposed Affected = %#v, want per-asset high-confidence chainable entrypoint", exposed.Findings[0].Affected)
+	if len(got.Findings) != 1 || got.Findings[0].ChainTaxonomy != nil {
+		t.Fatalf("Findings = %#v, want taxonomy omitted", got.Findings)
+	}
+}
+
+func TestBuildIncludesExactSameResourceCAPECTransitions(t *testing.T) {
+	upstream := sampleFinding("CVE-2026-1000", "HIGH", 0.7)
+	upstream.PackageName = "network-parser"
+	upstream.CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+	upstream.CWEs = []string{"CWE-120"}
+	downstream := sampleFinding("CVE-2026-2000", "HIGH", 0.4)
+	downstream.PackageName = "privileged-helper"
+	downstream.CVSSVector = "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+	downstream.CWEs = []string{"CWE-648"}
+
+	exposures := map[model.ResourceRef]model.Exposure{
+		sampleContainerRef(): {InternetAccessible: true},
+	}
+	got := Build(sampleInventory(), []model.Finding{upstream, downstream}, exposures, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+	emptyCatalog, err := chaincatalog.Parse([]byte(`{"schemaVersion":"1","patterns":{},"cwes":{}}`))
+	if err != nil {
+		t.Fatalf("parse empty comparison catalog: %v", err)
+	}
+	baseline := Build(sampleInventory(), []model.Finding{upstream, downstream}, exposures, Options{
+		GeneratedAt: fixedTime(), View: ViewFindings, ChainCatalog: emptyCatalog,
+	})
+
+	var matched *model.CAPECTransitionCandidate
+	for i := range got.CAPECTransitions {
+		transition := &got.CAPECTransitions[i]
+		if transition.SourceCAPECID == "CAPEC-100" && transition.TargetCAPECID == "CAPEC-234" {
+			matched = transition
+			break
+		}
+	}
+	if matched == nil || matched.Upstream.ID != upstream.ID || matched.Downstream.ID != downstream.ID ||
+		matched.CandidateClass != "external_to_follow_on" ||
+		matched.Upstream.Role != "candidate_entrypoint" || matched.Downstream.Role != "candidate_follower" ||
+		matched.Upstream.AttackVector != "N" || matched.Upstream.PrivilegesRequired != "N" ||
+		matched.Downstream.AttackVector != "L" {
+		t.Fatalf("CAPECTransitions = %#v, want explicit CAPEC-100 -> CAPEC-234 pair", got.CAPECTransitions)
+	}
+	if got.Summary.ChainTaxonomy == nil ||
+		got.Summary.ChainTaxonomy.TransitionCandidates != len(got.CAPECTransitions) ||
+		got.Summary.ChainTaxonomy.EntrypointCandidates != 1 ||
+		got.Summary.ChainTaxonomy.UniqueEntrypointCVEs != 1 ||
+		got.Summary.ChainTaxonomy.ResourcesWithTransitions != 1 {
+		t.Fatalf("transition summary = %#v", got.Summary.ChainTaxonomy)
+	}
+	if !reflect.DeepEqual(got.Findings[1].Remediation, baseline.Findings[1].Remediation) {
+		t.Fatalf("downstream remediation changed by CAPEC evidence: got %#v, baseline %#v", got.Findings[1].Remediation, baseline.Findings[1].Remediation)
+	}
+
+	var output bytes.Buffer
+	if err := RenderJSON(&output, got); err != nil {
+		t.Fatalf("RenderJSON returned error: %v", err)
+	}
+	for _, want := range []string{`"capecTransitions"`, `"role": "candidate_entrypoint"`, `"role": "candidate_follower"`, `"relationship": "CanPrecede"`, `"evidenceLevel": "pattern_level_candidate"`, `"policyVersion": "capec-transition-v1"`} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("rendered JSON missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "chainableEntrypoint") {
+		t.Fatalf("retired chainableEntrypoint field is still present:\n%s", output.String())
 	}
 }
 
@@ -118,18 +218,9 @@ func TestBuildFindingViewIncludesPerAffectedResourceExposure(t *testing.T) {
 		if affected.Resource == exposed && (affected.Exposure == nil || !affected.Exposure.InternetAccessible) {
 			t.Fatalf("Affected exposed entry = %#v, want internet exposure", affected)
 		}
-		if affected.Resource == exposed && (affected.ChainableEntrypoint == nil || !affected.ChainableEntrypoint.HighConfidence) {
-			t.Fatalf("Affected exposed entry = %#v, want high-confidence chainable entrypoint", affected)
-		}
 		if affected.Resource == internal && affected.Exposure != nil {
 			t.Fatalf("Affected internal entry = %#v, want no exposure", affected)
 		}
-		if affected.Resource == internal && (affected.ChainableEntrypoint == nil || affected.ChainableEntrypoint.HighConfidence || affected.ChainableEntrypoint.Classification != "none") {
-			t.Fatalf("Affected internal entry = %#v, want chainable candidate classified as none", affected)
-		}
-	}
-	if got.Findings[0].ChainableEntrypoint == nil || !got.Findings[0].ChainableEntrypoint.HighConfidence {
-		t.Fatalf("top-level ChainableEntrypoint = %#v, want strongest affected-asset classification", got.Findings[0].ChainableEntrypoint)
 	}
 }
 

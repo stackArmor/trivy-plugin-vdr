@@ -238,11 +238,10 @@ type Finding struct {
 	CWEs         []string      `json:"cwes,omitempty"`
 	EPSS         *EPSS         `json:"epss,omitempty"`
 	Vulnrichment *Vulnrichment `json:"vulnrichment,omitempty"`
-	// ChainableEntrypoint joins the informational CVE-level execution candidate
-	// classification to the affected asset's internet exposure. It does not change
-	// this or any downstream finding's IRV determination.
-	ChainableEntrypoint *ChainableEntrypoint `json:"chainableEntrypoint,omitempty"`
-	Exposure            *Exposure            `json:"exposure,omitempty"`
+	// ChainTaxonomy preserves the path-level CWE -> CAPEC -> ATT&CK evidence for
+	// this CVE. It is informational and does not affect PAIN, IRV, or remediation.
+	ChainTaxonomy *ChainTaxonomyEvidence `json:"chainTaxonomy,omitempty"`
+	Exposure      *Exposure              `json:"exposure,omitempty"`
 	// AffectedResources is the internal list of resources using this image. It is
 	// not serialized; the public, richer representation is Affected (each resource
 	// plus its exposure).
@@ -299,36 +298,103 @@ type Vulnrichment struct {
 	SourceURL string   `json:"sourceUrl,omitempty"`
 }
 
-// ChainableEntrypoint records the governed CVE-level E0 candidate classification
-// and its deployed-finding classification using active state and asset internet
-// exposure. Execution-boundary joins and downstream G0 promotion remain outside
-// this informational record.
-type ChainableEntrypoint struct {
-	// Classification is the deployed-finding result: high_confidence | possible |
-	// none. HighConfidence is true only when the finding is active, its affected
-	// asset is internet-accessible, and CandidateStatus is high_confidence.
-	Classification            string                         `json:"classification"`
-	HighConfidence            bool                           `json:"highConfidence"`
-	ActiveFinding             bool                           `json:"activeFinding"`
-	InternetAccessible        bool                           `json:"internetAccessible"`
-	CandidateStatus           string                         `json:"candidateStatus"` // high_confidence|possible|none
-	ReasonCodes               []string                       `json:"reasonCodes"`
-	ClassificationReasonCodes []string                       `json:"classificationReasonCodes"`
-	PolicyVersion             string                         `json:"policyVersion"`
-	SourceFacts               ChainableEntrypointSourceFacts `json:"sourceFacts"`
-	ExecutionContext          string                         `json:"executionContext,omitempty"` // server-runtime|client|unknown
-	ExecutionContextSource    string                         `json:"executionContextSource,omitempty"`
+// ChainTaxonomyEvidence is the offline taxonomy projection for one CVE. A
+// mapped status means at least one active Standard/Detailed CAPEC pattern was
+// found. Unknown means the source CWE or an eligible CAPEC mapping was absent;
+// it is not evidence that the CVE cannot participate in a chain.
+type ChainTaxonomyEvidence struct {
+	Status              string              `json:"status"` // mapped|unknown
+	TaxonomyRole        string              `json:"taxonomyRole"`
+	Ambiguity           string              `json:"ambiguity"`         // none|multiple_paths|mixed_roles
+	PredecessorStatus   string              `json:"predecessorStatus"` // present|not_declared|unknown
+	SuccessorStatus     string              `json:"successorStatus"`   // present|not_declared|unknown
+	CAPECIDs            []string            `json:"capecIds,omitempty"`
+	ATTACKTechniqueIDs  []string            `json:"attackTechniqueIds,omitempty"`
+	ATTACKTactics       []string            `json:"attackTactics,omitempty"`
+	PredecessorCAPECIDs []string            `json:"predecessorCapecIds,omitempty"`
+	SuccessorCAPECIDs   []string            `json:"successorCapecIds,omitempty"`
+	Paths               []ChainTaxonomyPath `json:"paths,omitempty"`
+	ReasonCodes         []string            `json:"reasonCodes"`
+	PolicyVersion       string              `json:"policyVersion"`
 }
 
-// ChainableEntrypointSourceFacts preserves the scanner and enrichment facts
-// consumed by the entry-point policy so a result can be reproduced and audited.
-type ChainableEntrypointSourceFacts struct {
-	CVSSVector                 string   `json:"cvssVector,omitempty"`
-	CVSSSource                 string   `json:"cvssSource,omitempty"`
-	AttackVector               string   `json:"attackVector,omitempty"`
-	FullVulnerableSystemImpact bool     `json:"fullVulnerableSystemImpact"`
-	CWEs                       []string `json:"cwes,omitempty"`
-	CWESource                  string   `json:"cweSource,omitempty"`
+// ChainTaxonomyPath retains the specific CWE/CAPEC path that contributed
+// taxonomy evidence. It deliberately avoids flattening unrelated CAPEC paths
+// into one unreviewable union.
+type ChainTaxonomyPath struct {
+	CWEID               string                 `json:"cweId"`
+	CAPECID             string                 `json:"capecId"`
+	CAPECName           string                 `json:"capecName"`
+	Abstraction         string                 `json:"abstraction"`
+	ATTACKTechniques    []ChainATTACKTechnique `json:"attackTechniques,omitempty"`
+	PredecessorCAPECIDs []string               `json:"predecessorCapecIds,omitempty"`
+	SuccessorCAPECIDs   []string               `json:"successorCapecIds,omitempty"`
+	ConsequenceImpacts  []string               `json:"consequenceImpacts,omitempty"`
+}
+
+// ChainATTACKTechnique is one CAPEC taxonomy mapping resolved against the
+// official Enterprise ATT&CK STIX corpus.
+type ChainATTACKTechnique struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name,omitempty"`
+	Tactics []string `json:"tactics,omitempty"`
+}
+
+// ChainCatalogMetadata identifies the exact generated corpus snapshot embedded
+// in the plugin.
+type ChainCatalogMetadata struct {
+	SchemaVersion string `json:"schemaVersion"`
+	CAPECVersion  string `json:"capecVersion"`
+	CAPECDate     string `json:"capecDate,omitempty"`
+	CAPECSHA256   string `json:"capecSha256"`
+	ATTACKVersion string `json:"attackVersion"`
+	ATTACKDate    string `json:"attackDate,omitempty"`
+	ATTACKSHA256  string `json:"attackSha256"`
+}
+
+// CAPECTransitionCandidate is an aggregated, pattern-level candidate transition
+// between two active CVEs observed on the same exact resource. It is emitted
+// only for an internet-reachable, AV:N/PR:N upstream CVE and an explicit CAPEC
+// CanPrecede edge to a downstream CVE's mapped path. The downstream CVSS access
+// metrics are retained as context but do not gate the relationship. It does not
+// change either finding's IRV or remediation deadline.
+type CAPECTransitionCandidate struct {
+	Resource                   ResourceRef             `json:"resource"`
+	CandidateClass             string                  `json:"candidateClass"`
+	Upstream                   CAPECTransitionEndpoint `json:"upstream"`
+	Downstream                 CAPECTransitionEndpoint `json:"downstream"`
+	SourceCAPECID              string                  `json:"sourceCapecId"`
+	SourceCAPECName            string                  `json:"sourceCapecName"`
+	TargetCAPECID              string                  `json:"targetCapecId"`
+	TargetCAPECName            string                  `json:"targetCapecName"`
+	Relationship               string                  `json:"relationship"`
+	UpstreamInternetAccessible bool                    `json:"upstreamInternetAccessible"`
+	SourceConsequenceImpacts   []string                `json:"sourceConsequenceImpacts,omitempty"`
+	TargetPrerequisites        []string                `json:"targetPrerequisites,omitempty"`
+	EvidenceLevel              string                  `json:"evidenceLevel"`
+	Confidence                 string                  `json:"confidence"`
+	ReviewRequired             bool                    `json:"reviewRequired"`
+	ReasonCodes                []string                `json:"reasonCodes"`
+	PolicyVersion              string                  `json:"policyVersion"`
+}
+
+// CAPECTransitionEndpoint aggregates every package occurrence and CWE path for
+// one CVE endpoint without duplicating its complete vulnerability records.
+type CAPECTransitionEndpoint struct {
+	ID                 string                            `json:"cveId"`
+	Role               string                            `json:"role"`
+	Findings           []CAPECTransitionFindingReference `json:"findings,omitempty"`
+	CWEIDs             []string                          `json:"cweIds,omitempty"`
+	AttackVector       string                            `json:"attackVector"`
+	PrivilegesRequired string                            `json:"privilegesRequired"`
+}
+
+// CAPECTransitionFindingReference identifies one package occurrence of a CVE
+// endpoint without duplicating its complete vulnerability record.
+type CAPECTransitionFindingReference struct {
+	PackageName      string `json:"packageName,omitempty"`
+	InstalledVersion string `json:"installedVersion,omitempty"`
+	ImageRef         string `json:"imageRef,omitempty"`
 }
 
 type Exposure struct {
@@ -409,12 +475,11 @@ type SecurityPolicy struct {
 }
 
 type Affected struct {
-	Resource            ResourceRef          `json:"resource"`
-	Exposure            *Exposure            `json:"exposure,omitempty"`
-	ChainableEntrypoint *ChainableEntrypoint `json:"chainableEntrypoint,omitempty"`
-	Classification      *AssetClassification `json:"classification,omitempty"`
-	Pain                *Pain                `json:"pain,omitempty"`
-	Remediation         *Remediation         `json:"remediation,omitempty"`
+	Resource       ResourceRef          `json:"resource"`
+	Exposure       *Exposure            `json:"exposure,omitempty"`
+	Classification *AssetClassification `json:"classification,omitempty"`
+	Pain           *Pain                `json:"pain,omitempty"`
+	Remediation    *Remediation         `json:"remediation,omitempty"`
 }
 
 type AssetClassification struct {
@@ -473,9 +538,11 @@ type Pain struct {
 }
 
 type Report struct {
-	GeneratedAt    time.Time `json:"generatedAt"`
-	ScannerVersion string    `json:"scannerVersion"`
-	PluginVersion  string    `json:"pluginVersion"`
+	ReportSchemaVersion string                `json:"reportSchemaVersion"`
+	GeneratedAt         time.Time             `json:"generatedAt"`
+	ScannerVersion      string                `json:"scannerVersion"`
+	PluginVersion       string                `json:"pluginVersion"`
+	ChainCatalog        *ChainCatalogMetadata `json:"chainCatalog,omitempty"`
 	// ContextName is the Kubernetes context (kubectx) the inventory was collected
 	// from. Shown in the report header.
 	ContextName string `json:"contextName,omitempty"`
@@ -484,6 +551,9 @@ type Report struct {
 	Class    string    `json:"class,omitempty"`
 	Summary  Summary   `json:"summary"`
 	Findings []Finding `json:"findings,omitempty"`
+	// CAPECTransitions contains exact same-resource CVE/CAPEC/CAPEC/CVE
+	// candidate pairs derived from explicit CAPEC CanPrecede edges.
+	CAPECTransitions []CAPECTransitionCandidate `json:"capecTransitions,omitempty"`
 	// SuppressedFindings contains VEX/dispositioned findings kept for audit
 	// visibility. These do not contribute to Summary.Findings or active
 	// remediation calculations.
@@ -516,7 +586,24 @@ type Summary struct {
 	// FindingsWithSpecificCWE is the number of active findings that carry at least
 	// one specific CWE. Paired with Findings it is the data-quality metric that
 	// gates real-world PAIN Relief coverage.
-	FindingsWithSpecificCWE int            `json:"findingsWithSpecificCwe"`
-	BySeverity              map[string]int `json:"bySeverity,omitempty"`
-	InternetAccessible      int            `json:"internetAccessible,omitempty"`
+	FindingsWithSpecificCWE int                   `json:"findingsWithSpecificCwe"`
+	ChainTaxonomy           *ChainTaxonomySummary `json:"chainTaxonomy,omitempty"`
+	BySeverity              map[string]int        `json:"bySeverity,omitempty"`
+	InternetAccessible      int                   `json:"internetAccessible,omitempty"`
+}
+
+// ChainTaxonomySummary reports coverage of the offline taxonomy projection over
+// active, post-filter findings. Counts are informational and do not affect any
+// scoring result.
+type ChainTaxonomySummary struct {
+	MappedFindings                  int `json:"mappedFindings"`
+	UnknownFindings                 int `json:"unknownFindings"`
+	AmbiguousFindings               int `json:"ambiguousFindings"`
+	FindingsWithATTACKTechnique     int `json:"findingsWithAttackTechnique"`
+	FindingsWithExplicitPredecessor int `json:"findingsWithExplicitPredecessor"`
+	FindingsWithExplicitSuccessor   int `json:"findingsWithExplicitSuccessor"`
+	TransitionCandidates            int `json:"transitionCandidates"`
+	EntrypointCandidates            int `json:"entrypointCandidates"`
+	UniqueEntrypointCVEs            int `json:"uniqueEntrypointCves"`
+	ResourcesWithTransitions        int `json:"resourcesWithTransitions"`
 }
