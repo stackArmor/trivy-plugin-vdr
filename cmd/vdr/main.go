@@ -47,6 +47,9 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "enrich-report" {
+		return runEnrichReport(args[1:], os.Stdin, os.Stdout)
+	}
 	cfg, err := config.ParseWithOutput(args, os.Stdout)
 	if err != nil {
 		return err

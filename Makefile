@@ -1,4 +1,4 @@
-.PHONY: build test install-local
+.PHONY: build test install-local chain-catalog
 
 BINARY := vdr
 PLUGIN_VERSION := $(shell awk '/^version:/ {print $$2; exit}' plugin.yaml)
@@ -9,6 +9,14 @@ build:
 
 test:
 	go test ./...
+
+chain-catalog:
+	@test -n "$(CAPEC)" || (echo "CAPEC=/path/to/capec_latest.zip is required" >&2; exit 2)
+	@test -n "$(ATTACK)" || (echo "ATTACK=/path/to/enterprise-attack.json is required" >&2; exit 2)
+	go run ./cmd/vdr-chain-catalog \
+		--capec "$(CAPEC)" \
+		--attack "$(ATTACK)" \
+		--output internal/chaincatalog/data/catalog.json
 
 install-local: build
 	mkdir -p $(HOME)/.trivy/plugins/vdr

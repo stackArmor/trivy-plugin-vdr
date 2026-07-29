@@ -2,26 +2,6 @@
 
 `vdr` uses internet reachability to set the IRV input for FedRAMP remediation deadlines. The evaluation is intentionally conservative: a resource is marked internet-reachable only when the collected platform metadata shows a public path to the affected workload and no supported access-protection control blocks unauthenticated internet access.
 
-## Chainable entry-point flag
-
-Each vulnerability finding carries informational `chainableEntrypoint` metadata that joins the CVE-level execution classification to the affected asset's internet exposure. Its deployed `classification` is `high_confidence` only when all three conditions hold:
-
-1. The finding is active (not suppressed).
-2. The affected asset is `internetAccessible` under the collected exposure evidence.
-3. The CVE-level `candidateStatus` is `high_confidence`.
-
-An active, internet-accessible `possible` candidate retains the deployed classification `possible`. Every other combination is `none`. This stops at the upstream signal: it does not join findings across an execution boundary, promote AV:L vulnerabilities to IRV, or change a remediation deadline.
-
-Policy `chainable-entrypoint-v2` produces three CVE-level candidate statuses. Every heuristic branch requires `AV:N`:
-
-- `high_confidence` for `AV:N` findings mapped to the high-signal strict execution-semantics set (`CWE-78`, `CWE-94`, `CWE-95`, `CWE-96`, `CWE-98`, `CWE-553`, `CWE-624`, or `CWE-917`), or for `AV:N` findings with full vulnerable-system C/I/A impact and the moderate-signal `CWE-97` or `CWE-494`.
-- `possible` for `AV:N` plus full vulnerable-system impact without a corroborating execution signal, or for `AV:N` findings mapped to the moderate/context-dependent `CWE-97`, `CWE-470`, `CWE-494`, `CWE-829`, or `CWE-1336` that do not meet the high-confidence conjunction. Context-dependent `CWE-829` and `CWE-1336` cases remain possible because server/runtime execution context is not currently collected.
-- `none` when no rule matches.
-
-The record retains the deployed classification and its inputs (`activeFinding`, `internetAccessible`, and `candidateStatus`), the `highConfidence` flag, machine-readable reason codes, policy version, normalized CWEs, the CVSS vector and attack vector, the full-impact result, and execution-context status when relevant. Finding-centric JSON records the result on every `affected[]` asset and surfaces the strongest classification at the finding level. The HTML report filters on `high_confidence`, `possible`, and `none`, and displays high-confidence/possible results as a tooltip badge beside the CVE.
-
-The evaluator uses only source facts present in the report. When enrichment is skipped or a CVE has no specific CWE assignment, the record preserves that absence and the classifier falls back to the available CVSS signals.
-
 ## Cloud Run
 
 Cloud Run jobs are never counted as internet-reachable. Cloud Run services are evaluated from service ingress settings, IAM policy, and, for load-balancer-only ingress, public HTTP(S) load balancer metadata.

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -11,9 +12,11 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
 func TestRunK8sPassesPullSecretAuthsToRegistryBuild(t *testing.T) {
@@ -98,4 +101,120 @@ func TestRunHelmReachabilityOnlyEndToEnd(t *testing.T) {
 			t.Fatalf("report missing %s:\n%s", want, output.String())
 		}
 	}
+}
+
+func TestRunEnrichReportAddsPinnedTaxonomyWithoutRescan(t *testing.T) {
+	inputReport := model.Report{
+		GeneratedAt:    fixedMainTestTime(),
+		ScannerVersion: "0.72.0",
+		PluginVersion:  "3.0.0",
+		Summary:        model.Summary{Findings: 2, FindingsWithSpecificCWE: 1},
+		Findings: []model.Finding{
+			{ID: "CVE-2026-0094", PackageName: "parser", InstalledVersion: "1.0", Severity: "HIGH", CWEs: []string{"CWE-94"}},
+			{ID: "CVE-2026-0000", PackageName: "other", InstalledVersion: "2.0", Severity: "MEDIUM"},
+		},
+	}
+	var input bytes.Buffer
+	if err := json.NewEncoder(&input).Encode(inputReport); err != nil {
+		t.Fatalf("encode input report: %v", err)
+	}
+	var output bytes.Buffer
+
+	if err := runEnrichReport([]string{"--input", "-"}, &input, &output); err != nil {
+		t.Fatalf("runEnrichReport returned error: %v", err)
+	}
+
+	var got model.Report
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatalf("decode enriched report: %v", err)
+	}
+	if got.ReportSchemaVersion != "3" || got.ChainCatalog == nil ||
+		got.ChainCatalog.CAPECVersion != "3.9" || got.ChainCatalog.ATTACKVersion != "19.1" {
+		t.Fatalf("report/catalog metadata = %q/%#v", got.ReportSchemaVersion, got.ChainCatalog)
+	}
+	if got.Summary.ChainTaxonomy == nil || got.Summary.ChainTaxonomy.MappedFindings != 1 ||
+		got.Summary.ChainTaxonomy.UnknownFindings != 1 {
+		t.Fatalf("taxonomy summary = %#v", got.Summary.ChainTaxonomy)
+	}
+	if len(got.Findings) != 2 || got.Findings[0].ChainTaxonomy == nil ||
+		got.Findings[0].ChainTaxonomy.Status != "mapped" ||
+		got.Findings[0].ChainTaxonomy.PredecessorStatus == "" ||
+		got.Findings[0].ChainTaxonomy.SuccessorStatus == "" ||
+		len(got.Findings[0].ChainTaxonomy.Paths) == 0 {
+		t.Fatalf("findings = %#v, want path-preserving taxonomy", got.Findings)
+	}
+	if got.Findings[1].ChainTaxonomy == nil || got.Findings[1].ChainTaxonomy.Status != "unknown" ||
+		got.Findings[1].ChainTaxonomy.PredecessorStatus != "unknown" ||
+		got.Findings[1].ChainTaxonomy.SuccessorStatus != "unknown" {
+		t.Fatalf("unknown finding taxonomy = %#v", got.Findings[1].ChainTaxonomy)
+	}
+}
+
+func TestRunEnrichReportRejectsUnsupportedSchema(t *testing.T) {
+	var input bytes.Buffer
+	if err := json.NewEncoder(&input).Encode(model.Report{ReportSchemaVersion: "999"}); err != nil {
+		t.Fatalf("encode input report: %v", err)
+	}
+	err := runEnrichReport([]string{"--input", "-"}, &input, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), `unsupported VDR report schema "999"`) {
+		t.Fatalf("runEnrichReport error = %v", err)
+	}
+}
+
+func TestRunEnrichReportMigratesLegacyEntrypointToCAPECTransitions(t *testing.T) {
+	input := strings.NewReader(`{
+		"reportSchemaVersion":"2",
+		"generatedAt":"2026-07-28T12:00:00Z",
+		"summary":{"resources":1,"images":1,"findings":2,"findingsWithSpecificCwe":2},
+		"findings":[
+			{
+				"id":"CVE-2026-1000",
+				"packageName":"network-parser",
+				"installedVersion":"1.0",
+				"severity":"HIGH",
+				"cvssVector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				"cwes":["CWE-120"],
+				"chainableEntrypoint":{"classification":"possible","policyVersion":"chainable-entrypoint-v2"},
+				"affected":[{"resource":{"kind":"Deployment","namespace":"prod","name":"api","containerName":"app"},"exposure":{"internetAccessible":true}}]
+			},
+			{
+				"id":"CVE-2026-2000",
+				"packageName":"privileged-helper",
+				"installedVersion":"2.0",
+				"severity":"HIGH",
+				"cvssVector":"CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H",
+				"cwes":["CWE-648"],
+				"affected":[{"resource":{"kind":"Deployment","namespace":"prod","name":"api","containerName":"app"},"exposure":{"internetAccessible":true}}]
+			}
+		]
+	}`)
+	var output bytes.Buffer
+
+	if err := runEnrichReport([]string{"--input", "-"}, input, &output); err != nil {
+		t.Fatalf("runEnrichReport returned error: %v", err)
+	}
+	if strings.Contains(output.String(), "chainableEntrypoint") {
+		t.Fatalf("legacy chainableEntrypoint survived schema migration:\n%s", output.String())
+	}
+	var got model.Report
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatalf("decode enriched report: %v", err)
+	}
+	if got.ReportSchemaVersion != "3" || len(got.CAPECTransitions) == 0 {
+		t.Fatalf("schema/transitions = %q/%#v", got.ReportSchemaVersion, got.CAPECTransitions)
+	}
+	var matched bool
+	for _, transition := range got.CAPECTransitions {
+		if transition.SourceCAPECID == "CAPEC-100" && transition.TargetCAPECID == "CAPEC-234" &&
+			transition.Upstream.ID == "CVE-2026-1000" && transition.Downstream.ID == "CVE-2026-2000" {
+			matched = true
+		}
+	}
+	if !matched {
+		t.Fatalf("CAPECTransitions = %#v, want CAPEC-100 -> CAPEC-234", got.CAPECTransitions)
+	}
+}
+
+func fixedMainTestTime() time.Time {
+	return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 }

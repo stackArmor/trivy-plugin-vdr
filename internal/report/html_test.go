@@ -42,13 +42,13 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"Fix available", // filter to hide findings with no available fix
 		`id="fix-available"`,
 		"fixAvailable", // row field the fix-available filter reads
-		"Chainable entrypoint",
-		`id="chainable-entrypoint"`,
-		`"chainableEntrypoint"`,
-		`"high_confidence"`,
-		`"classification":"high_confidence"`,
-		"chainableEntrypointTooltip",
-		"entrypoint-badge",
+		"CAPEC chain role",
+		`id="chain-taxonomy-role"`,
+		`"chainTaxonomy"`,
+		"chainTaxonomyTooltip",
+		"taxonomy-badge",
+		"CAPEC-mapped findings",
+		"CAPEC transition candidates",
 		"entry.exposure || null", // finding rows must not inherit another affected resource's exposure
 		"scopedRemediation",      // finding rows use their own affected-resource deadline
 		"test-context",           // kubectx in the header
@@ -70,6 +70,9 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	if strings.Contains(output, "<th>Chainable entrypoint</th>") {
 		t.Fatalf("HTML output should not have a Chainable entrypoint column header")
 	}
+	if strings.Contains(output, "chainableEntrypoint") || strings.Contains(output, "chainable-entrypoint") {
+		t.Fatalf("HTML output still contains the retired chainable-entrypoint signal")
+	}
 	if strings.Contains(output, "entry.exposure || finding.exposure") {
 		t.Fatalf("HTML finding rows must not inherit top-level best exposure")
 	}
@@ -78,6 +81,42 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 	}
 	if strings.Contains(output, "https://") {
 		t.Fatalf("HTML output should be standalone without remote dependencies:\n%s", output)
+	}
+}
+
+func TestRenderHTMLIncludesExactCAPECTransitionTable(t *testing.T) {
+	upstream := sampleFinding("CVE-2026-1000", "HIGH", 0.7)
+	upstream.PackageName = "network-parser"
+	upstream.CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+	upstream.CWEs = []string{"CWE-120"}
+	downstream := sampleFinding("CVE-2026-2000", "HIGH", 0.4)
+	downstream.PackageName = "privileged-helper"
+	downstream.CVSSVector = "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+	downstream.CWEs = []string{"CWE-648"}
+	scanReport := Build(sampleInventory(), []model.Finding{upstream, downstream}, map[model.ResourceRef]model.Exposure{
+		sampleContainerRef(): {InternetAccessible: true},
+	}, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+	var buf bytes.Buffer
+
+	if err := RenderHTML(&buf, scanReport, ""); err != nil {
+		t.Fatalf("RenderHTML returned error: %v", err)
+	}
+	output := buf.String()
+	for _, want := range []string{
+		`id="capec-transitions"`,
+		"CAPEC-100",
+		"CAPEC-234",
+		"CanPrecede",
+		"CVE-2026-1000",
+		"CVE-2026-2000",
+		"Candidate entrypoint",
+		"Candidate follower",
+		"CAPEC entrypoint candidates",
+		"pattern-level review evidence",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("HTML transition output missing %q", want)
+		}
 	}
 }
 

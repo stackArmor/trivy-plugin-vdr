@@ -3,6 +3,7 @@ package report
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,9 +16,58 @@ func sampleCycloneDXReport() model.Report {
 	published := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	modified := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
 	return model.Report{
-		GeneratedAt: time.Date(2026, 6, 28, 14, 0, 0, 0, time.UTC),
-		ContextName: "prod-cluster",
-		Class:       "B",
+		ReportSchemaVersion: "3",
+		GeneratedAt:         time.Date(2026, 6, 28, 14, 0, 0, 0, time.UTC),
+		ContextName:         "prod-cluster",
+		Class:               "B",
+		ChainCatalog: &model.ChainCatalogMetadata{
+			SchemaVersion: "1",
+			CAPECVersion:  "3.9",
+			CAPECSHA256:   "capec-hash",
+			ATTACKVersion: "19.1",
+			ATTACKSHA256:  "attack-hash",
+		},
+		Summary: model.Summary{ChainTaxonomy: &model.ChainTaxonomySummary{
+			TransitionCandidates: 1,
+			EntrypointCandidates: 1,
+			UniqueEntrypointCVEs: 1,
+		}},
+		CAPECTransitions: []model.CAPECTransitionCandidate{{
+			Resource: model.ResourceRef{
+				Kind:          "Deployment",
+				Namespace:     "default",
+				Name:          "payments-api",
+				ContainerName: "app",
+			},
+			CandidateClass: "external_to_follow_on",
+			Upstream: model.CAPECTransitionEndpoint{
+				ID:                 "CVE-2026-30303",
+				Role:               "candidate_entrypoint",
+				Findings:           []model.CAPECTransitionFindingReference{{PackageName: "libssl"}},
+				CWEIDs:             []string{"CWE-787"},
+				AttackVector:       "N",
+				PrivilegesRequired: "N",
+			},
+			Downstream: model.CAPECTransitionEndpoint{
+				ID:                 "CVE-2026-40404",
+				Role:               "candidate_follower",
+				Findings:           []model.CAPECTransitionFindingReference{{PackageName: "helper"}},
+				CWEIDs:             []string{"CWE-648"},
+				AttackVector:       "L",
+				PrivilegesRequired: "L",
+			},
+			SourceCAPECID:              "CAPEC-100",
+			SourceCAPECName:            "Overflow Buffers",
+			TargetCAPECID:              "CAPEC-234",
+			TargetCAPECName:            "Hijacking a Privileged Process",
+			Relationship:               "CanPrecede",
+			UpstreamInternetAccessible: true,
+			EvidenceLevel:              "pattern_level_candidate",
+			Confidence:                 "low",
+			ReviewRequired:             true,
+			ReasonCodes:                []string{"same-exact-resource", "explicit-capec-can-precede"},
+			PolicyVersion:              "capec-transition-v1",
+		}},
 		Resources: []model.ResourceReport{
 			{
 				Resource: model.ResourceRef{
@@ -75,14 +125,24 @@ func sampleCycloneDXReport() model.Report {
 						LastModifiedDate:    &modified,
 						CVSSVector:          "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 						CWEs:                []string{"CWE-787", "CWE-79"},
-						ChainableEntrypoint: &model.ChainableEntrypoint{
-							Classification:            "possible",
-							ActiveFinding:             true,
-							InternetAccessible:        true,
-							CandidateStatus:           "possible",
-							ReasonCodes:               []string{"full-impact-without-execution-signal"},
-							ClassificationReasonCodes: []string{"active-finding", "asset-internet-accessible", "possible-candidate"},
-							PolicyVersion:             "chainable-entrypoint-v2",
+						ChainTaxonomy: &model.ChainTaxonomyEvidence{
+							Status:             "mapped",
+							TaxonomyRole:       "producer_candidate",
+							Ambiguity:          "none",
+							PredecessorStatus:  "not_declared",
+							SuccessorStatus:    "present",
+							CAPECIDs:           []string{"CAPEC-100"},
+							ATTACKTechniqueIDs: []string{"T1059"},
+							ATTACKTactics:      []string{"execution"},
+							SuccessorCAPECIDs:  []string{"CAPEC-234"},
+							ReasonCodes:        []string{"capec-mapped", "explicit-capec-successor"},
+							PolicyVersion:      "chain-taxonomy-v1",
+							Paths: []model.ChainTaxonomyPath{{
+								CWEID:       "CWE-787",
+								CAPECID:     "CAPEC-100",
+								CAPECName:   "Overflow Buffers",
+								Abstraction: "Standard",
+							}},
 						},
 						Pain: &model.Pain{
 							Tier:                              "N4",
@@ -144,6 +204,17 @@ func TestToCycloneDXStructure(t *testing.T) {
 	}
 	if got := doc.Metadata.Tools.Components[0].Name; got != "trivy-plugin-vdr" {
 		t.Errorf("tool name = %q, want trivy-plugin-vdr", got)
+	}
+	toolProps := propMap(doc.Metadata.Tools.Components[0].Properties)
+	if toolProps["vdr:reportSchemaVersion"] != "3" ||
+		toolProps["vdr:chainCatalogCAPECVersion"] != "3.9" ||
+		toolProps["vdr:chainCatalogATTACKVersion"] != "19.1" ||
+		toolProps["vdr:capecTransitionCandidateCount"] != "1" ||
+		toolProps["vdr:capecEntrypointCandidateCount"] != "1" ||
+		toolProps["vdr:capecUniqueEntrypointCVECount"] != "1" ||
+		!strings.Contains(toolProps["vdr:capecTransitionCandidates"], `"sourceCapecId":"CAPEC-100"`) ||
+		!strings.Contains(toolProps["vdr:capecTransitionCandidates"], `"role":"candidate_entrypoint"`) {
+		t.Errorf("tool properties = %#v, want report/catalog provenance", toolProps)
 	}
 	if doc.Metadata.Timestamp != "2026-06-28T14:00:00Z" {
 		t.Errorf("timestamp = %q, want 2026-06-28T14:00:00Z", doc.Metadata.Timestamp)
@@ -225,41 +296,45 @@ func TestToCycloneDXVDRProperties(t *testing.T) {
 	active := findVuln(t, doc, "CVE-2026-30303")
 	vulnProps := propMap(active.Properties)
 	wantVuln := map[string]string{
-		"vdr:pain":                                     "N4",
-		"vdr:securityImpactProfile":                    "web-service",
-		"vdr:securityImpactProfileRequirements":        "CR:H/IR:H/AR:M",
-		"vdr:securityRequirementsCeiling":              "CR:M/IR:M/AR:L",
-		"vdr:securityRequirementsCeilingSource":        "configMap",
-		"vdr:painRecalculated":                         "true",
-		"vdr:cwes":                                     "CWE-787,CWE-79",
-		"vdr:chainableEntrypointClassification":        "possible",
-		"vdr:chainableEntrypointHighConfidence":        "false",
-		"vdr:chainableEntrypointActiveFinding":         "true",
-		"vdr:chainableEntrypointInternetAccessible":    "true",
-		"vdr:chainableEntrypointCandidateStatus":       "possible",
-		"vdr:chainableEntrypointReasons":               "full-impact-without-execution-signal",
-		"vdr:chainableEntrypointClassificationReasons": "active-finding,asset-internet-accessible,possible-candidate",
-		"vdr:chainableEntrypointPolicy":                "chainable-entrypoint-v2",
-		"vdr:target":                                   "/usr/bin/payments-api",
-		"vdr:targetClass":                              "lang-pkgs",
-		"vdr:targetType":                               "gobinary",
-		"vdr:packageId":                                "libssl@3.2.1-r0",
-		"vdr:affectedPackagePurl":                      "pkg:apk/wolfi/libssl@3.2.1-r0",
-		"vdr:affectedPackageUid":                       "libssl@3.2.1-r0",
-		"vdr:affectedPackagePath":                      "/usr/lib/libssl.so",
-		"vdr:affectedPackageRelationship":              "direct",
-		"vdr:severitySource":                           "wolfi",
-		"vdr:vendorSeverity":                           "nvd=CRITICAL,wolfi=HIGH",
-		"vdr:dataSourceId":                             "wolfi",
-		"vdr:dataSourceName":                           "Wolfi SecDB",
-		"vdr:dataSourceUrl":                            "https://packages.wolfi.dev/os/security.json",
-		"vdr:dataSourceBaseId":                         "osv",
-		"vdr:primaryUrl":                               "https://avd.aquasec.com/nvd/cve-2026-30303",
-		"vdr:scannerFingerprint":                       "sha256:scanner-fingerprint",
-		"vdr:vendorIds":                                "GHSA-abcd-1234-5678,WOLFI-2026-30303",
-		"vdr:remediationTrack":                         "LEV+IRV",
-		"vdr:findingInternetReachable":                 "true",
-		"vdr:reachabilityDecision":                     "insufficient_evidence_to_downgrade",
+		"vdr:pain":                              "N4",
+		"vdr:securityImpactProfile":             "web-service",
+		"vdr:securityImpactProfileRequirements": "CR:H/IR:H/AR:M",
+		"vdr:securityRequirementsCeiling":       "CR:M/IR:M/AR:L",
+		"vdr:securityRequirementsCeilingSource": "configMap",
+		"vdr:painRecalculated":                  "true",
+		"vdr:cwes":                              "CWE-787,CWE-79",
+		"vdr:chainTaxonomyStatus":               "mapped",
+		"vdr:chainTaxonomyRole":                 "producer_candidate",
+		"vdr:chainTaxonomyAmbiguity":            "none",
+		"vdr:chainTaxonomyPredecessorStatus":    "not_declared",
+		"vdr:chainTaxonomySuccessorStatus":      "present",
+		"vdr:chainTaxonomyCAPECs":               "CAPEC-100",
+		"vdr:chainTaxonomyATTACKTechniques":     "T1059",
+		"vdr:chainTaxonomyATTACKTactics":        "execution",
+		"vdr:chainTaxonomySuccessors":           "CAPEC-234",
+		"vdr:chainTaxonomyReasons":              "capec-mapped,explicit-capec-successor",
+		"vdr:chainTaxonomyPolicy":               "chain-taxonomy-v1",
+		"vdr:chainTaxonomyPaths":                `[{"cweId":"CWE-787","capecId":"CAPEC-100","capecName":"Overflow Buffers","abstraction":"Standard"}]`,
+		"vdr:target":                            "/usr/bin/payments-api",
+		"vdr:targetClass":                       "lang-pkgs",
+		"vdr:targetType":                        "gobinary",
+		"vdr:packageId":                         "libssl@3.2.1-r0",
+		"vdr:affectedPackagePurl":               "pkg:apk/wolfi/libssl@3.2.1-r0",
+		"vdr:affectedPackageUid":                "libssl@3.2.1-r0",
+		"vdr:affectedPackagePath":               "/usr/lib/libssl.so",
+		"vdr:affectedPackageRelationship":       "direct",
+		"vdr:severitySource":                    "wolfi",
+		"vdr:vendorSeverity":                    "nvd=CRITICAL,wolfi=HIGH",
+		"vdr:dataSourceId":                      "wolfi",
+		"vdr:dataSourceName":                    "Wolfi SecDB",
+		"vdr:dataSourceUrl":                     "https://packages.wolfi.dev/os/security.json",
+		"vdr:dataSourceBaseId":                  "osv",
+		"vdr:primaryUrl":                        "https://avd.aquasec.com/nvd/cve-2026-30303",
+		"vdr:scannerFingerprint":                "sha256:scanner-fingerprint",
+		"vdr:vendorIds":                         "GHSA-abcd-1234-5678,WOLFI-2026-30303",
+		"vdr:remediationTrack":                  "LEV+IRV",
+		"vdr:findingInternetReachable":          "true",
+		"vdr:reachabilityDecision":              "insufficient_evidence_to_downgrade",
 	}
 	for k, want := range wantVuln {
 		if got := vulnProps[k]; got != want {
