@@ -638,18 +638,13 @@ column := remediationColumn(lev, irv)
 The VDR-TFR-PVR matrix, PAIN computation, and LEV computation are untouched — v2 only
 changes which findings land in the `LEV+IRV` vs `LEV+NIRV` column.
 
-> **LEV alignment note.** The companion PAIN methodology (vdr-pain-cvss **v1.4**)
-> removed CISA Vulnrichment from its model: LEV there is
-> `EPSS >= threshold OR KEV membership OR the FRD-LEV unauthenticated-automation
-> floor` (direct-exposure IRV combined with `AV:N/PR:N/UI:N`). This spec does not
-> compute LEV; when the plugin aligns its LEV inputs to v1.4 (replacing the
-> Vulnrichment `exploitation=active` input with KEV membership), that change is
-> orthogonal to this spec, with one touchpoint: the FRD-LEV floor's
-> "direct exposure" input is exactly Phase A's `E(a)` — not the broader `IRV(v,a)`.
-> Separately, this spec's use of Vulnrichment for **CWE enrichment** in the C1
-> mechanism partition (section 5.3) is **unaffected** by the v1.4 removal: what v1.4
-> excluded are the technical-impact/exploitation inputs, not CWE sourcing. A future
-> implementer must not remove the Vulnrichment CWE source as part of that alignment.
+> **LEV alignment note.** Reachability is not itself an LEV signal. The plugin
+> deliberately does not promote an internet-reachable `AV:N/AC:L/PR:N/UI:N`
+> finding to LEV without an independent exploitability signal. This spec does
+> not compute LEV; any future changes to LEV inputs remain orthogonal to the
+> reachability model. Separately, this spec's use of Vulnrichment for **CWE
+> enrichment** in the C1 mechanism partition (section 5.3) is unaffected by LEV
+> input changes.
 
 **Compatibility flag:** `--reachability-model=v1|v2` (default **v1** until GA).
 - `v1`: exact current behavior; none of the new collectors run (except NetworkPolicy
