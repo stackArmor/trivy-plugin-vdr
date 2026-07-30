@@ -71,8 +71,7 @@ on the dirty codex branch directly.
   Modified C/I/A; no-stacking collapse; recompute PAIN via existing Eq.1 path;
   v1 IRV-fallback conservatism (HA rows need rate-limit/citation under v1).
 - **T5 — CC3b exploitability.** adjustedEPSS = EPSS × strongest residualFactor;
-  LEV recompute; KEV frozen; floor-defeat term; both EPSS values in output;
-  no-taxonomy = stock.
+  LEV recompute; KEV frozen; both EPSS values in output; no-taxonomy = stock.
 - **T6 — CC4 + HTML template.** Credit-posture report (firing/blocked with exact
   failed predicate + benefiting-finding counts). **HTML template** must show, per
   finding: PAIN row and whether it was downgraded and by which row key; LEV and
