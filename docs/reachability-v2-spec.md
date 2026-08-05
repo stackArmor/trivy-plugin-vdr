@@ -22,9 +22,9 @@ specific vulnerable machine-based information resources processing the payload."
 reached through an exposed application, and Log4Shell triggered by a logged string that
 transited several tiers.
 
-The plugin's v1 model computes a single asset-level boolean (`Exposure.InternetAccessible`,
-consumed as `irv := in.InternetReachable` in `internal/scoring/scoring.go:308`). That
-model has a **critical false negative**: a private PostgreSQL StatefulSet behind an
+The plugin's v1 model treats `Exposure.InternetAccessible` as an asset-level public-path
+predicate and requires CVSS `AV:N` to set IRV. That model has a **critical false negative**:
+a private PostgreSQL StatefulSet behind an
 internet-facing web app is marked NIRV today, yet under FRD-IRV a SQL-injection or
 protocol-parser CVE on that database is IRV — the payload originates on the public
 internet and is processed by the vulnerable resource. v1 also has a class of false
@@ -85,8 +85,8 @@ IRV(v, a) = [ E(a) OR T(a) ]                 -- a payload can arrive at a
                          └────────────────────────────────────────────┘
 ```
 
-Top-level decision algorithm (replaces `irv := in.InternetReachable` at
-`internal/scoring/scoring.go:308`):
+Top-level decision algorithm (replaces the v1 public-route-and-`AV:N` IRV gate in
+`internal/scoring/scoring.go`):
 
 ```text
 func decideIRV(v Finding, a Asset) ReachabilityDecision:
@@ -627,8 +627,8 @@ bool`. Change:
 // scoring.Input gains:
 Reachability *model.ReachabilityDecision // nil => v1 semantics via InternetReachable
 
-// scoring.go:307-309 becomes:
-irv := in.InternetReachable                       // v1 path (default)
+// scoring.go becomes:
+irv := in.InternetReachable && isNetworkAttackVector(in.CVSSVector) // v1 path (default)
 if in.Reachability != nil {                       // v2 path
     irv = in.Reachability.IRV
 }

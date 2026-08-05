@@ -154,7 +154,9 @@ type Input struct {
 	// invents impact on a dimension the CVE does not touch.
 	TechnicalImpact string
 
-	// Exploitability / reachability inputs for the remediation column.
+	// Exploitability / asset-exposure inputs for the remediation column.
+	// InternetReachable records that platform discovery found a public route to
+	// the affected asset. IRV additionally requires CVSS AV:N.
 	EPSS              float64 // < 0 means unknown
 	Exploitation      string  // CISA Vulnrichment exploitation: active|poc|none
 	InternetReachable bool
@@ -535,7 +537,7 @@ func (c *Config) Score(in Input) Result {
 	// Remediation: FedRAMP VDR-TFR-PVR matrix[Class][PAIN][column].
 	class, classSource := c.resolveClass(in.Labels, in.NamespaceLabels)
 	lev := c.isLEV(in)
-	irv := in.InternetReachable
+	irv := in.InternetReachable && isNetworkAttackVector(in.CVSSVector)
 	column := remediationColumn(lev, irv)
 	days, label := remediationDeadline(class, tier, column)
 
@@ -685,6 +687,13 @@ func (c *Config) resolveClass(labels, nsLabels map[string]string) (string, strin
 		return v, "builtin"
 	}
 	return "B", "builtin"
+}
+
+// isNetworkAttackVector reports whether a finding's CVSS vector explicitly
+// requires a network attack vector. Missing or malformed vectors fail closed
+// for IRV because AV:N is an explicit requirement.
+func isNetworkAttackVector(vector string) bool {
+	return parseVector(vector)["AV"] == "N"
 }
 
 // isLEV implements the method's LEV union: EPSS at or above the governed

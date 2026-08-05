@@ -25,13 +25,24 @@ func TestRemediationColumnsAndMatrix(t *testing.T) {
 		wantDays  float64
 		wantLabel string
 		wantLEV   bool
+		wantIRV   bool
 	}{
-		{"LEV+IRV via EPSS", dataSensitiveN5(0.8, "none", true), "LEV+IRV", 2, "2 days", true},
-		{"NLEV (low EPSS, no active, not reachable)", dataSensitiveN5(0.49, "none", false), "NLEV", 16, "16 days", false},
-		{"LEV+NIRV via active exploitation", dataSensitiveN5(0.49, "active", false), "LEV+NIRV", 4, "4 days", true},
+		{"LEV+IRV via EPSS", dataSensitiveN5(0.8, "none", true), "LEV+IRV", 2, "2 days", true, true},
+		{"LEV+NIRV when public asset CVE is AV:L", func() Input {
+			in := dataSensitiveN5(0.8, "none", true)
+			in.CVSSVector = "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+			return in
+		}(), "LEV+NIRV", 4, "4 days", true, false},
+		{"LEV+NIRV when public asset CVE lacks AV", func() Input {
+			in := dataSensitiveN5(0.8, "none", true)
+			in.CVSSVector = "CVSS:3.1/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+			return in
+		}(), "LEV+NIRV", 4, "4 days", true, false},
+		{"NLEV (low EPSS, no active, not reachable)", dataSensitiveN5(0.49, "none", false), "NLEV", 16, "16 days", false, false},
+		{"LEV+NIRV via active exploitation", dataSensitiveN5(0.49, "active", false), "LEV+NIRV", 4, "4 days", true, false},
 		// Reachability selects IRV only after LEV is established; an
 		// AV:N/AC:L/PR:N/UI:N vector does not independently establish LEV.
-		{"NLEV despite reachable network vector", dataSensitiveN5(0.49, "none", true), "NLEV", 16, "16 days", false},
+		{"NLEV despite reachable network vector", dataSensitiveN5(0.49, "none", true), "NLEV", 16, "16 days", false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,6 +61,9 @@ func TestRemediationColumnsAndMatrix(t *testing.T) {
 			}
 			if r.LEV != tc.wantLEV {
 				t.Errorf("LEV = %v, want %v", r.LEV, tc.wantLEV)
+			}
+			if r.IRV != tc.wantIRV {
+				t.Errorf("IRV = %v, want %v", r.IRV, tc.wantIRV)
 			}
 		})
 	}

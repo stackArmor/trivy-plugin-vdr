@@ -69,6 +69,23 @@ func TestBuildAssignsPainFromLabel(t *testing.T) {
 	}
 }
 
+func TestBuildRequiresNetworkAttackVectorForIRV(t *testing.T) {
+	inv, ref := labeledInventory("apps", "public-but-local", "data-sensitive")
+	finding := painFinding("CVE-2026-1000", ref)
+	finding.CVSSVector = "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+	finding.EPSS = &model.EPSS{Score: 0.9}
+	exposures := map[model.ResourceRef]model.Exposure{ref: {InternetAccessible: true}}
+
+	got := Build(inv, []model.Finding{finding}, exposures, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+	if got.Findings[0].Affected[0].Exposure == nil || !got.Findings[0].Affected[0].Exposure.InternetAccessible {
+		t.Fatalf("asset exposure metadata was not retained: %#v", got.Findings[0].Affected[0].Exposure)
+	}
+	rem := got.Findings[0].Affected[0].Remediation
+	if rem == nil || rem.IRV || rem.Column != "LEV+NIRV" {
+		t.Fatalf("remediation = %#v, want AV:L finding on public asset to be LEV+NIRV", rem)
+	}
+}
+
 func TestBuildReportsOptionalSecurityRequirementsCeiling(t *testing.T) {
 	inv, ref := labeledInventory("apps", "records", "data-sensitive")
 	finding := painFinding("CVE-2026-1001", ref)

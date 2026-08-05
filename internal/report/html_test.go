@@ -26,7 +26,7 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 
 	output := buf.String()
 	for _, want := range []string{
-		"Namespace", "Internet-exposed findings", "Internet exposure", "Automatable",
+		"Namespace", "Internet-exposed findings", "Internet-reachable CVE", "Automatable",
 		"Exploitation", "EPSS score", "Technical impact", "window.__VDR_REPORT__",
 		"CVE-2026-0001",
 		"packageLabel",            // package sub-line renderer present in the template
@@ -50,6 +50,7 @@ func TestRenderHTMLUsesEmbeddedTemplateWithFiltersAndData(t *testing.T) {
 		"CAPEC-mapped findings",
 		"CAPEC transition candidates",
 		"entry.exposure || null", // finding rows must not inherit another affected resource's exposure
+		"scopedRemediation && scopedRemediation.irv",
 		"scopedRemediation",      // finding rows use their own affected-resource deadline
 		"test-context",           // kubectx in the header
 		"Certification Class",    // class chip/subtitle in the header

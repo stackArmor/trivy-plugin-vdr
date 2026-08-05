@@ -139,7 +139,7 @@
           {{ end }}
           <th class="resource-column">Resource</th>
           <th class="image-column">Image</th>
-          <th>Internet exposure</th>
+          <th>Internet-reachable CVE</th>
           <th>Automatable</th>
           <th>Exploitation</th>
           <th>Technical impact</th>
@@ -149,7 +149,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the security-impact profile's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50 or active exploitation, and IRV = internet-reachable. {{ if .Report.ChainCatalog }}CAPEC badges preserve the offline CWE → CAPEC → ATT&amp;CK evidence and explicit CAPEC predecessor/successor role; they do not prove a CVE-specific chain. CAPEC transition candidates below require two distinct active CVEs on the same exact internet-reachable resource: an AV:N/PR:N upstream CVE and an explicit CAPEC <em>CanPrecede</em> edge between their mapped paths. The downstream CVE can have any attack vector; its AV/PR values are shown only as review context. Package occurrences are aggregated by CVE pair and CAPEC edge. Candidates are pattern-level review evidence and do not alter IRV, PAIN, or remediation. {{ end }}Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
+    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the security-impact profile's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50 or active exploitation, and IRV requires both a public route to the affected resource and CVSS AV:N. {{ if .Report.ChainCatalog }}CAPEC badges preserve the offline CWE → CAPEC → ATT&amp;CK evidence and explicit CAPEC predecessor/successor role; they do not prove a CVE-specific chain. CAPEC transition candidates below require two distinct active CVEs on the same exact internet-reachable resource: an AV:N/PR:N upstream CVE and an explicit CAPEC <em>CanPrecede</em> edge between their mapped paths. The downstream CVE can have any attack vector; its AV/PR values are shown only as review context. Package occurrences are aggregated by CVE pair and CAPEC edge. Candidates are pattern-level review evidence and do not alter IRV, PAIN, or remediation. {{ end }}Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
     {{ if .Report.CAPECTransitions }}
     <section aria-labelledby="capec-transitions-heading">
       <h2 id="capec-transitions-heading">CAPEC transition candidates</h2>
@@ -255,7 +255,7 @@
         resourceType: ref.kind || "",
         resource: [ref.kind, ref.name, ref.containerName].filter(Boolean).join("/"),
         image: finding.imageRef || images.map(image => image.imageRef).filter(Boolean).join(","),
-        exposed: !!(exposure && exposure.internetAccessible),
+        exposed: !!(scopedRemediation && scopedRemediation.irv),
         exposureKind: (exposure && exposure.routeKind) || "",
         exposureEvidence: (exposure && Array.isArray(exposure.evidence)) ? exposure.evidence : [],
         security: securitySummary(images),
@@ -653,11 +653,12 @@
         "keeps new resources visible. Hover a value for details."
       ].join("\n");
     }
-    // Explain the Internet exposure column on hover of its header.
+    // Explain the finding-level IRV column on hover of its header.
     if (headerByKey.exposed) {
       headerByKey.exposed.title = [
-        "Whether the affected resource is reachable from the public internet.",
-        "Derived from Kubernetes, Cloud Run, or ECS routing, conservatively:",
+        "Whether this CVE is internet-reachable (IRV).",
+        "Requires both a public route to the affected resource and CVSS AV:N.",
+        "Public-route evidence is derived from Kubernetes, Cloud Run, or ECS routing, conservatively:",
         "",
         "  yes - a Service in front of the container is fronted by a public load",
         "        balancer: an external GKE Gateway class, a 'gce' GKE Ingress, or",
@@ -724,7 +725,7 @@
         "",
         "  column = LEV+IRV | LEV+NIRV | NLEV",
         "  LEV  (likely exploitable) = EPSS ≥ 0.50 OR exploitation = active",
-        "  IRV  (internet reachable) = the affected resource is internet-reachable",
+        "  IRV  (internet reachable) = public route to the affected resource AND CVSS AV:N",
         "",
         "PAIN comes from the security-impact profile (CR/IR/AR) × CVE impact × agency scope.",
         "Class is cluster metadata (workload/namespace label or cluster ConfigMap).",

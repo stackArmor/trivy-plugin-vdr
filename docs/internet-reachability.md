@@ -1,6 +1,6 @@
 # Internet Reachability Evaluation
 
-`vdr` uses internet reachability to set the IRV input for FedRAMP remediation deadlines. The evaluation is intentionally conservative: a resource is marked internet-reachable only when the collected platform metadata shows a public path to the affected workload and no supported access-protection control blocks unauthenticated internet access.
+`vdr` records asset exposure when collected platform metadata shows a public path to the affected workload and no supported access-protection control blocks unauthenticated internet access. A finding is IRV for FedRAMP remediation only when that asset exposure is present **and** the finding's CVSS vector explicitly has `AV:N`; missing or non-network attack vectors are NIRV. Asset exposure metadata remains independent of individual CVEs.
 
 ## Cloud Run
 

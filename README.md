@@ -518,10 +518,10 @@ The ceiling is entirely optional: when omitted, no warning is emitted and profil
 deadline = matrix[ Certification Class ][ PAIN ][ column ]
   column = LEV+IRV | LEV+NIRV | NLEV
   LEV (likely exploitable) = EPSS >= 0.50  OR  exploitation = active
-  IRV (internet reachable) = the affected resource is internet-reachable
+  IRV (internet reachable) = a public route reaches the affected resource AND the CVE is CVSS AV:N
 ```
 
-So the same CVE remediates faster on a higher-PAIN, internet-reachable, actively exploited asset. The EPSS LEV cutoff (0.50) is built into the plugin. Internet reachability and CVSS exploitability metrics do not independently establish LEV; reachability is evaluated separately as IRV when the remediation column is selected. PAIN-1 findings have no FedRAMP deadline. In the findings view the finding-level PAIN/deadline is the most urgent across all affected resources.
+So the same CVE remediates faster on a higher-PAIN, publicly routed asset when that CVE has a network attack vector, and when it is actively exploited. The EPSS LEV cutoff (0.50) is built into the plugin. Internet reachability and CVSS exploitability metrics do not independently establish LEV; public-route evidence plus CVSS AV:N are evaluated separately as IRV when the remediation column is selected. PAIN-1 findings have no FedRAMP deadline. In the findings view the finding-level PAIN/deadline is the most urgent across all affected resources.
 
 ### Cluster configuration
 
