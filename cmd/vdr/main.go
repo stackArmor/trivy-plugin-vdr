@@ -241,6 +241,28 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		return err
 	}
 	logger.Info("inventory: %d workloads, %d unique images", len(inventory.Resources), len(inventory.Images))
+	if runtimeIssues, runtimeErr := collector.CollectPodRuntimeIssues(ctx, k8sOptions); runtimeErr != nil {
+		// Runtime status is operational context only. It must not prevent an
+		// inventory and image-vulnerability report when the status read fails.
+		logger.Warn("could not inspect Kubernetes pod runtime status: %v", runtimeErr)
+	} else if len(runtimeIssues) > 0 {
+		logger.Warn("%d Kubernetes workload runtime issue(s) need cluster-administrator attention:", len(runtimeIssues))
+		for _, issue := range runtimeIssues {
+			message := issue.Message
+			if message == "" {
+				message = "no status message was provided"
+			}
+			if issue.Container != "" {
+				logger.Warn("  - workload %s; pod %s/%s; container %s: %s (%s). Cluster administrator should investigate the image reference, registry access, and imagePullSecrets.", issue.Workload, issue.Namespace, issue.Pod, issue.Container, issue.Reason, message)
+				continue
+			}
+			since := ""
+			if issue.Since != "" {
+				since = fmt.Sprintf(" since %s", issue.Since)
+			}
+			logger.Warn("  - workload %s; pod %s/%s: Pending%s (%s: %s). Cluster administrator should investigate.", issue.Workload, issue.Namespace, issue.Pod, since, issue.Reason, message)
+		}
+	}
 
 	var warnings []string
 	for _, w := range inventory.Warnings {

@@ -405,7 +405,7 @@ By default, OCI VEX attestation lookup is off. `--oci-vex-included` / `-O` enabl
 
 ## Logging
 
-Progress is logged to stderr (the report is written to stdout or `--output`, so logs never contaminate it). The default level is INFO and announces each phase: inventory collection, registry auth, scanning, EPSS/vulnrichment fetch-vs-cache, and report output. Use `--quiet` for warnings and errors only, or `--debug` for verbose diagnostics.
+Progress is logged to stderr (the report is written to stdout or `--output`, so logs never contaminate it). The default level is INFO and announces each phase: inventory collection, registry auth, scanning, EPSS/vulnrichment fetch-vs-cache, and report output. During Kubernetes scans, image-pull failures (`ImagePullBackOff`, `ErrImagePull`, or `ImagePullErr`) and Pods still `Pending` are logged with the workload, Pod, container when applicable, and a cluster-administrator action note. Use `--quiet` for warnings and errors only, or `--debug` for verbose diagnostics.
 
 ## Image scanning and Trivy cache cleanup
 
