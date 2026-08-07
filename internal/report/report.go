@@ -131,7 +131,36 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	}
 
 	report.Findings = findingsWithBestExposure(active, exposures, sc, labelIndex, nsLabels, options.ClassificationOnly)
+	// The findings view flattens the per-asset exposure map through bestExposure,
+	// which is correct for a finding but describes no individual workload. Publish
+	// the unflattened per-asset facts alongside it so a consumer can attribute
+	// exposure to the workload it was actually assessed for, instead of borrowing
+	// the most-exposed sibling in the same finding.
+	report.Assets = assetFacts(resourceReports)
 	return report
+}
+
+// assetFacts projects resource reports down to their per-asset facts, dropping
+// each report's findings so the findings view does not carry the entire findings
+// payload a second time.
+func assetFacts(reports []model.ResourceReport) []model.AssetFacts {
+	if len(reports) == 0 {
+		return nil
+	}
+	facts := make([]model.AssetFacts, 0, len(reports))
+	for i := range reports {
+		report := reports[i]
+		facts = append(facts, model.AssetFacts{
+			Resource:       report.Resource,
+			Images:         report.Images,
+			Exposure:       report.Exposure,
+			Runtime:        report.Runtime,
+			Classification: report.Classification,
+			Labels:         report.Labels,
+			Posture:        report.Posture,
+		})
+	}
+	return facts
 }
 
 func partitionFindings(findings []model.Finding) ([]model.Finding, []model.Finding) {

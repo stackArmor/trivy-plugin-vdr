@@ -559,8 +559,34 @@ type Report struct {
 	// remediation calculations.
 	SuppressedFindings []Finding        `json:"suppressedFindings,omitempty"`
 	Resources          []ResourceReport `json:"resources,omitempty"`
-	Warnings           []string         `json:"warnings,omitempty"`
-	ClassificationOnly bool             `json:"-"`
+	// Assets carries per-workload facts for the findings view, where nothing else
+	// can attribute exposure to an individual workload: a Finding's own
+	// `exposure` is a bestExposure roll-up across every asset the finding
+	// touches, and an Affected entry only carries `exposure` when that workload
+	// was individually assessed.
+	//
+	// Deliberately a separate field from Resources rather than a findings-less
+	// Resources: the CycloneDX writer treats a non-empty Resources as "the
+	// asset-centric view, read vulnerabilities from res.Findings" and skips its
+	// findings-view fallback on that basis, so populating Resources here would
+	// silently emit a VEX document containing zero vulnerabilities.
+	Assets             []AssetFacts `json:"assets,omitempty"`
+	Warnings           []string     `json:"warnings,omitempty"`
+	ClassificationOnly bool         `json:"-"`
+}
+
+// AssetFacts is the per-workload projection of a ResourceReport: everything that
+// describes the asset itself, with none of its findings. It exists so the
+// findings view can publish authoritative per-asset exposure without duplicating
+// the entire findings payload into a second asset-centric section.
+type AssetFacts struct {
+	Resource       ResourceRef          `json:"resource"`
+	Images         []ContainerImage     `json:"images,omitempty"`
+	Exposure       *Exposure            `json:"exposure,omitempty"`
+	Runtime        *RuntimeMetadata     `json:"runtime,omitempty"`
+	Classification *AssetClassification `json:"classification,omitempty"`
+	Labels         map[string]string    `json:"labels,omitempty"`
+	Posture        *WorkloadPosture     `json:"posture,omitempty"`
 }
 
 type ResourceReport struct {

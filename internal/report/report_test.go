@@ -246,6 +246,38 @@ func TestBuildFindingViewIncludesPerAffectedResourceExposure(t *testing.T) {
 	}
 }
 
+func TestBuildFindingViewPublishesPerAssetFacts(t *testing.T) {
+	inv := sampleInventory()
+	exposed := sampleContainerRef()
+	finding := sampleFinding("CVE-2026-0001", "HIGH", 0.7)
+	finding.AffectedResources = []model.ResourceRef{exposed}
+	exposures := map[model.ResourceRef]model.Exposure{
+		exposed: {InternetAccessible: true, Provider: "gke", RouteKind: "Ingress", RouteName: "web"},
+	}
+
+	got := Build(inv, []model.Finding{finding}, exposures, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+
+	if len(got.Assets) != 1 {
+		t.Fatalf("Assets len = %d, want 1: %#v", len(got.Assets), got.Assets)
+	}
+	asset := got.Assets[0]
+	if asset.Resource != exposed {
+		t.Fatalf("Assets[0].Resource = %#v, want %#v", asset.Resource, exposed)
+	}
+	if asset.Exposure == nil || !asset.Exposure.InternetAccessible {
+		t.Fatalf("Assets[0].Exposure = %#v, want the asset's own internet exposure", asset.Exposure)
+	}
+	if len(got.Findings) != 1 {
+		t.Fatalf("Findings len = %d, want the findings view intact", len(got.Findings))
+	}
+	// Resources must stay empty so the CycloneDX writer keeps taking its
+	// findings-view fallback instead of reading vulnerabilities from per-resource
+	// findings that this projection deliberately drops.
+	if len(got.Resources) != 0 {
+		t.Fatalf("Resources = %#v, want empty in the findings view", got.Resources)
+	}
+}
+
 func TestBuildResourceViewIncludesSecurityAndExposure(t *testing.T) {
 	inv := sampleInventory()
 	findings := []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}
