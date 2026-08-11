@@ -761,6 +761,23 @@ func TestParseRejectsHelmFlagsForOtherSources(t *testing.T) {
 	}
 }
 
+func TestParseK8sAcceptsSIPConfigMap(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--sip-config-map", "./vdr-fedramp.yaml"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.SIPConfigMap != "./vdr-fedramp.yaml" {
+		t.Fatalf("SIPConfigMap = %q", cfg.SIPConfigMap)
+	}
+}
+
+func TestParseRejectsSIPConfigMapForOtherSources(t *testing.T) {
+	_, err := Parse([]string{"helm", "./chart", "--sip-config-map", "./vdr-fedramp.yaml"})
+	if err == nil || !strings.Contains(err.Error(), "only valid for source k8s") {
+		t.Fatalf("error = %v, want k8s-specific flag rejection", err)
+	}
+}
+
 func TestParseRejectsConflictingNamespaceScope(t *testing.T) {
 	_, err := Parse([]string{"k8s", "--namespace", "prod", "--all-namespaces"})
 	if err == nil {
@@ -989,6 +1006,7 @@ func TestParseSourceHelpOnlyShowsRelevantFlags(t *testing.T) {
 		"Usage:\n  vdr k8s [flags]",
 		"Kubernetes source:",
 		"-n, --namespace NAMESPACE",
+		"--sip-config-map FILE",
 		"Private registries:",
 		"workload imagePullSecrets",
 		"local Docker config",

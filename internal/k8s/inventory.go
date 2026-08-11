@@ -21,6 +21,9 @@ type Options struct {
 	Namespaces            []string
 	AllNamespaces         bool
 	IncludeZeroDaemonSets bool
+	// ClusterDefaultsOverride supplies the VDR SIP ConfigMap data from a local
+	// manifest. When set, collection skips the in-cluster ConfigMap lookup.
+	ClusterDefaultsOverride map[string]string
 	// ClusterConfigMapNamespace/Name locate the cluster-wide FedRAMP metadata
 	// ConfigMap (cluster default class / multi-agency). Defaults:
 	// fedramp-vdr-trivy/vdr-fedramp.
@@ -112,7 +115,11 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 	// they enrich scoring but must not fail the scan if RBAC or the ConfigMap is
 	// absent.
 	c.collectNamespaceMetadata(ctx, opts, &builder)
-	c.collectClusterDefaults(ctx, opts, &builder)
+	if opts.ClusterDefaultsOverride != nil {
+		builder.inventory.ClusterDefaults = copyStringMap(opts.ClusterDefaultsOverride)
+	} else {
+		c.collectClusterDefaults(ctx, opts, &builder)
+	}
 
 	return builder.finish(), nil
 }

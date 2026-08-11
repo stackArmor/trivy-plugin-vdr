@@ -235,6 +235,14 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		AllNamespaces:         cfg.AllNamespaces,
 		IncludeZeroDaemonSets: cfg.IncludeZeroDaemonSets,
 	}
+	if cfg.SIPConfigMap != "" {
+		clusterDefaults, loadErr := manifest.LoadConfigMap(cfg.SIPConfigMap)
+		if loadErr != nil {
+			return loadErr
+		}
+		k8sOptions.ClusterDefaultsOverride = clusterDefaults
+		logger.Info("loaded Kubernetes SIP ConfigMap from %s; overriding the in-cluster ConfigMap", cfg.SIPConfigMap)
+	}
 	logger.Info("collecting Kubernetes inventory from context %q", contextName)
 	inventory, err := collector.Collect(ctx, k8sOptions)
 	if err != nil {
@@ -605,8 +613,8 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 		scoringConfig = loaded
 		logger.Info("loaded PAIN scoring config from %s", cfg.ScoringConfig)
 	}
-	// Cluster-wide FedRAMP defaults (class, multi-agency) from the in-cluster
-	// ConfigMap override the config-file defaults.
+	// Effective cluster-wide FedRAMP defaults (from the in-cluster ConfigMap or
+	// --sip-config-map) override the config-file defaults.
 	if inventory != nil && len(inventory.ClusterDefaults) > 0 {
 		if applyErr := scoringConfig.ApplyClusterDefaults(inventory.ClusterDefaults); applyErr != nil {
 			logIncompatibleClusterConfig(logger, applyErr)

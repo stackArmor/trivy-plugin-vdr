@@ -113,7 +113,7 @@ func sourceExamples(source string) string {
 	case SourceK8s:
 		return `  vdr k8s -n default --format table
   vdr k8s --all-namespaces --min-severity HIGH --output vdr-k8s.json
-  vdr k8s --all-namespaces --reachability-only --output reachability.json`
+  vdr k8s --all-namespaces --sip-config-map ./vdr-fedramp.yaml --reachability-only --output reachability.json`
 	case SourceK8sCompliance:
 		return `  vdr k8s-compliance -n default
   vdr k8s-compliance --all-namespaces --min-severity HIGH
@@ -162,7 +162,7 @@ func sourceHelpSections(source string) []helpSection {
 	case SourceK8s:
 		sections = append(sections, helpSection{
 			title: "Kubernetes source",
-			flags: []string{"namespace", "all-namespaces", "include-zero-daemonsets"},
+			flags: []string{"namespace", "all-namespaces", "include-zero-daemonsets", "sip-config-map"},
 		})
 	case SourceK8sCompliance:
 		return []helpSection{
@@ -326,6 +326,7 @@ func helpValueName(name string) string {
 		"cache-min-free-percent":          "PERCENT",
 		"chart-version":                   "VERSION",
 		"config-map":                      "FILE",
+		"sip-config-map":                  "FILE",
 		"format":                          "FORMAT",
 		"gcp-impersonate-service-account": "EMAIL",
 		"html-output":                     "FILE",

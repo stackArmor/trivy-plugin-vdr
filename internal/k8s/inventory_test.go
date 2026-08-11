@@ -143,6 +143,41 @@ func TestCollectsClusterDefaultsFromCustomConfigMapNamespace(t *testing.T) {
 	}
 }
 
+func TestLocalClusterDefaultsOverrideSkipsInClusterConfigMap(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "fedramp-vdr-trivy", Name: "vdr-fedramp"},
+		Data:       map[string]string{"class": "B", "multiAgency": "true"},
+	}
+	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
+	client := fake.NewSimpleClientset(cm, deploy)
+	override := map[string]string{"class": "D", "multiAgency": "false"}
+
+	inv, err := (&Collector{Client: client}).Collect(context.Background(), Options{
+		AllNamespaces:           true,
+		ClusterDefaultsOverride: override,
+	})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if inv.ClusterDefaults["class"] != "D" || inv.ClusterDefaults["multiAgency"] != "false" {
+		t.Fatalf("ClusterDefaults = %#v, want local override", inv.ClusterDefaults)
+	}
+	override["class"] = "C"
+	if inv.ClusterDefaults["class"] != "D" {
+		t.Fatal("ClusterDefaults aliases the caller's override map")
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "get" && action.GetResource().Resource == "configmaps" {
+			t.Fatalf("local override should skip the in-cluster ConfigMap lookup: %#v", action)
+		}
+	}
+	for _, warning := range inv.Warnings {
+		if strings.Contains(warning, "cluster FedRAMP ConfigMap") {
+			t.Fatalf("local override should suppress in-cluster ConfigMap warnings: %q", warning)
+		}
+	}
+}
+
 func TestWarnsWhenClusterConfigMapMissing(t *testing.T) {
 	deploy := deployment("default", "web", podSpec(container("app", "ghcr.io/acme/web:1.2.3")))
 	client := fake.NewSimpleClientset(deploy) // no vdr-fedramp ConfigMap

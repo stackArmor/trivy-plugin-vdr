@@ -51,6 +51,7 @@ type Config struct {
 	IngressReleaseName           string
 	IngressNamespace             string
 	ConfigMap                    string
+	SIPConfigMap                 string
 	KubeVersion                  string
 	APIVersions                  []string
 	IncludeCRDs                  bool
@@ -246,6 +247,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.IngressReleaseName, "ingress-release-name", cfg.IngressReleaseName, "Helm release name used to render --ingress-chart")
 	fs.StringVar(&cfg.IngressNamespace, "ingress-namespace", cfg.IngressNamespace, "namespace used to render --ingress-chart; defaults to --namespace")
 	fs.StringVar(&cfg.ConfigMap, "config-map", cfg.ConfigMap, "VDR scoring ConfigMap manifest to consume with a Helm chart")
+	fs.StringVar(&cfg.SIPConfigMap, "sip-config-map", cfg.SIPConfigMap, "local VDR SIP ConfigMap manifest for a Kubernetes scan; overrides the in-cluster ConfigMap")
 	fs.StringVar(&cfg.KubeVersion, "kube-version", cfg.KubeVersion, "Kubernetes version used for Helm template capabilities")
 	fs.Var(&apiVersions, "api-versions", "Kubernetes API version available to Helm templates; may be repeated")
 	fs.BoolVar(&cfg.IncludeCRDs, "include-crds", cfg.IncludeCRDs, "include CRDs in Helm rendered output")
@@ -295,6 +297,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	formatSet := false
 	complianceUnsupportedFlag := ""
 	helmSpecificFlag := ""
+	k8sSpecificFlag := ""
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "all-namespaces":
@@ -317,6 +320,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			formatSet = true
 		case "values", "release-name", "chart-version", "repo", "ingress-chart", "ingress-chart-version", "ingress-repo", "ingress-values", "ingress-release-name", "ingress-namespace", "config-map", "kube-version", "api-versions", "include-crds":
 			helmSpecificFlag = f.Name
+		case "sip-config-map":
+			k8sSpecificFlag = f.Name
 		}
 		if source == SourceK8sCompliance && !complianceFlagAllowed(f.Name) && complianceUnsupportedFlag == "" {
 			complianceUnsupportedFlag = f.Name
@@ -493,6 +498,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		}
 	} else if helmSpecificFlag != "" {
 		return Config{}, fmt.Errorf("--%s is only valid for source helm", helmSpecificFlag)
+	}
+	if cfg.Source != SourceK8s && k8sSpecificFlag != "" {
+		return Config{}, fmt.Errorf("--%s is only valid for source k8s", k8sSpecificFlag)
 	}
 	if len(cfg.Namespaces) > 0 && allNamespacesSet && cfg.AllNamespaces {
 		return Config{}, errors.New("cannot use --namespace with --all-namespaces")

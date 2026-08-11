@@ -50,6 +50,7 @@ trivy vdr k8s --quiet
 trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.html
 trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
 trivy vdr k8s --all-namespaces --scoring-config vdr-scoring.yaml
+trivy vdr k8s --all-namespaces --sip-config-map ./vdr-fedramp.yaml --output vdr-k8s.json
 trivy vdr k8s-compliance --namespace default
 trivy vdr k8s-compliance --all-namespaces --min-severity HIGH
 trivy vdr k8s-compliance --all-namespaces --format json --output vdr-k8s-compliance.json
@@ -163,6 +164,8 @@ The two rendered streams are merged before topology analysis. This allows VDR to
 Helm exposure has `assessmentBasis: "declared"`. It represents deployment intent derived from rendered classes, schemes, annotations, Services, routes, and policies; it does **not** claim that a load balancer was provisioned or that the resources are currently serving traffic. Live `k8s` scans retain their observed-status behavior. For custom Ingress or Gateway classes whose external edge cannot be inferred from the manifests, provide `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses`, or the corresponding `notInternetAccessible*Classes` list when upstream IP allowlisting makes the class non-internet-reachable, in the VDR ConfigMap.
 
 If the rendered chart contains `fedramp-vdr-trivy/vdr-fedramp`, it is consumed automatically. `--config-map <file>` can supply a separate `v1/ConfigMap` and takes precedence over a rendered ConfigMap. This is useful when the scoring and custom class configuration is managed outside the application chart.
+
+For a live Kubernetes scan, `--sip-config-map <file>` supplies a local `v1/ConfigMap` manifest and takes precedence over the in-cluster `fedramp-vdr-trivy/vdr-fedramp` ConfigMap. The local data drives both PAIN/SIP scoring and the custom Ingress/Gateway reachability class lists.
 
 Useful rendering flags include `--kube-version`, repeatable `--api-versions`, and `--include-crds`. The Helm source does not contact a Kubernetes API and requires no Kubernetes RBAC. Remote chart downloads and image scans still require their respective network access and credentials.
 
