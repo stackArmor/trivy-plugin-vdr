@@ -119,11 +119,22 @@ cannot infer reachability. An operator can declare it two ways:
       - nginx
     internetAccessibleGatewayClasses: |
       - istio
+    # WAF, L7, OWASP, or DDoS protections alone do not make a public load
+    # balancer non-internet-reachable. Only sufficiently strict IP
+    # whitelisting qualifies; a WAF may implement that allowlist.
+    notInternetAccessibleIngressClasses: |
+      - nginx-restricted
+    notInternetAccessibleGatewayClasses: |
+      - istio-restricted
   ```
 
-  Precedence: a per-class `vdr.fedramp.io/internet-reachable` label (including
-  `false`) wins over the ConfigMap list. Built-in public classes stay public.
-  GatewayClass has no label mechanism, so the ConfigMap list is its only override.
+  The negative lists require sufficiently strict upstream IP allowlisting and
+  suppress both positive lists and built-in public-class detection. A WAF may
+  implement that allowlist, but WAF, L7, OWASP, or DDoS protections alone do
+  not make a public load balancer non-internet-reachable. For an
+  IngressClass, a per-class `vdr.fedramp.io/internet-reachable` label (including
+  `false`) remains most-specific and wins over either ConfigMap list. GatewayClass
+  has no label mechanism, so the ConfigMap lists are its class-level overrides.
 
 ## Kubernetes Service LoadBalancer
 

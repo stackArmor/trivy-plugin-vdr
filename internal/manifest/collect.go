@@ -93,7 +93,8 @@ func Collect(ctx context.Context, documents []Document, opts Options, logger *lo
 		return Result{}, fmt.Errorf("collect rendered exposure objects: %w", err)
 	}
 	objects.Unstructured = unstructuredObjects
-	objects.InternetAccessibleIngressClasses, objects.InternetAccessibleGatewayClasses =
+	objects.InternetAccessibleIngressClasses, objects.InternetAccessibleGatewayClasses,
+		objects.NotInternetAccessibleIngressClasses, objects.NotInternetAccessibleGatewayClasses =
 		exposure.ClassOverridesFromConfigMap(inventory.ClusterDefaults)
 
 	warnings := append([]string(nil), inventory.Warnings...)

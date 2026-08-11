@@ -1115,6 +1115,51 @@ func TestAnalyzeIngressClassLabelFalseWinsOverConfigMapList(t *testing.T) {
 	}
 }
 
+func TestAnalyzeIngressClassNegativeConfigMapListWinsOverPositiveList(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:                            []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses:                           []networkingv1.Ingress{ingress("default", "nginx-ing", "nginx", "web-svc", nil)},
+		InternetAccessibleIngressClasses:    []string{"nginx"},
+		NotInternetAccessibleIngressClasses: []string{"nginx"},
+	}
+
+	if got := Analyze(inv, objects); len(got) != 0 {
+		t.Fatalf("negative ConfigMap list must suppress positive IngressClass list; got %#v", got)
+	}
+}
+
+func TestAnalyzeIngressClassLabelTrueWinsOverNegativeConfigMapList(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:  []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses: []networkingv1.Ingress{ingress("default", "nginx-ing", "nginx", "web-svc", nil)},
+		IngressClasses: []networkingv1.IngressClass{
+			labeledIngressClass("nginx", map[string]string{"vdr.fedramp.io/internet-reachable": "true"}),
+		},
+		NotInternetAccessibleIngressClasses: []string{"nginx"},
+	}
+
+	got := Analyze(inv, objects)
+	ex := got[resourceRef("default", "web", "app", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("IngressClass label=true must win over negative ConfigMap list; got %+v", ex)
+	}
+}
+
+func TestAnalyzeIngressClassNegativeConfigMapListSuppressesBuiltInPublicClass(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:                            []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Ingresses:                           []networkingv1.Ingress{ingress("default", "gce-ing", "gce", "web-svc", nil)},
+		NotInternetAccessibleIngressClasses: []string{"gce"},
+	}
+
+	if got := Analyze(inv, objects); len(got) != 0 {
+		t.Fatalf("negative ConfigMap list must suppress built-in public IngressClass; got %#v", got)
+	}
+}
+
 func TestAnalyzeGatewayClassDeclaredInternetAccessibleByConfigMap(t *testing.T) {
 	// A non-built-in Gateway class (e.g. istio) is normally not public. Listing it in the
 	// cluster ConfigMap's internetAccessibleGatewayClasses makes its route backends count.
@@ -1140,6 +1185,33 @@ func TestAnalyzeGatewayClassDeclaredInternetAccessibleByConfigMap(t *testing.T) 
 	requireEvidence(t, ex, "Gateway default/custom-gw uses class istio declared internet-accessible by cluster ConfigMap internetAccessibleGatewayClasses")
 }
 
+func TestAnalyzeGatewayClassNegativeConfigMapListWinsOverPositiveList(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:                            []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured:                        []unstructured.Unstructured{gateway("default", "custom-gw", "istio"), httpRoute("default", "custom-route", "custom-gw", "web-svc")},
+		InternetAccessibleGatewayClasses:    []string{"istio"},
+		NotInternetAccessibleGatewayClasses: []string{"istio"},
+	}
+
+	if got := Analyze(inv, objects); len(got) != 0 {
+		t.Fatalf("negative ConfigMap list must suppress positive GatewayClass list; got %#v", got)
+	}
+}
+
+func TestAnalyzeGatewayClassNegativeConfigMapListSuppressesBuiltInPublicClass(t *testing.T) {
+	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
+	objects := Objects{
+		Services:                            []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
+		Unstructured:                        []unstructured.Unstructured{gateway("default", "gke-gw", "gke-l7-global-external-managed"), httpRoute("default", "gke-route", "gke-gw", "web-svc")},
+		NotInternetAccessibleGatewayClasses: []string{"gke-l7-global-external-managed"},
+	}
+
+	if got := Analyze(inv, objects); len(got) != 0 {
+		t.Fatalf("negative ConfigMap list must suppress built-in public GatewayClass; got %#v", got)
+	}
+}
+
 func TestAnalyzeGatewayClassNotDeclaredIsNotPublic(t *testing.T) {
 	// Regression: without the ConfigMap list, a non-built-in Gateway class stays private.
 	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
@@ -1160,15 +1232,23 @@ func TestAnalyzeGatewayClassNotDeclaredIsNotPublic(t *testing.T) {
 
 func TestClassOverridesFromConfigMap(t *testing.T) {
 	data := map[string]string{
-		ConfigKeyInternetAccessibleIngressClasses: "- nginx\n- traefik\n",
-		ConfigKeyInternetAccessibleGatewayClasses: "istio, envoy-gateway",
+		ConfigKeyInternetAccessibleIngressClasses:    "- nginx\n- traefik\n",
+		ConfigKeyInternetAccessibleGatewayClasses:    "istio, envoy-gateway",
+		ConfigKeyNotInternetAccessibleIngressClasses: "private-nginx",
+		ConfigKeyNotInternetAccessibleGatewayClasses: "private-istio",
 	}
-	ingress, gateway := ClassOverridesFromConfigMap(data)
+	ingress, gateway, notIngress, notGateway := ClassOverridesFromConfigMap(data)
 	if got, want := strings.Join(ingress, ","), "nginx,traefik"; got != want {
 		t.Errorf("ingress classes = %q, want %q", got, want)
 	}
 	if got, want := strings.Join(gateway, ","), "istio,envoy-gateway"; got != want {
 		t.Errorf("gateway classes = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(notIngress, ","), "private-nginx"; got != want {
+		t.Errorf("not internet ingress classes = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(notGateway, ","), "private-istio"; got != want {
+		t.Errorf("not internet gateway classes = %q, want %q", got, want)
 	}
 }
 

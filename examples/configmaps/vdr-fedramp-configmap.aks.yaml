@@ -43,6 +43,14 @@ data:
   #   - nginx
   # internetAccessibleGatewayClasses: |
   #   - istio
+  # WAF, L7, OWASP, or DDoS protections alone do not make a public load balancer
+  # non-internet-reachable. Only sufficiently strict IP whitelisting qualifies;
+  # a WAF may implement that allowlist.
+  # Negative declarations override positive lists and built-in class detection.
+  # notInternetAccessibleIngressClasses: |
+  #   - nginx-restricted
+  # notInternetAccessibleGatewayClasses: |
+  #   - istio-restricted
 
   scoring.yaml: |
     # First match wins. nameRules win over namespaceRules. namespace is an optional

@@ -19,13 +19,15 @@ type Objects struct {
 	Ingresses      []networkingv1.Ingress
 	IngressClasses []networkingv1.IngressClass
 	Unstructured   []unstructured.Unstructured
-	// InternetAccessibleIngressClasses / InternetAccessibleGatewayClasses are
-	// class names an operator declared internet-reachable in the cluster
-	// ConfigMap. A class named here is treated exactly like an
-	// internetReachableLabel=true label, without touching any resource. See
+	// InternetAccessible*Classes and NotInternetAccessible*Classes are class
+	// names an operator declared reachable or not-reachable in the cluster
+	// ConfigMap. Negative lists override positive lists and built-in class
+	// detection; an explicit IngressClass label remains more specific. See
 	// ClassOverridesFromConfigMap.
-	InternetAccessibleIngressClasses []string
-	InternetAccessibleGatewayClasses []string
+	InternetAccessibleIngressClasses    []string
+	InternetAccessibleGatewayClasses    []string
+	NotInternetAccessibleIngressClasses []string
+	NotInternetAccessibleGatewayClasses []string
 }
 
 type AnalyzeOptions struct {
@@ -92,14 +94,16 @@ func AnalyzeWithOptions(inventory *model.Inventory, objects Objects, opts Analyz
 	ingressClasses := indexIngressClasses(objects.IngressClasses)
 	ingressClassParams := indexIngressClassParams(objects.Unstructured)
 	ingressClassOverrides := stringSet(objects.InternetAccessibleIngressClasses)
+	negativeIngressClassOverrides := stringSet(objects.NotInternetAccessibleIngressClasses)
 	gatewayClassOverrides := stringSet(objects.InternetAccessibleGatewayClasses)
-	gateways := indexGateways(objects.Unstructured, gatewayClassOverrides)
+	negativeGatewayClassOverrides := stringSet(objects.NotInternetAccessibleGatewayClasses)
+	gateways := indexGateways(objects.Unstructured, gatewayClassOverrides, negativeGatewayClassOverrides)
 	awsGatewayPublic := indexAWSGatewayLoadBalancers(objects.Unstructured)
 	awsTargetGroups := indexAWSTargetGroupConfigurations(objects.Unstructured)
 	referenceGrants := indexReferenceGrants(objects.Unstructured)
 
 	serviceExposures := make([]serviceExposure, 0)
-	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, ingressClassOverrides, backendConfigs, opts.Declared)...)
+	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, ingressClassOverrides, negativeIngressClassOverrides, backendConfigs, opts.Declared)...)
 	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, serviceIndex, gateways, awsGatewayPublic, awsTargetGroups, gcpBackendPolicies, referenceGrants)...)
 	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services, opts.Declared)...)
 
@@ -187,6 +191,7 @@ func analyzeIngresses(
 	classes map[string]networkingv1.IngressClass,
 	classParams map[string]string,
 	classOverrides map[string]struct{},
+	negativeClassOverrides map[string]struct{},
 	backendConfigs map[serviceKey]protectionInfo,
 	declared bool,
 ) []serviceExposure {
@@ -199,7 +204,7 @@ func analyzeIngresses(
 		if !declared && !ingressHasLoadBalancer(ingress) {
 			continue
 		}
-		provider, public, evidence := classifyIngress(ingress, classes, classParams, classOverrides)
+		provider, public, evidence := classifyIngress(ingress, classes, classParams, classOverrides, negativeClassOverrides)
 		if !public {
 			continue
 		}
@@ -247,7 +252,7 @@ func ingressHasLoadBalancer(ingress networkingv1.Ingress) bool {
 	return false
 }
 
-func classifyIngress(ingress networkingv1.Ingress, classes map[string]networkingv1.IngressClass, classParams map[string]string, classOverrides map[string]struct{}) (string, bool, string) {
+func classifyIngress(ingress networkingv1.Ingress, classes map[string]networkingv1.IngressClass, classParams map[string]string, classOverrides, negativeClassOverrides map[string]struct{}) (string, bool, string) {
 	className := ingressClassName(ingress)
 	// An explicit operator label on the IngressClass wins over the built-in class
 	// classification: "true" trusts a class whose edge LB is provisioned outside the
@@ -258,6 +263,14 @@ func classifyIngress(ingress networkingv1.Ingress, classes map[string]networking
 			if reachable {
 				return "custom", true, fmt.Sprintf("IngressClass %s labeled %s=true", className, internetReachableLabel)
 			}
+			return "", false, ""
+		}
+	}
+	// The central negative list is an operator attestation that an upstream
+	// control, such as IP allowlisting, makes this class non-internet-reachable.
+	// It overrides both the central positive list and built-in detection.
+	if className != "" {
+		if _, ok := negativeClassOverrides[className]; ok {
 			return "", false, ""
 		}
 	}
@@ -562,7 +575,7 @@ func analyzeGatewayRoutes(
 	return exposures
 }
 
-func indexGateways(objects []unstructured.Unstructured, classOverrides map[string]struct{}) map[serviceKey]gatewayInfo {
+func indexGateways(objects []unstructured.Unstructured, classOverrides, negativeClassOverrides map[string]struct{}) map[serviceKey]gatewayInfo {
 	index := map[serviceKey]gatewayInfo{}
 	for _, object := range objects {
 		if !hasGroupKind(object, "gateway.networking.k8s.io", "Gateway") {
@@ -574,15 +587,26 @@ func indexGateways(objects []unstructured.Unstructured, classOverrides map[strin
 		if public && provider == "gke" {
 			evidence = fmt.Sprintf("GKE Gateway %s/%s uses public class %s", object.GetNamespace(), object.GetName(), className)
 		}
+		// A central negative class attestation overrides both built-in public-class
+		// detection and the central positive list.
+		if className != "" {
+			if _, ok := negativeClassOverrides[className]; ok {
+				provider = ""
+				public = false
+				evidence = ""
+			}
+		}
 		// A class named in the cluster ConfigMap's internetAccessibleGatewayClasses is an
 		// operator declaration that the class is internet-reachable (its edge LB is built
-		// outside Kubernetes). GatewayClass carries no label mechanism, so this is the only
-		// override. Built-in public classes already resolved above are left untouched.
+		// outside Kubernetes). Built-in public classes already resolved above are
+		// left untouched unless a central negative attestation suppresses them.
 		if !public && className != "" {
-			if _, ok := classOverrides[className]; ok {
-				provider = "custom"
-				public = true
-				evidence = fmt.Sprintf("Gateway %s/%s uses class %s declared internet-accessible by cluster ConfigMap %s", object.GetNamespace(), object.GetName(), className, ConfigKeyInternetAccessibleGatewayClasses)
+			if _, blocked := negativeClassOverrides[className]; !blocked {
+				if _, ok := classOverrides[className]; ok {
+					provider = "custom"
+					public = true
+					evidence = fmt.Sprintf("Gateway %s/%s uses class %s declared internet-accessible by cluster ConfigMap %s", object.GetNamespace(), object.GetName(), className, ConfigKeyInternetAccessibleGatewayClasses)
+				}
 			}
 		}
 		index[serviceKey{namespace: object.GetNamespace(), name: object.GetName()}] = gatewayInfo{
@@ -1421,15 +1445,19 @@ const internetReachableLabel = "vdr.fedramp.io/internet-reachable"
 // like internetReachableLabel=true. Each value is a list of class names: a YAML list, or a
 // newline- or comma-separated string.
 const (
-	ConfigKeyInternetAccessibleIngressClasses = "internetAccessibleIngressClasses"
-	ConfigKeyInternetAccessibleGatewayClasses = "internetAccessibleGatewayClasses"
+	ConfigKeyInternetAccessibleIngressClasses    = "internetAccessibleIngressClasses"
+	ConfigKeyInternetAccessibleGatewayClasses    = "internetAccessibleGatewayClasses"
+	ConfigKeyNotInternetAccessibleIngressClasses = "notInternetAccessibleIngressClasses"
+	ConfigKeyNotInternetAccessibleGatewayClasses = "notInternetAccessibleGatewayClasses"
 )
 
-// ClassOverridesFromConfigMap extracts the operator-declared internet-reachable Ingress and
-// Gateway class names from cluster ConfigMap data (inventory.ClusterDefaults).
-func ClassOverridesFromConfigMap(data map[string]string) (ingress, gateway []string) {
+// ClassOverridesFromConfigMap extracts the operator-declared internet-reachable and
+// not-internet-reachable Ingress and Gateway class names from cluster ConfigMap data.
+func ClassOverridesFromConfigMap(data map[string]string) (ingress, gateway, notIngress, notGateway []string) {
 	return parseClassList(data[ConfigKeyInternetAccessibleIngressClasses]),
-		parseClassList(data[ConfigKeyInternetAccessibleGatewayClasses])
+		parseClassList(data[ConfigKeyInternetAccessibleGatewayClasses]),
+		parseClassList(data[ConfigKeyNotInternetAccessibleIngressClasses]),
+		parseClassList(data[ConfigKeyNotInternetAccessibleGatewayClasses])
 }
 
 // parseClassList parses a class-name list from a ConfigMap string value. It accepts a YAML

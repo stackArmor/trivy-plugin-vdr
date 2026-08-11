@@ -278,7 +278,8 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			return err
 		}
 		warnings = append(warnings, exposureWarnings...)
-		objects.InternetAccessibleIngressClasses, objects.InternetAccessibleGatewayClasses =
+		objects.InternetAccessibleIngressClasses, objects.InternetAccessibleGatewayClasses,
+			objects.NotInternetAccessibleIngressClasses, objects.NotInternetAccessibleGatewayClasses =
 			exposure.ClassOverridesFromConfigMap(inventory.ClusterDefaults)
 		exposures = exposure.Analyze(inventory, objects)
 	}
