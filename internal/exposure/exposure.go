@@ -28,6 +28,7 @@ type Objects struct {
 	InternetAccessibleGatewayClasses    []string
 	NotInternetAccessibleIngressClasses []string
 	NotInternetAccessibleGatewayClasses []string
+	NotInternetAccessibleServices       []string
 }
 
 type AnalyzeOptions struct {
@@ -55,9 +56,10 @@ type ingressServiceRef struct {
 }
 
 type gatewayInfo struct {
-	provider string
-	public   bool
-	evidence string
+	provider                    string
+	public                      bool
+	forcedNotInternetAccessible bool
+	evidence                    string
 }
 
 type routeProtocolInfo struct {
@@ -94,9 +96,18 @@ func AnalyzeWithOptions(inventory *model.Inventory, objects Objects, opts Analyz
 	ingressClasses := indexIngressClasses(objects.IngressClasses)
 	ingressClassParams := indexIngressClassParams(objects.Unstructured)
 	ingressClassOverrides := stringSet(objects.InternetAccessibleIngressClasses)
-	negativeIngressClassOverrides := stringSet(objects.NotInternetAccessibleIngressClasses)
+	effectiveNotIngress, _ := positiveWinsClassConflicts(
+		"IngressClass", ConfigKeyInternetAccessibleIngressClasses,
+		ConfigKeyNotInternetAccessibleIngressClasses,
+		objects.InternetAccessibleIngressClasses, objects.NotInternetAccessibleIngressClasses)
+	negativeIngressClassOverrides := stringSet(effectiveNotIngress)
 	gatewayClassOverrides := stringSet(objects.InternetAccessibleGatewayClasses)
-	negativeGatewayClassOverrides := stringSet(objects.NotInternetAccessibleGatewayClasses)
+	effectiveNotGateway, _ := positiveWinsClassConflicts(
+		"GatewayClass", ConfigKeyInternetAccessibleGatewayClasses,
+		ConfigKeyNotInternetAccessibleGatewayClasses,
+		objects.InternetAccessibleGatewayClasses, objects.NotInternetAccessibleGatewayClasses)
+	negativeGatewayClassOverrides := stringSet(effectiveNotGateway)
+	negativeServiceOverrides := stringSet(objects.NotInternetAccessibleServices)
 	gateways := indexGateways(objects.Unstructured, gatewayClassOverrides, negativeGatewayClassOverrides)
 	awsGatewayPublic := indexAWSGatewayLoadBalancers(objects.Unstructured)
 	awsTargetGroups := indexAWSTargetGroupConfigurations(objects.Unstructured)
@@ -105,7 +116,7 @@ func AnalyzeWithOptions(inventory *model.Inventory, objects Objects, opts Analyz
 	serviceExposures := make([]serviceExposure, 0)
 	serviceExposures = append(serviceExposures, analyzeIngresses(objects.Ingresses, serviceIndex, ingressClasses, ingressClassParams, ingressClassOverrides, negativeIngressClassOverrides, backendConfigs, opts.Declared)...)
 	serviceExposures = append(serviceExposures, analyzeGatewayRoutes(objects.Unstructured, serviceIndex, gateways, awsGatewayPublic, awsTargetGroups, gcpBackendPolicies, referenceGrants)...)
-	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services, opts.Declared)...)
+	serviceExposures = append(serviceExposures, analyzeServiceExposure(objects.Services, opts.Declared, negativeServiceOverrides)...)
 
 	result := map[model.ResourceRef]model.Exposure{}
 	for _, item := range serviceExposures {
@@ -524,7 +535,7 @@ func analyzeGatewayRoutes(
 			}
 			public := gateway.public
 			evidence := gateway.evidence
-			if awsEvidence, ok := awsGatewayPublic[gatewayKey]; ok {
+			if awsEvidence, ok := awsGatewayPublic[gatewayKey]; ok && !gateway.forcedNotInternetAccessible {
 				public = true
 				evidence = awsEvidence
 				gateway.provider = "aws"
@@ -610,9 +621,10 @@ func indexGateways(objects []unstructured.Unstructured, classOverrides, negative
 			}
 		}
 		index[serviceKey{namespace: object.GetNamespace(), name: object.GetName()}] = gatewayInfo{
-			provider: provider,
-			public:   public,
-			evidence: evidence,
+			provider:                    provider,
+			public:                      public,
+			forcedNotInternetAccessible: containsStringSet(negativeClassOverrides, className),
+			evidence:                    evidence,
 		}
 	}
 	return index
@@ -1369,7 +1381,7 @@ func applyWorkloadExposure(result map[model.ResourceRef]model.Exposure, resource
 // nodes having public IPs and permissive firewall/security-group rules, which is
 // not determinable from the cluster -- so it is deliberately NOT counted as
 // internet-reachable (it does not inflate IRV or the remediation deadline).
-func analyzeServiceExposure(services []corev1.Service, declared bool) []serviceExposure {
+func analyzeServiceExposure(services []corev1.Service, declared bool, negativeOverrides map[string]struct{}) []serviceExposure {
 	var exposures []serviceExposure
 	for _, svc := range services {
 		// An explicit operator label on the Service wins over type-based inference (and
@@ -1377,6 +1389,23 @@ func analyzeServiceExposure(services []corev1.Service, declared bool) []serviceE
 		// apps whose external LB is provisioned outside the cluster.
 		if ex, ok := serviceLabelExposure(svc); ok {
 			exposures = append(exposures, ex)
+			continue
+		}
+		serviceID := svc.Namespace + "/" + svc.Name
+		if _, ok := negativeOverrides[serviceID]; ok {
+			exposures = append(exposures, serviceExposure{
+				serviceNamespace: svc.Namespace,
+				serviceName:      svc.Name,
+				exposure: model.Exposure{
+					InternetAccessible: false,
+					RouteKind:          "Service",
+					RouteName:          svc.Name,
+					Routes:             serviceRouteMetadata(svc, "Service"),
+					Evidence: []string{fmt.Sprintf(
+						"Service %s declared not internet-reachable by cluster ConfigMap %s",
+						serviceID, ConfigKeyNotInternetAccessibleServices)},
+				},
+			})
 			continue
 		}
 		switch svc.Spec.Type {
@@ -1449,15 +1478,41 @@ const (
 	ConfigKeyInternetAccessibleGatewayClasses    = "internetAccessibleGatewayClasses"
 	ConfigKeyNotInternetAccessibleIngressClasses = "notInternetAccessibleIngressClasses"
 	ConfigKeyNotInternetAccessibleGatewayClasses = "notInternetAccessibleGatewayClasses"
+	ConfigKeyNotInternetAccessibleServices       = "notInternetAccessibleServices"
 )
 
 // ClassOverridesFromConfigMap extracts the operator-declared internet-reachable and
 // not-internet-reachable Ingress and Gateway class names from cluster ConfigMap data.
-func ClassOverridesFromConfigMap(data map[string]string) (ingress, gateway, notIngress, notGateway []string) {
-	return parseClassList(data[ConfigKeyInternetAccessibleIngressClasses]),
-		parseClassList(data[ConfigKeyInternetAccessibleGatewayClasses]),
-		parseClassList(data[ConfigKeyNotInternetAccessibleIngressClasses]),
-		parseClassList(data[ConfigKeyNotInternetAccessibleGatewayClasses])
+func ClassOverridesFromConfigMap(data map[string]string) (ingress, gateway, notIngress, notGateway, notServices, conflicts []string) {
+	ingress = parseClassList(data[ConfigKeyInternetAccessibleIngressClasses])
+	gateway = parseClassList(data[ConfigKeyInternetAccessibleGatewayClasses])
+	notIngress, ingressConflicts := positiveWinsClassConflicts(
+		"IngressClass", ConfigKeyInternetAccessibleIngressClasses,
+		ConfigKeyNotInternetAccessibleIngressClasses, ingress,
+		parseClassList(data[ConfigKeyNotInternetAccessibleIngressClasses]))
+	notGateway, gatewayConflicts := positiveWinsClassConflicts(
+		"GatewayClass", ConfigKeyInternetAccessibleGatewayClasses,
+		ConfigKeyNotInternetAccessibleGatewayClasses, gateway,
+		parseClassList(data[ConfigKeyNotInternetAccessibleGatewayClasses]))
+	notServices = parseClassList(data[ConfigKeyNotInternetAccessibleServices])
+	conflicts = append(ingressConflicts, gatewayConflicts...)
+	return
+}
+
+func positiveWinsClassConflicts(kind, positiveKey, negativeKey string, positive, negative []string) ([]string, []string) {
+	positiveSet := stringSet(positive)
+	filtered := make([]string, 0, len(negative))
+	var conflicts []string
+	for _, name := range negative {
+		if _, exists := positiveSet[name]; exists {
+			conflicts = append(conflicts, fmt.Sprintf(
+				"reachability conflict: %s %q appears in both %s and %s; treating it as internet-accessible",
+				kind, name, positiveKey, negativeKey))
+			continue
+		}
+		filtered = append(filtered, name)
+	}
+	return filtered, conflicts
 }
 
 // parseClassList parses a class-name list from a ConfigMap string value. It accepts a YAML
@@ -1503,6 +1558,11 @@ func stringSet(items []string) map[string]struct{} {
 		set[item] = struct{}{}
 	}
 	return set
+}
+
+func containsStringSet(set map[string]struct{}, value string) bool {
+	_, ok := set[value]
+	return ok
 }
 
 // parseReachableLabel parses a boolean reachability label value. ok is false when the

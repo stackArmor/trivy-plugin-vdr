@@ -278,9 +278,14 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			return err
 		}
 		warnings = append(warnings, exposureWarnings...)
+		var exposureConflicts []string
 		objects.InternetAccessibleIngressClasses, objects.InternetAccessibleGatewayClasses,
-			objects.NotInternetAccessibleIngressClasses, objects.NotInternetAccessibleGatewayClasses =
+			objects.NotInternetAccessibleIngressClasses, objects.NotInternetAccessibleGatewayClasses,
+			objects.NotInternetAccessibleServices, exposureConflicts =
 			exposure.ClassOverridesFromConfigMap(inventory.ClusterDefaults)
+		for _, conflict := range exposureConflicts {
+			logger.Error("%s", conflict)
+		}
 		exposures = exposure.Analyze(inventory, objects)
 	}
 	if cfg.ReachabilityOnly {

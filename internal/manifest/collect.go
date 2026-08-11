@@ -93,9 +93,14 @@ func Collect(ctx context.Context, documents []Document, opts Options, logger *lo
 		return Result{}, fmt.Errorf("collect rendered exposure objects: %w", err)
 	}
 	objects.Unstructured = unstructuredObjects
+	var exposureConflicts []string
 	objects.InternetAccessibleIngressClasses, objects.InternetAccessibleGatewayClasses,
-		objects.NotInternetAccessibleIngressClasses, objects.NotInternetAccessibleGatewayClasses =
+		objects.NotInternetAccessibleIngressClasses, objects.NotInternetAccessibleGatewayClasses,
+		objects.NotInternetAccessibleServices, exposureConflicts =
 		exposure.ClassOverridesFromConfigMap(inventory.ClusterDefaults)
+	for _, conflict := range exposureConflicts {
+		logger.Error("%s", conflict)
+	}
 
 	warnings := append([]string(nil), inventory.Warnings...)
 	warnings = append(warnings, exposureWarnings...)

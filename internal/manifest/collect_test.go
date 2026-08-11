@@ -250,3 +250,23 @@ data:
 		t.Fatalf("ConfigMap data = %#v", data)
 	}
 }
+
+func TestCollectLogsNonFatalReachabilityConflictAsError(t *testing.T) {
+	var output strings.Builder
+	result, err := Collect(context.Background(), nil, Options{ClusterDefaults: map[string]string{
+		exposure.ConfigKeyInternetAccessibleIngressClasses:    "nginx",
+		exposure.ConfigKeyNotInternetAccessibleIngressClasses: "nginx",
+	}}, log.NewWithWriter(&output, log.LevelQuiet))
+	if err != nil {
+		t.Fatalf("Collect returned error for non-fatal reachability conflict: %v", err)
+	}
+	if !strings.Contains(output.String(), "ERROR") || !strings.Contains(output.String(), "treating it as internet-accessible") {
+		t.Fatalf("log output = %q, want non-fatal ERROR with positive-wins resolution", output.String())
+	}
+	if got := result.ExposureObjects.NotInternetAccessibleIngressClasses; len(got) != 0 {
+		t.Fatalf("negative classes = %v, want conflicting class removed", got)
+	}
+	if got := result.ExposureObjects.InternetAccessibleIngressClasses; len(got) != 1 || got[0] != "nginx" {
+		t.Fatalf("positive classes = %v, want nginx retained", got)
+	}
+}

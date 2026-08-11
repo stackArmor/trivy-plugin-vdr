@@ -51,6 +51,8 @@ data:
   #   - nginx-restricted
   # notInternetAccessibleGatewayClasses: |
   #   - istio-restricted
+  # notInternetAccessibleServices: |
+  #   - ingress-nginx/ingress-nginx-controller
 
   scoring.yaml: |
     # First match wins. nameRules win over namespaceRules. namespace is an optional

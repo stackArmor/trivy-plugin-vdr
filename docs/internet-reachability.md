@@ -126,6 +126,8 @@ cannot infer reachability. An operator can declare it two ways:
       - nginx-restricted
     notInternetAccessibleGatewayClasses: |
       - istio-restricted
+    notInternetAccessibleServices: |
+      - ingress-nginx/ingress-nginx-controller
   ```
 
   The negative lists require sufficiently strict upstream IP allowlisting and
@@ -135,10 +137,19 @@ cannot infer reachability. An operator can declare it two ways:
   IngressClass, a per-class `vdr.fedramp.io/internet-reachable` label (including
   `false`) remains most-specific and wins over either ConfigMap list. GatewayClass
   has no label mechanism, so the ConfigMap lists are its class-level overrides.
+  If the same class appears in both positive and negative lists, positive wins
+  and the plugin emits a non-failing `ERROR` describing the conflict.
 
 ## Kubernetes Service LoadBalancer
 
 A `Service` of type `LoadBalancer` can expose the pods it selects directly. This catches data-path pods for ingress and gateway controllers such as Traefik, ingress-nginx, and Envoy without relying on controller names.
+
+Use an exact `namespace/name` entry in `notInternetAccessibleServices` when a
+direct LoadBalancer Service has the same operator-attested strict IP allowlist.
+An explicit `vdr.fedramp.io/internet-reachable` label on the Service remains
+more specific than this central list. Class-level negative declarations do not
+implicitly suppress Services because Kubernetes has no reliable generic mapping
+from an IngressClass or GatewayClass to its implementing Service.
 
 For direct `Service type=LoadBalancer` exposure, `exposure.routes` includes one route metadata entry per Service port so multi-port Services preserve which ports are externally reachable. For AWS NLB Services, `exposure.routes` also records `service.beta.kubernetes.io/aws-load-balancer-alpn-policy` when present and expands known policies into normalized ALPN hints such as `h2` and `http/1.1`.
 

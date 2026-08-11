@@ -869,6 +869,44 @@ func TestAnalyzeLoadBalancerServiceExposesControllerPods(t *testing.T) {
 	}
 }
 
+func TestAnalyzeLoadBalancerServiceNegativeConfigMapOverride(t *testing.T) {
+	svc := service("ingress-nginx", "ingress-nginx-controller", map[string]string{"app.kubernetes.io/component": "controller"})
+	svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "203.0.113.10"}}
+	inv := inventoryWithWorkload("ingress-nginx", "ingress-nginx-controller",
+		map[string]string{"app.kubernetes.io/component": "controller"},
+		containerImage("controller", "registry.k8s.io/ingress-nginx/controller:v1"))
+
+	got := Analyze(inv, Objects{
+		Services:                      []corev1.Service{svc},
+		NotInternetAccessibleServices: []string{"ingress-nginx/ingress-nginx-controller"},
+	})
+	ex := got[resourceRef("ingress-nginx", "ingress-nginx-controller", "controller", "container", "")]
+	if ex.InternetAccessible {
+		t.Fatalf("ConfigMap-negative Service must suppress LoadBalancer inference; got %+v", ex)
+	}
+	requireEvidence(t, ex, "Service ingress-nginx/ingress-nginx-controller declared not internet-reachable by cluster ConfigMap notInternetAccessibleServices")
+}
+
+func TestAnalyzeLoadBalancerServiceLabelTrueWinsOverNegativeConfigMapOverride(t *testing.T) {
+	svc := service("ingress-nginx", "ingress-nginx-controller", map[string]string{"app.kubernetes.io/component": "controller"})
+	svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "203.0.113.10"}}
+	svc.Labels = map[string]string{"vdr.fedramp.io/internet-reachable": "true"}
+	inv := inventoryWithWorkload("ingress-nginx", "ingress-nginx-controller",
+		map[string]string{"app.kubernetes.io/component": "controller"},
+		containerImage("controller", "registry.k8s.io/ingress-nginx/controller:v1"))
+
+	got := Analyze(inv, Objects{
+		Services:                      []corev1.Service{svc},
+		NotInternetAccessibleServices: []string{"ingress-nginx/ingress-nginx-controller"},
+	})
+	ex := got[resourceRef("ingress-nginx", "ingress-nginx-controller", "controller", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("Service label=true must win over central negative override; got %+v", ex)
+	}
+}
+
 func TestAnalyzeAWSLoadBalancerServiceIncludesALPNPolicyMetadata(t *testing.T) {
 	httpAppProtocol := "kubernetes.io/h2c"
 	redisAppProtocol := "redis"
@@ -1115,7 +1153,7 @@ func TestAnalyzeIngressClassLabelFalseWinsOverConfigMapList(t *testing.T) {
 	}
 }
 
-func TestAnalyzeIngressClassNegativeConfigMapListWinsOverPositiveList(t *testing.T) {
+func TestAnalyzeIngressClassPositiveConfigMapListWinsOverNegativeList(t *testing.T) {
 	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
 	objects := Objects{
 		Services:                            []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
@@ -1124,8 +1162,10 @@ func TestAnalyzeIngressClassNegativeConfigMapListWinsOverPositiveList(t *testing
 		NotInternetAccessibleIngressClasses: []string{"nginx"},
 	}
 
-	if got := Analyze(inv, objects); len(got) != 0 {
-		t.Fatalf("negative ConfigMap list must suppress positive IngressClass list; got %#v", got)
+	got := Analyze(inv, objects)
+	ex := got[resourceRef("default", "web", "app", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("positive IngressClass list must win over conflicting negative list; got %+v", ex)
 	}
 }
 
@@ -1185,7 +1225,7 @@ func TestAnalyzeGatewayClassDeclaredInternetAccessibleByConfigMap(t *testing.T) 
 	requireEvidence(t, ex, "Gateway default/custom-gw uses class istio declared internet-accessible by cluster ConfigMap internetAccessibleGatewayClasses")
 }
 
-func TestAnalyzeGatewayClassNegativeConfigMapListWinsOverPositiveList(t *testing.T) {
+func TestAnalyzeGatewayClassPositiveConfigMapListWinsOverNegativeList(t *testing.T) {
 	inv := inventoryWithWorkload("default", "web", map[string]string{"app": "web"}, containerImage("app", "web:v1"))
 	objects := Objects{
 		Services:                            []corev1.Service{service("default", "web-svc", map[string]string{"app": "web"})},
@@ -1194,8 +1234,10 @@ func TestAnalyzeGatewayClassNegativeConfigMapListWinsOverPositiveList(t *testing
 		NotInternetAccessibleGatewayClasses: []string{"istio"},
 	}
 
-	if got := Analyze(inv, objects); len(got) != 0 {
-		t.Fatalf("negative ConfigMap list must suppress positive GatewayClass list; got %#v", got)
+	got := Analyze(inv, objects)
+	ex := got[resourceRef("default", "web", "app", "container", "")]
+	if !ex.InternetAccessible {
+		t.Fatalf("positive GatewayClass list must win over conflicting negative list; got %+v", ex)
 	}
 }
 
@@ -1209,6 +1251,23 @@ func TestAnalyzeGatewayClassNegativeConfigMapListSuppressesBuiltInPublicClass(t 
 
 	if got := Analyze(inv, objects); len(got) != 0 {
 		t.Fatalf("negative ConfigMap list must suppress built-in public GatewayClass; got %#v", got)
+	}
+}
+
+func TestAnalyzeGatewayClassNegativeConfigMapListSuppressesAWSLoadBalancerConfiguration(t *testing.T) {
+	inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
+	objects := Objects{
+		Services: []corev1.Service{service("default", "api-svc", map[string]string{"app": "api"})},
+		Unstructured: []unstructured.Unstructured{
+			gateway("default", "aws-gw", "amazon-vpc-lattice"),
+			httpRoute("default", "aws-route", "aws-gw", "api-svc"),
+			loadBalancerConfiguration("default", "aws-gw", "internet-facing"),
+		},
+		NotInternetAccessibleGatewayClasses: []string{"amazon-vpc-lattice"},
+	}
+
+	if got := Analyze(inv, objects); len(got) != 0 {
+		t.Fatalf("negative GatewayClass list must suppress AWS LoadBalancerConfiguration evidence; got %#v", got)
 	}
 }
 
@@ -1234,10 +1293,11 @@ func TestClassOverridesFromConfigMap(t *testing.T) {
 	data := map[string]string{
 		ConfigKeyInternetAccessibleIngressClasses:    "- nginx\n- traefik\n",
 		ConfigKeyInternetAccessibleGatewayClasses:    "istio, envoy-gateway",
-		ConfigKeyNotInternetAccessibleIngressClasses: "private-nginx",
-		ConfigKeyNotInternetAccessibleGatewayClasses: "private-istio",
+		ConfigKeyNotInternetAccessibleIngressClasses: "private-nginx, nginx",
+		ConfigKeyNotInternetAccessibleGatewayClasses: "private-istio, istio",
+		ConfigKeyNotInternetAccessibleServices:       "ingress-nginx/controller",
 	}
-	ingress, gateway, notIngress, notGateway := ClassOverridesFromConfigMap(data)
+	ingress, gateway, notIngress, notGateway, notServices, conflicts := ClassOverridesFromConfigMap(data)
 	if got, want := strings.Join(ingress, ","), "nginx,traefik"; got != want {
 		t.Errorf("ingress classes = %q, want %q", got, want)
 	}
@@ -1249,6 +1309,16 @@ func TestClassOverridesFromConfigMap(t *testing.T) {
 	}
 	if got, want := strings.Join(notGateway, ","), "private-istio"; got != want {
 		t.Errorf("not internet gateway classes = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(notServices, ","), "ingress-nginx/controller"; got != want {
+		t.Errorf("not internet services = %q, want %q", got, want)
+	}
+	if got, want := len(conflicts), 2; got != want {
+		t.Fatalf("conflicts = %d, want %d: %v", got, want, conflicts)
+	}
+	if !strings.Contains(conflicts[0], "treating it as internet-accessible") ||
+		!strings.Contains(conflicts[1], "treating it as internet-accessible") {
+		t.Fatalf("conflicts must report positive-wins resolution: %v", conflicts)
 	}
 }
 
