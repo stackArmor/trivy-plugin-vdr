@@ -75,7 +75,7 @@ func run(args []string) error {
 }
 
 func runK8sCompliance(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
-	collector, contextName, err := k8s.NewForCurrentContext()
+	collector, contextName, err := k8s.NewForCurrentContext(cfg.ContextName)
 	if err != nil {
 		return err
 	}
@@ -88,7 +88,8 @@ func runK8sCompliance(ctx context.Context, cfg config.Config, logger *log.Logger
 	resources, clusterName, err := (k8scompliance.TrivyRunner{
 		CacheDir: cfg.CacheDir,
 	}).Scan(ctx, k8scompliance.ScanOptions{
-		ContextName: contextName,
+		// Real kubectx only, empty in-cluster -- not the resolved identity.
+		KubeContext: collector.KubeContext,
 		Namespaces:  namespaces,
 		Timeout:     cfg.Timeout,
 		MinSeverity: cfg.MinSeverity,
@@ -225,7 +226,7 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 }
 
 func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
-	collector, contextName, err := k8s.NewForCurrentContext()
+	collector, contextName, err := k8s.NewForCurrentContext(cfg.ContextName)
 	if err != nil {
 		return err
 	}

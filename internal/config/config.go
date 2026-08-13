@@ -86,6 +86,7 @@ type Config struct {
 	SkipRegistryAuth             bool
 	NoGcloudAuth                 bool
 	NoECRAuth                    bool
+	ContextName                  string
 	GCPImpersonateServiceAccount string
 	AWSRoleARN                   string
 	OCIVEXIncluded               bool
@@ -228,6 +229,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.SkipRegistryAuth, "skip-registry-auth", cfg.SkipRegistryAuth, "skip automatic private registry authentication")
 	fs.BoolVar(&cfg.NoGcloudAuth, "no-gcloud-auth", cfg.NoGcloudAuth, "skip gcloud authentication for Google Artifact Registry/GCR images")
 	fs.BoolVar(&cfg.NoECRAuth, "no-ecr-auth", cfg.NoECRAuth, "skip aws CLI authentication for ECR images")
+	fs.StringVar(&cfg.ContextName, "context-name", cfg.ContextName, "identity recorded as the report context; defaults to the kubeconfig current-context, or a value derived from the API server host when running in-cluster")
 	fs.StringVar(&cfg.GCPImpersonateServiceAccount, "gcp-impersonate-service-account", cfg.GCPImpersonateServiceAccount, "Google service account email to impersonate for Cloud Run metadata and GAR/GCR auth")
 	fs.StringVar(&cfg.AWSRoleARN, "aws-role-arn", cfg.AWSRoleARN, "AWS role ARN to assume for ECR auth")
 	fs.BoolVar(&cfg.OCIVEXIncluded, "oci-vex-included", cfg.OCIVEXIncluded, "include OCI VEX attestations from image registries")

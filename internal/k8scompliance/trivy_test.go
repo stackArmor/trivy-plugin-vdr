@@ -54,7 +54,7 @@ func TestTrivyRunnerUsesBuiltInReadOnlyKubernetesRules(t *testing.T) {
 	}
 
 	resources, clusterName, err := runner.Scan(context.Background(), ScanOptions{
-		ContextName: "dev-context",
+		KubeContext: "dev-context",
 		Namespaces:  []string{"prod", "apps"},
 		Timeout:     2 * time.Minute,
 		MinSeverity: "HIGH",

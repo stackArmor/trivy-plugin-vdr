@@ -162,13 +162,13 @@ func sourceHelpSections(source string) []helpSection {
 	case SourceK8s:
 		sections = append(sections, helpSection{
 			title: "Kubernetes source",
-			flags: []string{"namespace", "all-namespaces", "include-zero-daemonsets", "sip-config-map"},
+			flags: []string{"namespace", "all-namespaces", "include-zero-daemonsets", "sip-config-map", "context-name"},
 		})
 	case SourceK8sCompliance:
 		return []helpSection{
 			{
 				title: "Kubernetes compliance scan",
-				flags: []string{"namespace", "all-namespaces", "min-severity", "timeout", "cache-dir"},
+				flags: []string{"namespace", "all-namespaces", "min-severity", "timeout", "cache-dir", "context-name"},
 			},
 			{
 				title: "Report output",

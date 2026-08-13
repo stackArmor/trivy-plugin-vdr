@@ -25,7 +25,11 @@ type TrivyRunner struct {
 }
 
 type ScanOptions struct {
-	ContextName string
+	// KubeContext is passed to the Trivy CLI as its optional context
+	// positional, so it must be a real kubeconfig context name. Leave it empty
+	// when running in-cluster; do not substitute a synthetic report identity
+	// here or Trivy will fail to resolve it.
+	KubeContext string
 	Namespaces  []string
 	Timeout     time.Duration
 	MinSeverity string
@@ -95,8 +99,8 @@ func (r TrivyRunner) Scan(ctx context.Context, options ScanOptions) ([]ResourceR
 	if severities := severitiesAtOrAbove(options.MinSeverity); len(severities) > 0 {
 		args = append(args, "--severity", strings.Join(severities, ","))
 	}
-	if options.ContextName != "" {
-		args = append(args, options.ContextName)
+	if options.KubeContext != "" {
+		args = append(args, options.KubeContext)
 	}
 
 	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
