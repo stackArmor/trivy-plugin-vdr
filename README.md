@@ -21,6 +21,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Optional standalone HTML report with per-finding PAIN and FedRAMP remediation deadlines, plus filter controls for severity (multi-select), PAIN, namespace, internet exposure, automatable, exploitation status, EPSS score, technical impact, and remediation deadline (multi-select).
 - Optional CAPEC/ATT&CK chain-taxonomy evidence and same-resource transition candidates, enabled with `--include-chain-taxonomy`.
 - Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
+- Report context identity that is never empty: `--context-name` overrides it, otherwise the kubeconfig current-context is used, and when running in-cluster (where there is no current-context) it is derived from the API server host. Previously an in-cluster run emitted an empty `contextName`, which caused the CycloneDX document to omit its root component and the compliance report to record a blank cluster name.
 - Automatic private-registry authentication from the local Docker config, Kubernetes `imagePullSecrets`, ECS task `repositoryCredentials`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
 - Resilient scanning: a single image that fails to pull or scan is reported as a warning and the run continues, producing a partial (still enriched) report.
 - INFO-level progress logging to stderr by default.
@@ -51,6 +52,7 @@ trivy vdr k8s --namespace default --output vdr-k8s.json --html-output vdr-k8s.ht
 trivy vdr k8s --html-output vdr-k8s.html --html-template custom-template.html
 trivy vdr k8s --all-namespaces --scoring-config vdr-scoring.yaml
 trivy vdr k8s --all-namespaces --sip-config-map ./vdr-fedramp.yaml --output vdr-k8s.json
+trivy vdr k8s --all-namespaces --context-name tenant-prod-eks --output vdr-k8s.json
 trivy vdr k8s-compliance --namespace default
 trivy vdr k8s-compliance --all-namespaces --min-severity HIGH
 trivy vdr k8s-compliance --all-namespaces --format json --output vdr-k8s-compliance.json

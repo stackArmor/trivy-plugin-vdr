@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -36,13 +37,69 @@ const (
 	defaultClusterConfigMapName      = "vdr-fedramp"
 )
 
+// InClusterContextName is the last-resort report identity when there is no
+// kubeconfig context and no API server host to derive one from.
+const InClusterContextName = "in-cluster"
+
 type Collector struct {
-	Client      kubernetes.Interface
-	Dynamic     dynamic.Interface
+	Client  kubernetes.Interface
+	Dynamic dynamic.Interface
+	// ContextName identifies the scanned environment in the report. It is never
+	// empty: see ResolveContextName.
 	ContextName string
+	// KubeContext is the kubeconfig current-context verbatim, and is empty when
+	// running in-cluster. It exists only for callers that pass a context name
+	// through to the Trivy CLI, which requires a real kubectx; use ContextName
+	// for anything that identifies the environment in output.
+	KubeContext string
 }
 
-func NewForCurrentContext() (*Collector, string, error) {
+// ResolveContextName picks the identity recorded as Inventory.ContextName.
+//
+// ContextName names the scanned environment rather than strictly a kubectx --
+// the other sources use synthetic values ("ecs", "image", "cloudrun/<project>",
+// "helm:<chart>"). Guaranteeing it is non-empty for the Kubernetes source too
+// means downstream consumers no longer silently degrade: without it, an
+// in-cluster run produces a CycloneDX document with no root component (see
+// internal/report/cyclonedx.go) and a compliance report with a blank cluster
+// name.
+//
+// Precedence: an explicit --context-name, then the kubeconfig current-context,
+// then the API server host, then a fixed constant.
+func ResolveContextName(explicit, kubeContext, apiServerURL string) string {
+	if name := strings.TrimSpace(explicit); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(kubeContext); name != "" {
+		return name
+	}
+	if host := apiServerHost(apiServerURL); host != "" {
+		return InClusterContextName + "/" + host
+	}
+	return InClusterContextName
+}
+
+// apiServerHost reduces a rest.Config Host to a bare hostname, dropping any
+// scheme, port, and path. Returns "" when nothing usable remains.
+func apiServerHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "//") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
+}
+
+// NewForCurrentContext builds a collector from the ambient Kubernetes
+// configuration, falling back to in-cluster credentials when no kubeconfig is
+// present. explicitContextName, when non-empty, overrides the report identity.
+func NewForCurrentContext(explicitContextName string) (*Collector, string, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	rawConfig, err := loadingRules.Load()
 	if err != nil {
@@ -66,8 +123,14 @@ func NewForCurrentContext() (*Collector, string, error) {
 		return nil, "", err
 	}
 
-	contextName := rawConfig.CurrentContext
-	return &Collector{Client: client, Dynamic: dynamicClient, ContextName: contextName}, contextName, nil
+	kubeContext := rawConfig.CurrentContext
+	contextName := ResolveContextName(explicitContextName, kubeContext, config.Host)
+	return &Collector{
+		Client:      client,
+		Dynamic:     dynamicClient,
+		ContextName: contextName,
+		KubeContext: kubeContext,
+	}, contextName, nil
 }
 
 func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory, error) {
