@@ -3,6 +3,7 @@ package vulnrichment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,15 +16,22 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/httpretry"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
 const DefaultBaseURL = "https://raw.githubusercontent.com/cisagov/vulnrichment/develop"
 
 const (
-	cacheMaxAge = 7 * 24 * time.Hour
-	httpTimeout = 30 * time.Second
+	cacheMaxAge         = 7 * 24 * time.Hour
+	httpTimeout         = 30 * time.Second
+	defaultFailureLimit = 25
 )
+
+// ErrSourceUnavailable is returned when consecutive fetch failures exceed the failure limit
+// and the circuit breaker trips for the remainder of the run.
+var ErrSourceUnavailable = errors.New("vulnrichment source unavailable")
 
 var cvePattern = regexp.MustCompile(`^CVE-(\d{4})-(\d{4,})$`)
 
@@ -33,15 +41,22 @@ type Store struct {
 	client       *http.Client
 	now          func() time.Time
 	forceRefresh bool
+	retryDelays  []time.Duration
+	logger       *log.Logger
+	breakerLimit int
 
 	fetched atomic.Int64
 	cached  atomic.Int64
+	failed  atomic.Int64
+
+	consecutiveFailures atomic.Int64
+	tripped             atomic.Bool
 }
 
 // Stats reports how many CVE records were fetched over the network versus served
-// from the local cache during the store's lifetime.
-func (s *Store) Stats() (fetched, cached int) {
-	return int(s.fetched.Load()), int(s.cached.Load())
+// from the local cache, as well as how many lookups failed during the store's lifetime.
+func (s *Store) Stats() (fetched, cached, failed int) {
+	return int(s.fetched.Load()), int(s.cached.Load()), int(s.failed.Load())
 }
 
 type Option func(*Store)
@@ -70,12 +85,35 @@ func WithForceRefresh(forceRefresh bool) Option {
 	}
 }
 
+// WithRetryDelays overrides the backoff delay schedule between fetch attempts.
+func WithRetryDelays(delays []time.Duration) Option {
+	return func(s *Store) {
+		s.retryDelays = append([]time.Duration(nil), delays...)
+	}
+}
+
+// WithLogger attaches a logger for INFO/WARN-level fetch and retry progress.
+func WithLogger(logger *log.Logger) Option {
+	return func(s *Store) {
+		s.logger = logger
+	}
+}
+
+// WithFailureLimit sets the number of consecutive fetch failures before the circuit breaker trips.
+func WithFailureLimit(limit int) Option {
+	return func(s *Store) {
+		s.breakerLimit = limit
+	}
+}
+
 func NewStore(cacheDir string, options ...Option) *Store {
 	store := &Store{
-		cacheDir: cacheDir,
-		baseURL:  DefaultBaseURL,
-		client:   &http.Client{Timeout: httpTimeout},
-		now:      time.Now,
+		cacheDir:     cacheDir,
+		baseURL:      DefaultBaseURL,
+		client:       &http.Client{Timeout: httpTimeout},
+		now:          time.Now,
+		retryDelays:  httpretry.DefaultDelays,
+		breakerLimit: defaultFailureLimit,
 	}
 	for _, option := range options {
 		option(store)
@@ -83,6 +121,9 @@ func NewStore(cacheDir string, options ...Option) *Store {
 	store.client = normalizeClient(store.client)
 	if store.now == nil {
 		store.now = time.Now
+	}
+	if store.breakerLimit <= 0 {
+		store.breakerLimit = defaultFailureLimit
 	}
 	return store
 }
@@ -165,7 +206,14 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 			s.cached.Add(1)
 			return data, sourceURL, true, nil
 		}
-		refreshedData, ok, fetchErr := s.fetch(ctx, cveID, cachePath, sourceURL)
+		if s.tripped.Load() {
+			if json.Valid(data) {
+				s.cached.Add(1)
+				return data, sourceURL, true, nil
+			}
+			return nil, "", false, ErrSourceUnavailable
+		}
+		refreshedData, ok, fetchErr := s.fetchWithRetry(ctx, cveID, cachePath, sourceURL)
 		if fetchErr != nil {
 			if json.Valid(data) {
 				s.cached.Add(1)
@@ -186,7 +234,11 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 		return nil, "", false, err
 	}
 
-	data, ok, err := s.fetch(ctx, cveID, cachePath, sourceURL)
+	if s.tripped.Load() {
+		return nil, "", false, ErrSourceUnavailable
+	}
+
+	data, ok, err := s.fetchWithRetry(ctx, cveID, cachePath, sourceURL)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -196,7 +248,15 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 	return data, sourceURL, ok, nil
 }
 
-func (s *Store) fetch(ctx context.Context, cveID, cachePath, sourceURL string) ([]byte, bool, error) {
+func (s *Store) recordFailure() {
+	s.failed.Add(1)
+	cf := s.consecutiveFailures.Add(1)
+	if int(cf) >= s.breakerLimit && s.tripped.CompareAndSwap(false, true) {
+		s.logger.Warn("vulnrichment: %d consecutive fetch failures; skipping vulnrichment enrichment for the remainder of this run", s.breakerLimit)
+	}
+}
+
+func (s *Store) fetch(ctx context.Context, cveID, sourceURL string) ([]byte, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -213,7 +273,10 @@ func (s *Store) fetch(ctx context.Context, cveID, cachePath, sourceURL string) (
 		return nil, false, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, false, fmt.Errorf("fetch Vulnrichment data for %s: status %d", cveID, resp.StatusCode)
+		return nil, false, fmt.Errorf("fetch Vulnrichment data for %s: %w", cveID, &httpretry.StatusError{
+			URL:        sourceURL,
+			StatusCode: resp.StatusCode,
+		})
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -222,10 +285,33 @@ func (s *Store) fetch(ctx context.Context, cveID, cachePath, sourceURL string) (
 	if !json.Valid(data) {
 		return nil, false, fmt.Errorf("parse Vulnrichment data for %s: invalid JSON", cveID)
 	}
-	if err := writeCacheFileAtomically(cachePath, data); err != nil {
+	return data, true, nil
+}
+
+func (s *Store) fetchWithRetry(ctx context.Context, cveID, cachePath, sourceURL string) ([]byte, bool, error) {
+	var (
+		data []byte
+		ok   bool
+	)
+	warnFn := func(attempt, total int, delay time.Duration, err error) {
+		s.logger.Warn("vulnrichment: retry %d/%d for %s in %v: %v", attempt, total-1, cveID, delay, err)
+	}
+	err := httpretry.Do(ctx, s.retryDelays, warnFn, func() error {
+		var fetchErr error
+		data, ok, fetchErr = s.fetch(ctx, cveID, sourceURL)
+		return fetchErr
+	})
+	if err != nil {
+		s.recordFailure()
 		return nil, false, err
 	}
-	return data, true, nil
+	s.consecutiveFailures.Store(0)
+	if ok {
+		if cacheErr := writeCacheFileAtomically(cachePath, data); cacheErr != nil {
+			s.logger.Warn("vulnrichment: failed to write cache for %s: %v", cveID, cacheErr)
+		}
+	}
+	return data, ok, nil
 }
 
 func writeCacheFileAtomically(cachePath string, data []byte) error {

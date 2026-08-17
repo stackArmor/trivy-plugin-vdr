@@ -576,13 +576,19 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 	if !cfg.SkipEnrichment && !cfg.ScanReachabilityOnly {
 		logger.Info("enriching findings with EPSS and vulnrichment data")
 		epssStore := epss.NewStore(cfg.CacheDir, epss.WithForceRefresh(cfg.RefreshEnrichment), epss.WithLogger(logger))
-		vulnrichmentStore := vulnrichment.NewStore(cfg.CacheDir, vulnrichment.WithForceRefresh(cfg.RefreshEnrichment))
-		findings, err = enrich.EnrichFindings(ctx, findings, epssStore, vulnrichmentStore)
+		vulnrichmentStore := vulnrichment.NewStore(cfg.CacheDir, vulnrichment.WithForceRefresh(cfg.RefreshEnrichment), vulnrichment.WithLogger(logger))
+		var enrichWarnings []enrich.Warning
+		findings, enrichWarnings, err = enrich.EnrichFindings(ctx, findings, epssStore, vulnrichmentStore)
 		if err != nil {
-			return err
+			logger.Warn("enrichment incomplete due to context error: %v", err)
 		}
-		fetched, cached := vulnrichmentStore.Stats()
-		logger.Info("vulnrichment: %d records fetched, %d from cache", fetched, cached)
+		warnings = append(warnings, enrichmentWarnings(enrichWarnings)...)
+		fetched, cached, failed := vulnrichmentStore.Stats()
+		if failed > 0 {
+			logger.Info("vulnrichment: %d records fetched, %d from cache, %d failed", fetched, cached, failed)
+		} else {
+			logger.Info("vulnrichment: %d records fetched, %d from cache", fetched, cached)
+		}
 	} else if cfg.ScanReachabilityOnly {
 		logger.Info("scan-reachability-only mode: skipping EPSS and vulnrichment enrichment")
 	}
@@ -747,6 +753,14 @@ func writeHTMLReport(path, templatePath string, scanReport model.Report) error {
 	}
 	defer file.Close()
 	return report.RenderHTML(file, scanReport, templatePath)
+}
+
+func enrichmentWarnings(warnings []enrich.Warning) []string {
+	messages := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		messages = append(messages, warning.String())
+	}
+	return messages
 }
 
 func scannerWarnings(warnings []scanner.Warning) []string {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
@@ -217,4 +218,56 @@ func TestRunEnrichReportMigratesLegacyEntrypointToCAPECTransitions(t *testing.T)
 
 func fixedMainTestTime() time.Time {
 	return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+}
+
+func TestEnrichmentWarningsFormatting(t *testing.T) {
+	warnings := []enrich.Warning{
+		{Source: "EPSS", Message: "failed to load dataset: connection reset"},
+		{Source: "Vulnrichment", CVEID: "CVE-2026-1234", Message: "fetch Vulnrichment data for CVE-2026-1234: 502 bad gateway"},
+		{Source: "Vulnrichment", Message: "source unavailable (circuit breaker tripped; skipped for remaining findings)"},
+	}
+	formatted := enrichmentWarnings(warnings)
+	if len(formatted) != 3 {
+		t.Fatalf("formatted length = %d, want 3", len(formatted))
+	}
+	if formatted[0] != "EPSS: failed to load dataset: connection reset" {
+		t.Errorf("formatted[0] = %q", formatted[0])
+	}
+	if formatted[1] != "Vulnrichment (CVE-2026-1234): fetch Vulnrichment data for CVE-2026-1234: 502 bad gateway" {
+		t.Errorf("formatted[1] = %q", formatted[1])
+	}
+	if formatted[2] != "Vulnrichment: source unavailable (circuit breaker tripped; skipped for remaining findings)" {
+		t.Errorf("formatted[2] = %q", formatted[2])
+	}
+}
+
+func TestReportInventoryIncludesEnrichmentWarnings(t *testing.T) {
+	inventory := &model.Inventory{
+		ContextName: "test-cluster",
+	}
+	findings := []model.Finding{
+		{ID: "CVE-2026-1000", Severity: "HIGH"},
+	}
+	warnings := []string{
+		"EPSS: failed to load dataset: 502 bad gateway",
+		"Vulnrichment (CVE-2026-1000): fetch failed",
+	}
+	cfg := config.Config{
+		Format: config.FormatJSON,
+	}
+	var output bytes.Buffer
+	err := reportInventory(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output, inventory, findings, warnings, nil)
+	if err != nil {
+		t.Fatalf("reportInventory returned error: %v", err)
+	}
+	var rep model.Report
+	if err := json.Unmarshal(output.Bytes(), &rep); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if len(rep.Warnings) != 2 {
+		t.Fatalf("report warnings length = %d, want 2", len(rep.Warnings))
+	}
+	if rep.Warnings[0] != warnings[0] || rep.Warnings[1] != warnings[1] {
+		t.Errorf("report warnings = %v, want %v", rep.Warnings, warnings)
+	}
 }

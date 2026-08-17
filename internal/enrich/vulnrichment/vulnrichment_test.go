@@ -2,13 +2,17 @@ package vulnrichment
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/httpretry"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
@@ -215,12 +219,14 @@ func TestLookupFailedForcedRefreshLeavesFreshCacheUsable(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(server.Close)
 
-	enrichment, ok, err := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }), WithForceRefresh(true)).Lookup("CVE-2026-12345")
+	enrichment, ok, err := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }), WithForceRefresh(true), WithRetryDelays([]time.Duration{0, 0})).Lookup("CVE-2026-12345")
 	if err != nil {
 		t.Fatalf("Lookup returned error: %v", err)
 	}
@@ -229,6 +235,9 @@ func TestLookupFailedForcedRefreshLeavesFreshCacheUsable(t *testing.T) {
 	}
 	if enrichment.Exploitation != "cached" {
 		t.Fatalf("Exploitation = %q, want cached", enrichment.Exploitation)
+	}
+	if requests != 3 {
+		t.Fatalf("requests = %d, want 3 retries", requests)
 	}
 	got, err := os.ReadFile(cachePath)
 	if err != nil {
@@ -254,7 +263,11 @@ func TestLookupForcedRefresh404LeavesCacheUsable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(http.NotFoundHandler())
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.NotFound(w, r)
+	}))
 	t.Cleanup(server.Close)
 
 	enrichment, ok, err := NewStore(cacheDir, WithBaseURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }), WithForceRefresh(true)).Lookup("CVE-2026-12345")
@@ -266,6 +279,9 @@ func TestLookupForcedRefresh404LeavesCacheUsable(t *testing.T) {
 	}
 	if enrichment.Exploitation != "cached" {
 		t.Fatalf("Exploitation = %q, want cached", enrichment.Exploitation)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1 (404 is not retried)", requests)
 	}
 	got, err := os.ReadFile(cachePath)
 	if err != nil {
@@ -600,6 +616,269 @@ func TestEnrichFindingsCopiesCWEsOntoFinding(t *testing.T) {
 	}
 	if got, want := enriched[0].CWEs, []string{"CWE-787"}; !equalStrings(got, want) {
 		t.Fatalf("finding CWEs = %v, want %v", got, want)
+	}
+}
+
+func TestLookupRetriesTransient502ThenSucceeds(t *testing.T) {
+	cacheDir := t.TempDir()
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n < 3 {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(vulnrichmentJSON("active"))
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(cacheDir,
+		WithBaseURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithRetryDelays([]time.Duration{0, 0}),
+	)
+
+	enrichment, ok, err := store.Lookup("CVE-2026-5020")
+	if err != nil {
+		t.Fatalf("Lookup returned unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup returned ok = false, want true")
+	}
+	if enrichment.Exploitation != "active" {
+		t.Errorf("Exploitation = %q, want 'active'", enrichment.Exploitation)
+	}
+	if attempts.Load() != 3 {
+		t.Errorf("attempts = %d, want 3", attempts.Load())
+	}
+	fetched, cached, failed := store.Stats()
+	if fetched != 1 || cached != 0 || failed != 0 {
+		t.Errorf("Stats() = (%d, %d, %d), want (1, 0, 0)", fetched, cached, failed)
+	}
+}
+
+func TestLookupRetriesOnTransientStatusCodes(t *testing.T) {
+	codes := []int{408, 425, 429, 500, 502, 503, 504}
+	for _, code := range codes {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			cacheDir := t.TempDir()
+			var attempts atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				n := attempts.Add(1)
+				if n < 2 {
+					http.Error(w, "temporary error", code)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(vulnrichmentJSON("active"))
+			}))
+			defer server.Close()
+
+			store := NewStore(cacheDir,
+				WithBaseURL(server.URL),
+				WithHTTPClient(server.Client()),
+				WithRetryDelays([]time.Duration{0}),
+			)
+
+			_, ok, err := store.Lookup("CVE-2026-1111")
+			if err != nil {
+				t.Fatalf("Lookup error: %v", err)
+			}
+			if !ok {
+				t.Fatal("Lookup ok = false, want true")
+			}
+			if attempts.Load() != 2 {
+				t.Fatalf("attempts = %d, want 2", attempts.Load())
+			}
+		})
+	}
+}
+
+func TestLookupDoesNotRetryOn403(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(),
+		WithBaseURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithRetryDelays([]time.Duration{0, 0}),
+	)
+
+	_, ok, err := store.Lookup("CVE-2026-4030")
+	if err == nil {
+		t.Fatal("expected error on 403, got nil")
+	}
+	if ok {
+		t.Fatal("expected ok = false on 403")
+	}
+	if attempts.Load() != 1 {
+		t.Errorf("attempts = %d, want exactly 1 on 403", attempts.Load())
+	}
+	var statusErr *httpretry.StatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != 403 {
+		t.Errorf("expected StatusError 403, got %v", err)
+	}
+}
+
+func TestLookupExhaustedRetriesReturnsError(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(),
+		WithBaseURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithRetryDelays([]time.Duration{0, 0}),
+	)
+
+	_, ok, err := store.Lookup("CVE-2026-5022")
+	if err == nil {
+		t.Fatal("expected error on exhausted retries, got nil")
+	}
+	if ok {
+		t.Fatal("expected ok = false on exhausted retries")
+	}
+	if attempts.Load() != 3 {
+		t.Errorf("attempts = %d, want 3", attempts.Load())
+	}
+	_, _, failed := store.Stats()
+	if failed != 1 {
+		t.Errorf("failed stats = %d, want 1", failed)
+	}
+}
+
+func TestCircuitBreakerStopsFetchingAfterConsecutiveFailures(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(),
+		WithBaseURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithFailureLimit(3),
+		WithRetryDelays([]time.Duration{0}), // 2 attempts per failure
+	)
+
+	// Trigger 3 failures to trip breaker
+	for i := 1; i <= 3; i++ {
+		cve := fmt.Sprintf("CVE-2026-%04d", i)
+		_, ok, err := store.Lookup(cve)
+		if err == nil || ok {
+			t.Fatalf("expected error on failure %d", i)
+		}
+	}
+
+	// 3 failures * 2 attempts = 6 requests
+	if attempts.Load() != 6 {
+		t.Errorf("attempts after 3 failures = %d, want 6", attempts.Load())
+	}
+
+	// 4th and subsequent lookups should short-circuit with ErrSourceUnavailable
+	for i := 4; i <= 10; i++ {
+		cve := fmt.Sprintf("CVE-2026-%04d", i)
+		_, ok, err := store.Lookup(cve)
+		if !errors.Is(err, ErrSourceUnavailable) {
+			t.Errorf("lookup %s error = %v, want ErrSourceUnavailable", cve, err)
+		}
+		if ok {
+			t.Errorf("lookup %s ok = true, want false", cve)
+		}
+	}
+
+	// No additional requests should have reached server
+	if attempts.Load() != 6 {
+		t.Errorf("final attempts = %d, want 6 (breaker prevented requests)", attempts.Load())
+	}
+}
+
+func TestCircuitBreakerResetsAfterSuccess(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		if r.URL.Path == "/2026/0xxx/CVE-2026-0003.json" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(vulnrichmentJSON("active"))
+			return
+		}
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(),
+		WithBaseURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithFailureLimit(3),
+		WithRetryDelays([]time.Duration{0}),
+	)
+
+	// Fail 2
+	store.Lookup("CVE-2026-0001")
+	store.Lookup("CVE-2026-0002")
+
+	// Succeed 1 -> resets consecutive failures
+	_, ok, err := store.Lookup("CVE-2026-0003")
+	if err != nil || !ok {
+		t.Fatalf("expected success on CVE-2026-0003, got err=%v, ok=%v", err, ok)
+	}
+
+	// Fail 2 more -> should still NOT trip breaker
+	store.Lookup("CVE-2026-0004")
+	store.Lookup("CVE-2026-0005")
+
+	// Next lookup should still attempt request (not tripped)
+	beforeAttempts := attempts.Load()
+	store.Lookup("CVE-2026-0006")
+	if attempts.Load() <= beforeAttempts {
+		t.Error("expected network request for CVE-2026-0006 because breaker was reset")
+	}
+}
+
+func TestCircuitBreakerStillServesFreshCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	cachePath := filepath.Join(cacheDir, "vulnrichment", "2026", "12xxx", "CVE-2026-12345.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, vulnrichmentJSON("cached_value"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(cacheDir,
+		WithBaseURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithFailureLimit(1),
+		WithRetryDelays([]time.Duration{0}),
+	)
+
+	// Trip breaker with an uncached CVE
+	store.Lookup("CVE-2026-9999")
+
+	// Lookup the cached CVE -> must succeed despite breaker being tripped
+	enrichment, ok, err := store.Lookup("CVE-2026-12345")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true from cache")
+	}
+	if enrichment.Exploitation != "cached_value" {
+		t.Errorf("Exploitation = %q, want 'cached_value'", enrichment.Exploitation)
 	}
 }
 
