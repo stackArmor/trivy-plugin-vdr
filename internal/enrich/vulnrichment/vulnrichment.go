@@ -3,7 +3,6 @@ package vulnrichment
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/httpretry"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
@@ -31,7 +31,7 @@ const (
 
 // ErrSourceUnavailable is returned when consecutive fetch failures exceed the failure limit
 // and the circuit breaker trips for the remainder of the run.
-var ErrSourceUnavailable = errors.New("vulnrichment source unavailable")
+var ErrSourceUnavailable = enrich.ErrSourceUnavailable
 
 var cvePattern = regexp.MustCompile(`^CVE-(\d{4})-(\d{4,})$`)
 
@@ -48,6 +48,7 @@ type Store struct {
 	fetched atomic.Int64
 	cached  atomic.Int64
 	failed  atomic.Int64
+	skipped atomic.Int64
 
 	consecutiveFailures atomic.Int64
 	tripped             atomic.Bool
@@ -57,6 +58,11 @@ type Store struct {
 // from the local cache, as well as how many lookups failed during the store's lifetime.
 func (s *Store) Stats() (fetched, cached, failed int) {
 	return int(s.fetched.Load()), int(s.cached.Load()), int(s.failed.Load())
+}
+
+// Skipped reports how many CVE lookups were skipped because the circuit breaker was tripped.
+func (s *Store) Skipped() int {
+	return int(s.skipped.Load())
 }
 
 type Option func(*Store)
@@ -211,6 +217,7 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 				s.cached.Add(1)
 				return data, sourceURL, true, nil
 			}
+			s.skipped.Add(1)
 			return nil, "", false, ErrSourceUnavailable
 		}
 		refreshedData, ok, fetchErr := s.fetchWithRetry(ctx, cveID, cachePath, sourceURL)
@@ -235,6 +242,7 @@ func (s *Store) readOrFetch(ctx context.Context, cveID string) ([]byte, string, 
 	}
 
 	if s.tripped.Load() {
+		s.skipped.Add(1)
 		return nil, "", false, ErrSourceUnavailable
 	}
 

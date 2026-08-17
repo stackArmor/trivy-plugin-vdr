@@ -271,3 +271,12 @@ func TestReportInventoryIncludesEnrichmentWarnings(t *testing.T) {
 		t.Errorf("report warnings = %v, want %v", rep.Warnings, warnings)
 	}
 }
+
+func TestEnrichmentContextErrorAppendsWarning(t *testing.T) {
+	warnings := []string{}
+	err := context.Canceled
+	warnings = append(warnings, fmt.Sprintf("Enrichment: incomplete (%v)", err))
+	if len(warnings) != 1 || warnings[0] != "Enrichment: incomplete (context canceled)" {
+		t.Errorf("warnings = %v, want ['Enrichment: incomplete (context canceled)']", warnings)
+	}
+}

@@ -63,9 +63,6 @@ func Transient(err error) bool {
 		if urlErr.Timeout() {
 			return true
 		}
-		if errors.Is(urlErr.Err, context.Canceled) || errors.Is(urlErr.Err, context.DeadlineExceeded) {
-			return false
-		}
 		return Transient(urlErr.Err)
 	}
 

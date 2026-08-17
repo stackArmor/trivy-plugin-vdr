@@ -581,6 +581,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 		findings, enrichWarnings, err = enrich.EnrichFindings(ctx, findings, epssStore, vulnrichmentStore)
 		if err != nil {
 			logger.Warn("enrichment incomplete due to context error: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Enrichment: incomplete (%v)", err))
 		}
 		warnings = append(warnings, enrichmentWarnings(enrichWarnings)...)
 		fetched, cached, failed := vulnrichmentStore.Stats()

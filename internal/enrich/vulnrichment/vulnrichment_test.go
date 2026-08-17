@@ -823,8 +823,12 @@ func TestCircuitBreakerResetsAfterSuccess(t *testing.T) {
 	)
 
 	// Fail 2
-	store.Lookup("CVE-2026-0001")
-	store.Lookup("CVE-2026-0002")
+	if _, _, err := store.Lookup("CVE-2026-0001"); err == nil {
+		t.Fatal("expected error on CVE-2026-0001")
+	}
+	if _, _, err := store.Lookup("CVE-2026-0002"); err == nil {
+		t.Fatal("expected error on CVE-2026-0002")
+	}
 
 	// Succeed 1 -> resets consecutive failures
 	_, ok, err := store.Lookup("CVE-2026-0003")
@@ -833,14 +837,50 @@ func TestCircuitBreakerResetsAfterSuccess(t *testing.T) {
 	}
 
 	// Fail 2 more -> should still NOT trip breaker
-	store.Lookup("CVE-2026-0004")
-	store.Lookup("CVE-2026-0005")
+	if _, _, err := store.Lookup("CVE-2026-0004"); err == nil {
+		t.Fatal("expected error on CVE-2026-0004")
+	}
+	if _, _, err := store.Lookup("CVE-2026-0005"); err == nil {
+		t.Fatal("expected error on CVE-2026-0005")
+	}
 
 	// Next lookup should still attempt request (not tripped)
 	beforeAttempts := attempts.Load()
-	store.Lookup("CVE-2026-0006")
+	if _, _, err := store.Lookup("CVE-2026-0006"); err == nil {
+		t.Fatal("expected error on CVE-2026-0006")
+	}
 	if attempts.Load() <= beforeAttempts {
 		t.Error("expected network request for CVE-2026-0006 because breaker was reset")
+	}
+}
+
+func TestCircuitBreakerTracksSkippedCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(),
+		WithBaseURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithFailureLimit(2),
+		WithRetryDelays([]time.Duration{0}),
+	)
+
+	// Fail 2 lookups to trip breaker
+	_, _, _ = store.Lookup("CVE-2026-0001")
+	_, _, _ = store.Lookup("CVE-2026-0002")
+
+	// Next 3 lookups are skipped by the breaker
+	for i := 3; i <= 5; i++ {
+		_, _, err := store.Lookup(fmt.Sprintf("CVE-2026-%04d", i))
+		if !errors.Is(err, ErrSourceUnavailable) {
+			t.Errorf("lookup %d err = %v, want ErrSourceUnavailable", i, err)
+		}
+	}
+
+	if store.Skipped() != 3 {
+		t.Errorf("Skipped() = %d, want 3", store.Skipped())
 	}
 }
 
@@ -867,7 +907,9 @@ func TestCircuitBreakerStillServesFreshCache(t *testing.T) {
 	)
 
 	// Trip breaker with an uncached CVE
-	store.Lookup("CVE-2026-9999")
+	if _, _, err := store.Lookup("CVE-2026-9999"); err == nil {
+		t.Fatal("expected error on uncached CVE lookup")
+	}
 
 	// Lookup the cached CVE -> must succeed despite breaker being tripped
 	enrichment, ok, err := store.Lookup("CVE-2026-12345")

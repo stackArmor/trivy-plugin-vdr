@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/vulnrichment"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
-var ErrNotFound = errors.New("enrichment not found")
+var (
+	ErrNotFound          = errors.New("enrichment not found")
+	ErrSourceUnavailable = errors.New("enrichment source unavailable")
+)
+
+const maxVulnrichmentWarnings = 5
 
 // Warning captures a non-fatal enrichment issue encountered during a run.
 type Warning struct {
@@ -74,7 +78,7 @@ func EnrichFindings(ctx context.Context, findings []model.Finding, epssStore EPS
 				}
 				if errors.Is(err, ErrNotFound) {
 					// missing record is normal
-				} else if errors.Is(err, vulnrichment.ErrSourceUnavailable) {
+				} else if errors.Is(err, ErrSourceUnavailable) {
 					if !vulnrichmentSuppressed {
 						vulnrichmentSuppressed = true
 						warnings = append(warnings, Warning{
@@ -84,7 +88,7 @@ func EnrichFindings(ctx context.Context, findings []model.Finding, epssStore EPS
 					}
 				} else {
 					vulnrichmentErrCount++
-					if vulnrichmentErrCount <= 5 {
+					if vulnrichmentErrCount <= maxVulnrichmentWarnings {
 						warnings = append(warnings, Warning{
 							Source:  "Vulnrichment",
 							CVEID:   enriched[i].ID,
@@ -100,10 +104,10 @@ func EnrichFindings(ctx context.Context, findings []model.Finding, epssStore EPS
 		}
 	}
 
-	if vulnrichmentErrCount > 5 {
+	if vulnrichmentErrCount > maxVulnrichmentWarnings {
 		warnings = append(warnings, Warning{
 			Source:  "Vulnrichment",
-			Message: fmt.Sprintf("%d additional CVE lookup failures suppressed", vulnrichmentErrCount-5),
+			Message: fmt.Sprintf("%d additional CVE lookup failures suppressed", vulnrichmentErrCount-maxVulnrichmentWarnings),
 		})
 	}
 

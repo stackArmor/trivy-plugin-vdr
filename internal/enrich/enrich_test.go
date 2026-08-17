@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/vulnrichment"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
@@ -169,8 +168,8 @@ func TestEnrichFindingsHandlesCircuitBreakerTrip(t *testing.T) {
 	}
 	vulnrichmentStore := fakeVulnrichmentStore{
 		errors: map[string]error{
-			"CVE-2026-0001": vulnrichment.ErrSourceUnavailable,
-			"CVE-2026-0002": vulnrichment.ErrSourceUnavailable,
+			"CVE-2026-0001": ErrSourceUnavailable,
+			"CVE-2026-0002": ErrSourceUnavailable,
 		},
 	}
 
@@ -188,6 +187,7 @@ func TestEnrichFindingsHandlesCircuitBreakerTrip(t *testing.T) {
 }
 
 func TestEnrichFindingsContextCancellationReturnsPartialFindingsAndError(t *testing.T) {
+	// 1. Context canceled before loop
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -197,16 +197,57 @@ func TestEnrichFindingsContextCancellationReturnsPartialFindingsAndError(t *test
 	}
 
 	enriched, _, err := EnrichFindings(ctx, findings, nil, nil)
-	if err == nil {
-		t.Fatal("expected context error, got nil")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 	if len(enriched) != 2 {
 		t.Errorf("enriched findings length = %d, want 2", len(enriched))
+	}
+
+	// 2. Cancellation returned by EPSS store on second finding: finding 0 has EPSS enriched
+	epssStore := fakeEPSSStore{
+		values: map[string]model.EPSS{
+			"CVE-2026-0001": {Score: 0.88},
+		},
+		errors: map[string]error{
+			"CVE-2026-0002": context.Canceled,
+		},
+	}
+	enrichedEPSS, _, errEPSS := EnrichFindings(context.Background(), findings, epssStore, nil)
+	if !errors.Is(errEPSS, context.Canceled) {
+		t.Fatalf("expected context.Canceled from EPSS store, got %v", errEPSS)
+	}
+	if enrichedEPSS[0].EPSS == nil || enrichedEPSS[0].EPSS.Score != 0.88 {
+		t.Errorf("first finding should have kept EPSS enrichment, got %+v", enrichedEPSS[0].EPSS)
+	}
+	if enrichedEPSS[1].EPSS != nil {
+		t.Errorf("second finding should not have EPSS enrichment, got %+v", enrichedEPSS[1].EPSS)
+	}
+
+	// 3. Cancellation returned by Vulnrichment store on second finding: finding 0 has Vulnrichment enriched
+	vulnStore := fakeVulnrichmentStore{
+		values: map[string]model.Vulnrichment{
+			"CVE-2026-0001": {Exploitation: "active"},
+		},
+		errors: map[string]error{
+			"CVE-2026-0002": context.Canceled,
+		},
+	}
+	enrichedVuln, _, errVuln := EnrichFindings(context.Background(), findings, nil, vulnStore)
+	if !errors.Is(errVuln, context.Canceled) {
+		t.Fatalf("expected context.Canceled from Vulnrichment store, got %v", errVuln)
+	}
+	if enrichedVuln[0].Vulnrichment == nil || enrichedVuln[0].Vulnrichment.Exploitation != "active" {
+		t.Errorf("first finding should have kept Vulnrichment enrichment, got %+v", enrichedVuln[0].Vulnrichment)
+	}
+	if enrichedVuln[1].Vulnrichment != nil {
+		t.Errorf("second finding should not have Vulnrichment enrichment, got %+v", enrichedVuln[1].Vulnrichment)
 	}
 }
 
 type fakeEPSSStore struct {
 	values map[string]model.EPSS
+	errors map[string]error
 	err    error
 }
 
@@ -216,6 +257,11 @@ func (s fakeEPSSStore) LookupContext(ctx context.Context, cveID string) (model.E
 	}
 	if s.err != nil {
 		return model.EPSS{}, false, s.err
+	}
+	if s.errors != nil {
+		if err, ok := s.errors[cveID]; ok {
+			return model.EPSS{}, false, err
+		}
 	}
 	value, ok := s.values[cveID]
 	return value, ok, nil
