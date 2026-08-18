@@ -691,7 +691,7 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 	return nil
 }
 
-const vdrConfigMapAIHelpURL = "https://github.com/stackArmor/trivy-plugin-vdr-skills"
+const vdrConfigMapAIHelpURL = "https://github.com/stackArmor/vdr-agent-skills"
 
 func logIncompatibleClusterConfig(logger *log.Logger, err error) {
 	logger.Error(

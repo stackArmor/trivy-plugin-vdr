@@ -1,7 +1,7 @@
 # Canonical VDR security-impact-profile derivation policy.
 #
 # This file is embedded into trivy-plugin-vdr at build time. Downstream copies
-# in TSW and trivy-plugin-vdr-skills are generated from it; do not maintain
+# in TSW and vdr-agent-skills are generated from it; do not maintain
 # separate scoring catalogs in consumer repositories.
 schemaVersion: 1
 
