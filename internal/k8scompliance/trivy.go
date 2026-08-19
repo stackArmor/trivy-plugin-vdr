@@ -29,10 +29,11 @@ type ScanOptions struct {
 	// positional, so it must be a real kubeconfig context name. Leave it empty
 	// when running in-cluster; do not substitute a synthetic report identity
 	// here or Trivy will fail to resolve it.
-	KubeContext string
-	Namespaces  []string
-	Timeout     time.Duration
-	MinSeverity string
+	KubeContext       string
+	Namespaces        []string
+	ExcludeNamespaces []string
+	Timeout           time.Duration
+	MinSeverity       string
 }
 
 type rawReport struct {
@@ -95,6 +96,11 @@ func (r TrivyRunner) Scan(ctx context.Context, options ScanOptions) ([]ResourceR
 		namespaces := append([]string(nil), options.Namespaces...)
 		sort.Strings(namespaces)
 		args = append(args, "--include-namespaces", strings.Join(namespaces, ","))
+	}
+	if len(options.ExcludeNamespaces) > 0 {
+		excluded := append([]string(nil), options.ExcludeNamespaces...)
+		sort.Strings(excluded)
+		args = append(args, "--exclude-namespaces", strings.Join(excluded, ","))
 	}
 	if severities := severitiesAtOrAbove(options.MinSeverity); len(severities) > 0 {
 		args = append(args, "--severity", strings.Join(severities, ","))

@@ -89,17 +89,18 @@ func runK8sCompliance(ctx context.Context, cfg config.Config, logger *log.Logger
 		CacheDir: cfg.CacheDir,
 	}).Scan(ctx, k8scompliance.ScanOptions{
 		// Real kubectx only, empty in-cluster -- not the resolved identity.
-		KubeContext: collector.KubeContext,
-		Namespaces:  namespaces,
-		Timeout:     cfg.Timeout,
-		MinSeverity: cfg.MinSeverity,
+		KubeContext:       collector.KubeContext,
+		Namespaces:        namespaces,
+		ExcludeNamespaces: cfg.ExcludeNamespaces,
+		Timeout:           cfg.Timeout,
+		MinSeverity:       cfg.MinSeverity,
 	})
 	if err != nil {
 		return err
 	}
 
 	logger.Info("mapping compliance results to Kubernetes resources and parent controllers")
-	controllerIndex, warnings := k8scompliance.BuildControllerIndex(ctx, collector.Client, namespaces)
+	controllerIndex, warnings := k8scompliance.BuildControllerIndex(ctx, collector.Client, namespaces, cfg.ExcludeNamespaces)
 	controllerIndex.Enrich(resources)
 	for _, warning := range warnings {
 		logger.Warn("%s", warning)

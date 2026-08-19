@@ -117,3 +117,32 @@ func TestSeveritiesAtOrAbove(t *testing.T) {
 		t.Fatalf("severitiesAtOrAbove(empty) = %#v, want nil", got)
 	}
 }
+
+func TestScanPassesExcludeNamespacesFlag(t *testing.T) {
+	runnerCmd := &recordingCommandRunner{
+		stdout: []byte(`{"ClusterName":"test-cluster","Resources":[]}`),
+	}
+	runner := TrivyRunner{
+		CommandRunner: runnerCmd,
+	}
+	_, _, err := runner.Scan(context.Background(), ScanOptions{
+		Timeout:           time.Minute,
+		ExcludeNamespaces: []string{"monitoring", "kube-system"},
+	})
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	found := false
+	for i, arg := range runnerCmd.args {
+		if arg == "--exclude-namespaces" && i+1 < len(runnerCmd.args) {
+			if runnerCmd.args[i+1] == "kube-system,monitoring" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected --exclude-namespaces kube-system,monitoring in args, got %v", runnerCmd.args)
+	}
+}

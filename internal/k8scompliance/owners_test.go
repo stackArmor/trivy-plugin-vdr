@@ -59,7 +59,7 @@ func TestControllerIndexMapsPodsAndJobsToTopLevelControllers(t *testing.T) {
 	}}
 	client := fake.NewSimpleClientset(deployment, replicaSet, pod, cronJob, job)
 
-	index, warnings := BuildControllerIndex(context.Background(), client, []string{"default"})
+	index, warnings := BuildControllerIndex(context.Background(), client, []string{"default"}, nil)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %#v, want none", warnings)
 	}
@@ -81,5 +81,22 @@ func TestControllerIndexMapsPodsAndJobsToTopLevelControllers(t *testing.T) {
 	}
 	if resources[2].ParentController != nil {
 		t.Fatalf("top-level Deployment parent controller = %#v, want nil", resources[2].ParentController)
+	}
+}
+
+func TestBuildControllerIndexFiltersExcludedNamespaces(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: "default"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-2", Namespace: "kube-system"}},
+	)
+	index, warnings := BuildControllerIndex(context.Background(), client, nil, []string{"kube-system"})
+	if len(warnings) > 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if _, ok := index.Lookup("v1", "Pod", "default", "pod-1"); !ok {
+		t.Error("expected default/pod-1 to be indexed")
+	}
+	if _, ok := index.Lookup("v1", "Pod", "kube-system", "pod-2"); ok {
+		t.Error("expected kube-system/pod-2 to NOT be indexed")
 	}
 }
