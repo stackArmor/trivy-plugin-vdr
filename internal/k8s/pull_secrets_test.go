@@ -112,3 +112,61 @@ func TestCollectPullSecretAuthsCanceledContext(t *testing.T) {
 		t.Fatal("expected error for canceled context")
 	}
 }
+
+func TestCollectPullSecretAuthsExcludeNamespaces(t *testing.T) {
+	depDefault := deployment("default", "deploy-default", podSpec(container("web", "web:latest")))
+	depDefault.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "regcred-deploy"}}
+
+	depExcluded := deployment("kube-system", "deploy-excluded", podSpec(container("coredns", "coredns:latest")))
+	depExcluded.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "missing-sys-dep-secret"}}
+
+	stsExcluded := statefulSet("kube-system", "sts-excluded", podSpec(container("kube-db", "kube-db:latest")))
+	stsExcluded.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "missing-sys-sts-secret"}}
+
+	dsExcluded := daemonSet("kube-system", "ds-excluded", 1, podSpec(container("kube-proxy", "kube-proxy:latest")))
+	dsExcluded.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "missing-sys-ds-secret"}}
+
+	jobExcluded := job("kube-system", "job-excluded", podSpec(container("kube-bench", "kube-bench:latest")))
+	jobExcluded.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "missing-sys-job-secret"}}
+
+	cronExcluded := cronJob("kube-system", "cron-excluded", podSpec(container("kube-cleanup", "kube-cleanup:latest")))
+	cronExcluded.Spec.JobTemplate.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "missing-sys-cron-secret"}}
+
+	client := fake.NewSimpleClientset(
+		podWithPullSecret("default", "pod-default", "regcred-pod"),
+		dockerConfigJSONSecret("default", "regcred-pod", "registry.default.example.com", "user1", "pass1"),
+		depDefault,
+		dockerConfigJSONSecret("default", "regcred-deploy", "registry-deploy.default.example.com", "user2", "pass2"),
+		podWithPullSecret("kube-system", "pod-excluded", "regcred-sys-pod"),
+		dockerConfigJSONSecret("kube-system", "regcred-sys-pod", "registry.system.example.com", "sysuser", "syspass"),
+		depExcluded,
+		stsExcluded,
+		dsExcluded,
+		jobExcluded,
+		cronExcluded,
+	)
+
+	auths, warnings, err := (&Collector{Client: client}).CollectPullSecretAuths(
+		context.Background(),
+		Options{
+			AllNamespaces:     true,
+			ExcludeNamespaces: []string{"kube-system"},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("CollectPullSecretAuths error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings from excluded namespace resources: %v", warnings)
+	}
+	if _, ok := auths["registry.default.example.com"]; !ok {
+		t.Errorf("missing auth for registry.default.example.com")
+	}
+	if _, ok := auths["registry-deploy.default.example.com"]; !ok {
+		t.Errorf("missing auth for registry-deploy.default.example.com")
+	}
+	if _, ok := auths["registry.system.example.com"]; ok {
+		t.Errorf("unexpected auth for registry.system.example.com from excluded namespace")
+	}
+}

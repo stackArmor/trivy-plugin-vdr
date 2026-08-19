@@ -87,6 +87,9 @@ func (c *Collector) collectPullSecretRefs(ctx context.Context, namespaces []stri
 			warnings = append(warnings, fmt.Sprintf("registry auth skipped Pods in namespace %q: %v", namespace, err))
 		} else {
 			for _, pod := range pods.Items {
+				if isExcludedNamespace(pod.Namespace, opts.ExcludeNamespaces) {
+					continue
+				}
 				add(pod.Namespace, pod.Spec.ImagePullSecrets)
 			}
 		}
@@ -99,6 +102,9 @@ func (c *Collector) collectPullSecretRefs(ctx context.Context, namespaces []stri
 			warnings = append(warnings, fmt.Sprintf("registry auth skipped Deployments in namespace %q: %v", namespace, err))
 		} else {
 			for _, d := range deployments.Items {
+				if isExcludedNamespace(d.Namespace, opts.ExcludeNamespaces) {
+					continue
+				}
 				add(d.Namespace, d.Spec.Template.Spec.ImagePullSecrets)
 			}
 		}
@@ -111,6 +117,9 @@ func (c *Collector) collectPullSecretRefs(ctx context.Context, namespaces []stri
 			warnings = append(warnings, fmt.Sprintf("registry auth skipped StatefulSets in namespace %q: %v", namespace, err))
 		} else {
 			for _, s := range statefulSets.Items {
+				if isExcludedNamespace(s.Namespace, opts.ExcludeNamespaces) {
+					continue
+				}
 				add(s.Namespace, s.Spec.Template.Spec.ImagePullSecrets)
 			}
 		}
@@ -123,6 +132,9 @@ func (c *Collector) collectPullSecretRefs(ctx context.Context, namespaces []stri
 			warnings = append(warnings, fmt.Sprintf("registry auth skipped DaemonSets in namespace %q: %v", namespace, err))
 		} else {
 			for _, ds := range daemonSets.Items {
+				if isExcludedNamespace(ds.Namespace, opts.ExcludeNamespaces) {
+					continue
+				}
 				add(ds.Namespace, ds.Spec.Template.Spec.ImagePullSecrets)
 			}
 		}
@@ -135,6 +147,9 @@ func (c *Collector) collectPullSecretRefs(ctx context.Context, namespaces []stri
 			warnings = append(warnings, fmt.Sprintf("registry auth skipped Jobs in namespace %q: %v", namespace, err))
 		} else {
 			for _, j := range jobs.Items {
+				if isExcludedNamespace(j.Namespace, opts.ExcludeNamespaces) {
+					continue
+				}
 				add(j.Namespace, j.Spec.Template.Spec.ImagePullSecrets)
 			}
 		}
@@ -147,6 +162,9 @@ func (c *Collector) collectPullSecretRefs(ctx context.Context, namespaces []stri
 			warnings = append(warnings, fmt.Sprintf("registry auth skipped CronJobs in namespace %q: %v", namespace, err))
 		} else {
 			for _, cj := range cronJobs.Items {
+				if isExcludedNamespace(cj.Namespace, opts.ExcludeNamespaces) {
+					continue
+				}
 				add(cj.Namespace, cj.Spec.JobTemplate.Spec.Template.Spec.ImagePullSecrets)
 			}
 		}
