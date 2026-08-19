@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/httpretry"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
@@ -26,6 +28,8 @@ const (
 	httpTimeout  = 30 * time.Second
 )
 
+// Store provides EPSS score lookups by loading a bulk dataset into memory.
+// Note: Store is designed for single-goroutine access during finding enrichment.
 type Store struct {
 	cacheDir     string
 	url          string
@@ -33,9 +37,11 @@ type Store struct {
 	now          func() time.Time
 	forceRefresh bool
 	logger       *log.Logger
+	retryDelays  []time.Duration
 
-	loaded bool
-	values map[string]model.EPSS
+	loaded  bool
+	loadErr error // sticky failure memoization to prevent repeated downloads
+	values  map[string]model.EPSS
 }
 
 type Option func(*Store)
@@ -44,6 +50,13 @@ type Option func(*Store)
 func WithLogger(logger *log.Logger) Option {
 	return func(s *Store) {
 		s.logger = logger
+	}
+}
+
+// WithRetryDelays overrides the backoff delay schedule between fetch attempts.
+func WithRetryDelays(delays []time.Duration) Option {
+	return func(s *Store) {
+		s.retryDelays = append([]time.Duration(nil), delays...)
 	}
 }
 
@@ -73,10 +86,11 @@ func WithForceRefresh(forceRefresh bool) Option {
 
 func NewStore(cacheDir string, options ...Option) *Store {
 	store := &Store{
-		cacheDir: cacheDir,
-		url:      DefaultURL,
-		client:   &http.Client{Timeout: httpTimeout},
-		now:      time.Now,
+		cacheDir:    cacheDir,
+		url:         DefaultURL,
+		client:      &http.Client{Timeout: httpTimeout},
+		now:         time.Now,
+		retryDelays: httpretry.DefaultDelays,
 	}
 	for _, option := range options {
 		option(store)
@@ -138,25 +152,32 @@ func (s *Store) load(ctx context.Context) error {
 	if s.loaded {
 		return nil
 	}
+	if s.loadErr != nil && !errors.Is(s.loadErr, context.Canceled) && !errors.Is(s.loadErr, context.DeadlineExceeded) {
+		return s.loadErr
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := s.refreshIfStale(ctx); err != nil && !cacheExists(s.cachePath()) {
+		s.loadErr = err
 		return err
 	}
 
 	file, err := os.Open(s.cachePath())
 	if err != nil {
+		s.loadErr = err
 		return err
 	}
 	defer file.Close()
 
 	values, err := parseCSV(file)
 	if err != nil {
+		s.loadErr = err
 		return err
 	}
 	s.values = values
 	s.loaded = true
+	s.loadErr = nil
 	return nil
 }
 
@@ -177,18 +198,35 @@ func (s *Store) fetch(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
+
+	var resp *http.Response
+	warnFn := func(attempt, total int, delay time.Duration, err error) {
+		s.logger.Warn("EPSS: retry %d/%d in %v: %v", attempt, total-1, delay, err)
+	}
+
+	err := httpretry.Do(ctx, s.retryDelays, warnFn, func() error {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
+		if reqErr != nil {
+			return reqErr
+		}
+		r, doErr := s.client.Do(req)
+		if doErr != nil {
+			return fmt.Errorf("fetch EPSS data: %w", doErr)
+		}
+		if r.StatusCode < 200 || r.StatusCode > 299 {
+			_ = r.Body.Close()
+			return fmt.Errorf("fetch EPSS data: %w", &httpretry.StatusError{
+				URL:        s.url,
+				StatusCode: r.StatusCode,
+			})
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("fetch EPSS data: %w", err)
-	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("fetch EPSS data: status %d", resp.StatusCode)
-	}
 
 	reader, err := gzip.NewReader(resp.Body)
 	if err != nil {

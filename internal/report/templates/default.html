@@ -149,7 +149,7 @@
       <tbody></tbody>
     </table>
     <div id="empty" class="empty" hidden>No findings match the current filters.</div>
-    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the security-impact profile's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = EPSS ≥ 0.50 or active exploitation, and IRV requires both a public route to the affected resource and CVSS AV:N. {{ if .Report.ChainCatalog }}CAPEC badges preserve the offline CWE → CAPEC → ATT&amp;CK evidence and explicit CAPEC predecessor/successor role; they do not prove a CVE-specific chain. CAPEC transition candidates below require two distinct active CVEs on the same exact internet-reachable resource: an AV:N/PR:N upstream CVE and an explicit CAPEC <em>CanPrecede</em> edge between their mapped paths. The downstream CVE can have any attack vector; its AV/PR values are shown only as review context. Package occurrences are aggregated by CVE pair and CAPEC edge. Candidates are pattern-level review evidence and do not alter IRV, PAIN, or remediation. {{ end }}Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
+    <p class="legend">PAIN (N1–N5) is the FedRAMP Rev5 VDR Potential Agency Impact: the CVSS impact vector (C/I/A) — with each in-scope dimension raised to High when CISA Vulnrichment technical impact is "total" — weighted by the security-impact profile's CR/IR/AR requirements and agency scope. Remediation is the FedRAMP VDR-TFR-PVR deadline = matrix[Certification Class][PAIN][LEV/IRV], where LEV = (EPSS ≥ 0.20 for IRV or EPSS ≥ 0.55 for NIRV) or active exploitation, and IRV requires both a public route to the affected resource and CVSS AV:N. {{ if .Report.ChainCatalog }}CAPEC badges preserve the offline CWE → CAPEC → ATT&amp;CK evidence and explicit CAPEC predecessor/successor role; they do not prove a CVE-specific chain. CAPEC transition candidates below require two distinct active CVEs on the same exact internet-reachable resource: an AV:N/PR:N upstream CVE and an explicit CAPEC <em>CanPrecede</em> edge between their mapped paths. The downstream CVE can have any attack vector; its AV/PR values are shown only as review context. Package occurrences are aggregated by CVE pair and CAPEC edge. Candidates are pattern-level review evidence and do not alter IRV, PAIN, or remediation. {{ end }}Automatable, Exploitation, and Technical impact come from CISA Vulnrichment (informational); italic values marked <em>†</em> are derived from the CVSS vector when Vulnrichment has no record. Hover any value or column header for details.</p>
     {{ if .Report.CAPECTransitions }}
     <section aria-labelledby="capec-transitions-heading">
       <h2 id="capec-transitions-heading">CAPEC transition candidates</h2>
@@ -379,7 +379,7 @@
         "FedRAMP VDR-TFR-PVR — deadline " + rem.deadline,
         "Certification Class: " + rem.class,
         "Column: " + rem.column,
-        "Likely exploitable (LEV): " + (rem.lev ? "yes" : "no") + " (EPSS ≥ 0.50 or active exploitation)",
+        "Likely exploitable (LEV): " + (rem.lev ? "yes" : "no") + " (EPSS ≥ 0.20 for IRV, ≥ 0.55 for NIRV, or active exploitation)",
         "Internet reachable (IRV): " + (rem.irv ? "yes" : "no")
       ].join("\n");
     }
@@ -724,7 +724,7 @@
         "  deadline = matrix[ Certification Class ][ PAIN ][ column ]",
         "",
         "  column = LEV+IRV | LEV+NIRV | NLEV",
-        "  LEV  (likely exploitable) = EPSS ≥ 0.50 OR exploitation = active",
+        "  LEV  (likely exploitable) = EPSS ≥ 0.20 (IRV) / EPSS ≥ 0.55 (NIRV) OR exploitation = active",
         "  IRV  (internet reachable) = public route to the affected resource AND CVSS AV:N",
         "",
         "PAIN comes from the security-impact profile (CR/IR/AR) × CVE impact × agency scope.",

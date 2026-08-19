@@ -333,6 +333,87 @@ func TestParseNamespaceAcceptsCommaSeparatedValues(t *testing.T) {
 	}
 }
 
+func TestParseExcludeNamespace(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    []string
+		wantErr string
+	}{
+		{
+			name: "comma separated",
+			args: []string{"k8s", "--exclude-namespace", "kube-system,monitoring"},
+			want: []string{"kube-system", "monitoring"},
+		},
+		{
+			name: "repeated flag",
+			args: []string{"k8s", "--exclude-namespace", "kube-system", "--exclude-namespace", "monitoring"},
+			want: []string{"kube-system", "monitoring"},
+		},
+		{
+			name: "alias exclude-namespaces",
+			args: []string{"k8s", "--exclude-namespaces", "kube-system,monitoring"},
+			want: []string{"kube-system", "monitoring"},
+		},
+		{
+			name: "combined with namespace",
+			args: []string{"k8s", "--namespace", "prod,dev", "--exclude-namespace", "dev"},
+			want: []string{"dev"},
+		},
+		{
+			name:    "invalid namespace name",
+			args:    []string{"k8s", "--exclude-namespace", "INVALID_NAME"},
+			wantErr: "invalid namespace",
+		},
+		{
+			name:    "disallowed on cloudrun",
+			args:    []string{"cloudrun", "--project", "my-project", "--region", "us-central1", "--exclude-namespace", "kube-system"},
+			wantErr: "--exclude-namespace is only valid for sources k8s and k8s-compliance",
+		},
+		{
+			name:    "disallowed on ecs",
+			args:    []string{"ecs", "--region", "us-east-1", "--exclude-namespace", "kube-system"},
+			wantErr: "--exclude-namespace is only valid for sources k8s and k8s-compliance",
+		},
+		{
+			name:    "disallowed on image",
+			args:    []string{"image", "--exclude-namespace", "kube-system", "alpine:3.18"},
+			wantErr: "--exclude-namespace is only valid for sources k8s and k8s-compliance",
+		},
+		{
+			name:    "disallowed on helm",
+			args:    []string{"helm", "./chart", "--exclude-namespace", "kube-system"},
+			wantErr: "--exclude-namespace is only valid for sources k8s and k8s-compliance",
+		},
+		{
+			name: "allowed on k8s-compliance",
+			args: []string{"k8s-compliance", "--exclude-namespace", "kube-system"},
+			want: []string{"kube-system"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Parse(tt.args)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Parse(%v) expected error containing %q, got nil", tt.args, tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Parse(%v) error = %q, want substr %q", tt.args, err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Parse(%v) unexpected error: %v", tt.args, err)
+			}
+			if !reflect.DeepEqual(cfg.ExcludeNamespaces, tt.want) {
+				t.Fatalf("Parse(%v) ExcludeNamespaces = %v, want %v", tt.args, cfg.ExcludeNamespaces, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseCloudRunSourceRequiresProjectAndRegion(t *testing.T) {
 	_, err := Parse([]string{"cloudrun"})
 	if err == nil || !strings.Contains(err.Error(), "--project") {
@@ -503,14 +584,26 @@ func TestParseUnknownRootFlagReportsFlagError(t *testing.T) {
 }
 
 func TestParseUnknownFlagSuggestsKnownFlag(t *testing.T) {
-	_, err := Parse([]string{"k8s", "--namespaces", "default"})
-	if err == nil {
-		t.Fatal("Parse returned nil error, want unknown flag error")
+	tests := []struct {
+		arg  string
+		want string
+	}{
+		{"--namespaces", "--namespace"},
+		{"--exclude-ns", "--exclude-namespace"},
+		{"--exclude_namespace", "--exclude-namespace"},
+		{"--exclude_namespaces", "--exclude-namespace"},
 	}
-	if !strings.Contains(err.Error(), "flag provided but not defined") ||
-		!strings.Contains(err.Error(), "--namespaces") ||
-		!strings.Contains(err.Error(), "did you mean --namespace") {
-		t.Fatalf("error = %q, want unknown flag with namespace suggestion", err.Error())
+
+	for _, tt := range tests {
+		_, err := Parse([]string{"k8s", tt.arg, "default"})
+		if err == nil {
+			t.Fatalf("Parse with %s returned nil error, want unknown flag error", tt.arg)
+		}
+		if !strings.Contains(err.Error(), "flag provided but not defined") ||
+			!strings.Contains(err.Error(), tt.arg) ||
+			!strings.Contains(err.Error(), "did you mean "+tt.want) {
+			t.Fatalf("error = %q, want suggestion %s", err.Error(), tt.want)
+		}
 	}
 }
 

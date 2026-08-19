@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/httpretry"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
@@ -145,7 +148,7 @@ func TestLookupFailedForcedRefreshLeavesFreshCacheUsable(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	store := NewStore(filepath.Dir(filepath.Dir(cachePath)), WithURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }), WithForceRefresh(true))
+	store := NewStore(filepath.Dir(filepath.Dir(cachePath)), WithURL(server.URL), WithHTTPClient(server.Client()), WithNow(func() time.Time { return now }), WithForceRefresh(true), WithRetryDelays([]time.Duration{0, 0}))
 	enrichment, ok, err := store.Lookup("CVE-2026-0013")
 	if err != nil {
 		t.Fatalf("Lookup returned error: %v", err)
@@ -314,6 +317,174 @@ func TestEnrichFindingsPreservesFieldsAndAttachesEPSSByID(t *testing.T) {
 	}
 	if enriched[1].EPSS != nil {
 		t.Fatalf("second finding EPSS = %+v, want nil", enriched[1].EPSS)
+	}
+}
+
+func TestLoadFailureIsMemoizedAndNotRetriedPerLookup(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(),
+		WithURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithRetryDelays([]time.Duration{0, 0}),
+	)
+
+	// First lookup fails after 3 attempts (1 initial + 2 retries)
+	_, _, err1 := store.Lookup("CVE-2026-0001")
+	if err1 == nil {
+		t.Fatal("expected error on first lookup")
+	}
+	if requests.Load() != 3 {
+		t.Fatalf("requests after first lookup = %d, want 3", requests.Load())
+	}
+
+	// Subsequent lookups must return the memoized error without making new network requests
+	for i := 2; i <= 5; i++ {
+		_, _, err := store.Lookup("CVE-2026-0002")
+		if err == nil {
+			t.Fatalf("expected error on lookup %d", i)
+		}
+	}
+	if requests.Load() != 3 {
+		t.Errorf("total requests = %d, want 3 (subsequent lookups did not hit network)", requests.Load())
+	}
+}
+
+func TestFetchRetriesTransientStatus(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := requests.Add(1)
+		if n < 3 {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(gzipBytes(t, "cve,epss,percentile\nCVE-2026-5020,0.85,0.95\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(),
+		WithURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithRetryDelays([]time.Duration{0, 0}),
+	)
+
+	enrichment, ok, err := store.Lookup("CVE-2026-5020")
+	if err != nil {
+		t.Fatalf("Lookup error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true")
+	}
+	if enrichment.Score != 0.85 {
+		t.Errorf("Score = %v, want 0.85", enrichment.Score)
+	}
+	if requests.Load() != 3 {
+		t.Errorf("requests = %d, want 3", requests.Load())
+	}
+}
+
+func TestFetchDoesNotRetryPermanentStatus(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(),
+		WithURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithRetryDelays([]time.Duration{0, 0}),
+	)
+
+	_, _, err := store.Lookup("CVE-2026-4030")
+	if err == nil {
+		t.Fatal("expected error on 403, got nil")
+	}
+	if requests.Load() != 1 {
+		t.Errorf("requests = %d, want 1 (403 not retried)", requests.Load())
+	}
+	var statusErr *httpretry.StatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != 403 {
+		t.Errorf("expected StatusError 403, got %v", err)
+	}
+}
+
+func TestStaleCacheStillUsedAfterRetriesExhausted(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	cachePath := filepath.Join(t.TempDir(), "epss", "epss.csv")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staleCSV := []byte("cve,epss,percentile\nCVE-2026-0099,0.60,0.80\n")
+	if err := os.WriteFile(cachePath, staleCSV, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(cachePath, now.Add(-48*time.Hour), now.Add(-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(filepath.Dir(filepath.Dir(cachePath)),
+		WithURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithNow(func() time.Time { return now }),
+		WithRetryDelays([]time.Duration{0, 0}),
+	)
+
+	enrichment, ok, err := store.Lookup("CVE-2026-0099")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Lookup ok = false, want true from stale cache")
+	}
+	if enrichment.Score != 0.60 {
+		t.Errorf("Score = %v, want 0.60", enrichment.Score)
+	}
+	if requests.Load() != 3 {
+		t.Errorf("requests = %d, want 3 retries", requests.Load())
+	}
+}
+
+func TestContextErrorIsNotMemoized(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(gzipBytes(t, "cve,epss,percentile\nCVE-2026-0001,0.50,0.60\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	store := NewStore(t.TempDir(), WithURL(server.URL), WithHTTPClient(server.Client()))
+
+	// Canceled context lookup
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := store.LookupContext(ctx, "CVE-2026-0001")
+	if err == nil {
+		t.Fatal("expected error on canceled context")
+	}
+
+	// Next lookup with valid context should succeed
+	enrichment, ok, err := store.LookupContext(context.Background(), "CVE-2026-0001")
+	if err != nil {
+		t.Fatalf("LookupContext error on retry with valid context: %v", err)
+	}
+	if !ok || enrichment.Score != 0.50 {
+		t.Fatalf("got ok=%v score=%v, want ok=true score=0.50", ok, enrichment.Score)
 	}
 }
 

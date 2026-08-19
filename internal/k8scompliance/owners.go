@@ -24,7 +24,7 @@ type ControllerIndex struct {
 	objects map[objectKey]indexedObject
 }
 
-func BuildControllerIndex(ctx context.Context, client kubernetes.Interface, namespaces []string) (*ControllerIndex, []string) {
+func BuildControllerIndex(ctx context.Context, client kubernetes.Interface, namespaces, excludeNamespaces []string) (*ControllerIndex, []string) {
 	index := &ControllerIndex{objects: map[objectKey]indexedObject{}}
 	if client == nil {
 		return index, []string{"parent-controller mapping was skipped because the Kubernetes client is unavailable"}
@@ -35,64 +35,114 @@ func BuildControllerIndex(ctx context.Context, client kubernetes.Interface, name
 	}
 	var warnings []string
 	for _, namespace := range scopes {
+		if namespace != metav1.NamespaceAll && isExcludedNamespace(namespace, excludeNamespaces) {
+			continue
+		}
 		if list, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{}); err != nil {
 			warnings = appendListWarning(warnings, namespace, "Pods", err)
 		} else {
 			for i := range list.Items {
-				index.add(&list.Items[i], "v1", "Pod")
+				if !isExcludedNamespace(list.Items[i].Namespace, excludeNamespaces) {
+					index.add(&list.Items[i], "v1", "Pod")
+				}
 			}
 		}
 		if list, err := client.CoreV1().ReplicationControllers(namespace).List(ctx, metav1.ListOptions{}); err != nil {
 			warnings = appendListWarning(warnings, namespace, "ReplicationControllers", err)
 		} else {
 			for i := range list.Items {
-				index.add(&list.Items[i], "v1", "ReplicationController")
+				if !isExcludedNamespace(list.Items[i].Namespace, excludeNamespaces) {
+					index.add(&list.Items[i], "v1", "ReplicationController")
+				}
 			}
 		}
 		if list, err := client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{}); err != nil {
 			warnings = appendListWarning(warnings, namespace, "Deployments", err)
 		} else {
 			for i := range list.Items {
-				index.add(&list.Items[i], "apps/v1", "Deployment")
+				if !isExcludedNamespace(list.Items[i].Namespace, excludeNamespaces) {
+					index.add(&list.Items[i], "apps/v1", "Deployment")
+				}
 			}
 		}
 		if list, err := client.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{}); err != nil {
 			warnings = appendListWarning(warnings, namespace, "ReplicaSets", err)
 		} else {
 			for i := range list.Items {
-				index.add(&list.Items[i], "apps/v1", "ReplicaSet")
+				if !isExcludedNamespace(list.Items[i].Namespace, excludeNamespaces) {
+					index.add(&list.Items[i], "apps/v1", "ReplicaSet")
+				}
 			}
 		}
 		if list, err := client.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{}); err != nil {
 			warnings = appendListWarning(warnings, namespace, "StatefulSets", err)
 		} else {
 			for i := range list.Items {
-				index.add(&list.Items[i], "apps/v1", "StatefulSet")
+				if !isExcludedNamespace(list.Items[i].Namespace, excludeNamespaces) {
+					index.add(&list.Items[i], "apps/v1", "StatefulSet")
+				}
 			}
 		}
 		if list, err := client.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{}); err != nil {
 			warnings = appendListWarning(warnings, namespace, "DaemonSets", err)
 		} else {
 			for i := range list.Items {
-				index.add(&list.Items[i], "apps/v1", "DaemonSet")
+				if !isExcludedNamespace(list.Items[i].Namespace, excludeNamespaces) {
+					index.add(&list.Items[i], "apps/v1", "DaemonSet")
+				}
 			}
 		}
 		if list, err := client.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{}); err != nil {
 			warnings = appendListWarning(warnings, namespace, "Jobs", err)
 		} else {
 			for i := range list.Items {
-				index.add(&list.Items[i], "batch/v1", "Job")
+				if !isExcludedNamespace(list.Items[i].Namespace, excludeNamespaces) {
+					index.add(&list.Items[i], "batch/v1", "Job")
+				}
 			}
 		}
 		if list, err := client.BatchV1().CronJobs(namespace).List(ctx, metav1.ListOptions{}); err != nil {
 			warnings = appendListWarning(warnings, namespace, "CronJobs", err)
 		} else {
 			for i := range list.Items {
-				index.add(&list.Items[i], "batch/v1", "CronJob")
+				if !isExcludedNamespace(list.Items[i].Namespace, excludeNamespaces) {
+					index.add(&list.Items[i], "batch/v1", "CronJob")
+				}
 			}
 		}
 	}
 	return index, warnings
+}
+
+func (i *ControllerIndex) Lookup(apiVersion, kind, namespace, name string) (ObjectRef, bool) {
+	if i == nil || i.objects == nil {
+		return ObjectRef{}, false
+	}
+	key := objectKey{
+		namespace: namespace,
+		kind:      strings.ToLower(kind),
+		name:      name,
+	}
+	obj, ok := i.objects[key]
+	if !ok {
+		return ObjectRef{}, false
+	}
+	if apiVersion != "" && obj.ref.APIVersion != "" && obj.ref.APIVersion != apiVersion {
+		return ObjectRef{}, false
+	}
+	return obj.ref, true
+}
+
+func isExcludedNamespace(namespace string, excluded []string) bool {
+	if len(excluded) == 0 || namespace == "" {
+		return false
+	}
+	for _, ex := range excluded {
+		if namespace == ex {
+			return true
+		}
+	}
+	return false
 }
 
 func (i *ControllerIndex) Enrich(resources []ResourceReport) {

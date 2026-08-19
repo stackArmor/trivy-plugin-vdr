@@ -58,6 +58,7 @@ type Config struct {
 	Project                      string
 	Regions                      []string
 	Namespaces                   []string
+	ExcludeNamespaces            []string
 	AllNamespaces                bool
 	IncludeZeroDaemonSets        bool
 	Format                       string
@@ -180,6 +181,7 @@ func Parse(args []string) (Config, error) {
 func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	cfg := Default()
 	namespaces := namespaceList(cfg.Namespaces)
+	excludeNamespaces := namespaceList(cfg.ExcludeNamespaces)
 	regions := regionList(cfg.Regions)
 	valuesFiles := orderedList(cfg.ValuesFiles)
 	ingressValuesFiles := orderedList(cfg.IngressValuesFiles)
@@ -198,6 +200,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.Var(&regions, "region", "cloud region for cloudrun or ecs source; may be repeated")
 	fs.Var(&namespaces, "namespace", "Kubernetes namespace to scan; may be repeated")
 	fs.Var(&namespaces, "n", "alias for --namespace")
+	fs.Var(&excludeNamespaces, "exclude-namespace", "Kubernetes namespace to exclude from scan; may be repeated or comma-separated")
+	fs.Var(&excludeNamespaces, "exclude-namespaces", "alias for --exclude-namespace")
 	fs.BoolVar(&cfg.AllNamespaces, "all-namespaces", cfg.AllNamespaces, "scan all namespaces")
 	fs.BoolVar(&cfg.IncludeZeroDaemonSets, "include-zero-daemonsets", cfg.IncludeZeroDaemonSets, "include DaemonSets with zero desired pods")
 	fs.StringVar(&cfg.Format, "format", cfg.Format, "output format: json, table, or cyclonedx")
@@ -290,6 +294,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	}
 	allNamespacesSet := false
 	namespaceSet := false
+	excludeNamespaceSet := false
 	includeZeroDaemonSetsSet := false
 	projectSet := false
 	regionSet := false
@@ -306,6 +311,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			allNamespacesSet = true
 		case "namespace", "n":
 			namespaceSet = true
+		case "exclude-namespace", "exclude-namespaces":
+			excludeNamespaceSet = true
 		case "include-zero-daemonsets":
 			includeZeroDaemonSetsSet = true
 		case "project":
@@ -348,6 +355,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	}
 	cfg.MinEPSS = parsedEPSS
 	cfg.Namespaces = []string(namespaces)
+	cfg.ExcludeNamespaces = []string(excludeNamespaces)
 	cfg.Regions = []string(regions)
 	cfg.ValuesFiles = []string(valuesFiles)
 	cfg.IngressValuesFiles = []string(ingressValuesFiles)
@@ -406,6 +414,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		if namespaceSet {
 			return Config{}, errors.New("--namespace is only valid for source k8s")
 		}
+		if excludeNamespaceSet {
+			return Config{}, errors.New("--exclude-namespace is only valid for sources k8s and k8s-compliance")
+		}
 		if allNamespacesSet {
 			return Config{}, errors.New("--all-namespaces is only valid for source k8s")
 		}
@@ -422,6 +433,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	if cfg.Source == SourceECS {
 		if namespaceSet {
 			return Config{}, errors.New("--namespace is only valid for source k8s")
+		}
+		if excludeNamespaceSet {
+			return Config{}, errors.New("--exclude-namespace is only valid for sources k8s and k8s-compliance")
 		}
 		if allNamespacesSet {
 			return Config{}, errors.New("--all-namespaces is only valid for source k8s")
@@ -440,6 +454,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		if namespaceSet {
 			return Config{}, errors.New("--namespace is only valid for source k8s")
 		}
+		if excludeNamespaceSet {
+			return Config{}, errors.New("--exclude-namespace is only valid for sources k8s and k8s-compliance")
+		}
 		if allNamespacesSet {
 			return Config{}, errors.New("--all-namespaces is only valid for source k8s")
 		}
@@ -457,6 +474,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		}
 	}
 	if cfg.Source == SourceHelm {
+		if excludeNamespaceSet {
+			return Config{}, errors.New("--exclude-namespace is only valid for sources k8s and k8s-compliance")
+		}
 		if allNamespacesSet {
 			return Config{}, errors.New("--all-namespaces is only valid for source k8s")
 		}
@@ -599,6 +619,7 @@ func validateCacheCleanup(value string) error {
 func complianceFlagAllowed(name string) bool {
 	switch name {
 	case "namespace", "n",
+		"exclude-namespace", "exclude-namespaces",
 		"all-namespaces",
 		"format", "f",
 		"output", "o",
@@ -629,13 +650,16 @@ func suggestFlagError(err error) error {
 	}
 	name = strings.TrimLeft(name, "-")
 	suggestions := map[string]string{
-		"namespaces":      "--namespace",
-		"ns":              "--namespace",
-		"regions":         "--region",
-		"projects":        "--project",
-		"outputs":         "--output",
-		"formats":         "--format",
-		"oci-vex-include": "--oci-vex-included",
+		"namespaces":         "--namespace",
+		"ns":                 "--namespace",
+		"exclude-ns":         "--exclude-namespace",
+		"exclude_namespace":  "--exclude-namespace",
+		"exclude_namespaces": "--exclude-namespace",
+		"regions":            "--region",
+		"projects":           "--project",
+		"outputs":            "--output",
+		"formats":            "--format",
+		"oci-vex-include":    "--oci-vex-included",
 	}
 	if suggestion, ok := suggestions[name]; ok {
 		return fmt.Errorf("%w (unknown flag --%s); did you mean %s?", err, name, suggestion)

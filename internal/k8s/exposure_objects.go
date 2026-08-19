@@ -56,7 +56,12 @@ func (c *Collector) CollectExposureObjectsWithWarnings(ctx context.Context, opts
 			}
 			warnings = append(warnings, fmt.Sprintf("exposure analysis skipped Services in namespace %q: %v", namespace, err))
 		} else {
-			objects.Services = append(objects.Services, services.Items...)
+			for _, svc := range services.Items {
+				if isExcludedNamespace(svc.Namespace, opts.ExcludeNamespaces) {
+					continue
+				}
+				objects.Services = append(objects.Services, svc)
+			}
 		}
 
 		ingresses, err := c.Client.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
@@ -66,7 +71,12 @@ func (c *Collector) CollectExposureObjectsWithWarnings(ctx context.Context, opts
 			}
 			warnings = append(warnings, fmt.Sprintf("exposure analysis skipped Ingresses in namespace %q: %v", namespace, err))
 		} else {
-			objects.Ingresses = append(objects.Ingresses, ingresses.Items...)
+			for _, ing := range ingresses.Items {
+				if isExcludedNamespace(ing.Namespace, opts.ExcludeNamespaces) {
+					continue
+				}
+				objects.Ingresses = append(objects.Ingresses, ing)
+			}
 		}
 	}
 
@@ -83,19 +93,19 @@ func (c *Collector) CollectExposureObjectsWithWarnings(ctx context.Context, opts
 	if c.Dynamic == nil {
 		return objects, warnings, nil
 	}
-	unstructuredObjects, dynamicWarnings := c.collectUnstructuredExposureObjects(ctx, namespaces)
+	unstructuredObjects, dynamicWarnings := c.collectUnstructuredExposureObjects(ctx, namespaces, opts)
 	warnings = append(warnings, dynamicWarnings...)
 	objects.Unstructured = unstructuredObjects
 	return objects, warnings, nil
 }
 
-func (c *Collector) collectUnstructuredExposureObjects(ctx context.Context, namespaces []string) ([]unstructured.Unstructured, []string) {
+func (c *Collector) collectUnstructuredExposureObjects(ctx context.Context, namespaces []string, opts Options) ([]unstructured.Unstructured, []string) {
 	var objects []unstructured.Unstructured
 	var warnings []string
 	for _, resource := range exposureResources {
 		if resource.namespaced {
 			for _, namespace := range namespaces {
-				items, warning := listUnstructured(ctx, c.Dynamic, resource.gvr, namespace)
+				items, warning := listUnstructured(ctx, c.Dynamic, resource.gvr, namespace, opts)
 				if warning != "" {
 					warnings = append(warnings, warning)
 				}
@@ -103,7 +113,7 @@ func (c *Collector) collectUnstructuredExposureObjects(ctx context.Context, name
 			}
 			continue
 		}
-		items, warning := listUnstructured(ctx, c.Dynamic, resource.gvr, "")
+		items, warning := listUnstructured(ctx, c.Dynamic, resource.gvr, "", opts)
 		if warning != "" {
 			warnings = append(warnings, warning)
 		}
@@ -112,7 +122,7 @@ func (c *Collector) collectUnstructuredExposureObjects(ctx context.Context, name
 	return objects, warnings
 }
 
-func listUnstructured(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, namespace string) ([]unstructured.Unstructured, string) {
+func listUnstructured(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, namespace string, opts Options) ([]unstructured.Unstructured, string) {
 	var resource dynamic.ResourceInterface
 	if namespace == "" {
 		resource = client.Resource(gvr)
@@ -126,5 +136,12 @@ func listUnstructured(ctx context.Context, client dynamic.Interface, gvr schema.
 		}
 		return nil, fmt.Sprintf("exposure analysis skipped optional resource %s in namespace %q: %v", gvr.String(), namespace, err)
 	}
-	return list.Items, ""
+	var filtered []unstructured.Unstructured
+	for _, item := range list.Items {
+		if isExcludedNamespace(item.GetNamespace(), opts.ExcludeNamespaces) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, ""
 }

@@ -10,12 +10,12 @@
 // The remediation deadline is the FedRAMP VDR-TFR-PVR matrix entry selected by
 // the provider Certification Class, the PAIN rating, and the exploitability
 // column: LEV+IRV, LEV+NIRV, or NLEV. LEV (likely exploitable) is EPSS >=
-// threshold or active exploitation; IRV is internet reachability.
+// threshold (0.20 for IRV, 0.55 for NIRV) or active exploitation; IRV is internet reachability.
 //
 // The built-in Default() rubric is self-contained; an optional YAML or JSON
 // config file may be layered on top (deep-merged) to add tenant-specific rules
 // (namespace/name profile assignment for workloads that cannot carry labels)
-// or to tune optional named-archetype catalog entries, the EPSS threshold, or
+// or to tune optional named-archetype catalog entries, the EPSS thresholds, or
 // default Class. Compositional reason mappings remain governed by the embedded
 // policy.
 package scoring
@@ -114,9 +114,12 @@ type Config struct {
 	// MultiAgencyNamespaces are namespace globs whose workloads are treated as
 	// multi-agency unless a more specific label says otherwise.
 	MultiAgencyNamespaces []string `json:"multiAgencyNamespaces" yaml:"multiAgencyNamespaces"`
-	// LEVEPSSThreshold is the EPSS score at or above which a finding is considered
-	// Likely Exploitable (LEV). FedRAMP leaves the framework to the provider.
-	LEVEPSSThreshold float64 `json:"levEpssThreshold" yaml:"levEpssThreshold"`
+	// LEVEPSSThresholdIRV is the EPSS score at or above which an internet-reachable (IRV)
+	// finding is considered Likely Exploitable (LEV).
+	LEVEPSSThresholdIRV float64 `json:"levEpssThresholdIRV" yaml:"levEpssThresholdIRV"`
+	// LEVEPSSThresholdNIRV is the EPSS score at or above which a non-internet-reachable (NIRV)
+	// finding is considered Likely Exploitable (LEV).
+	LEVEPSSThresholdNIRV float64 `json:"levEpssThresholdNIRV" yaml:"levEpssThresholdNIRV"`
 	// SecurityRequirementsCeiling is an optional system-and-agency CR/IR/AR
 	// ceiling. It caps the resolved profile requirements per objective before
 	// PAIN is calculated. Empty preserves profile scoring exactly.
@@ -263,8 +266,9 @@ func Default() *Config {
 			SecurityImpactProfile: "unclassified",
 			Class:                 "B",
 		},
-		WordThresholds:   defaultWordThresholds,
-		LEVEPSSThreshold: 0.50,
+		WordThresholds:       defaultWordThresholds,
+		LEVEPSSThresholdIRV:  0.20,
+		LEVEPSSThresholdNIRV: 0.55,
 	}
 }
 
@@ -475,6 +479,12 @@ func (c *Config) validate() error {
 			return fmt.Errorf("wordThresholds must be strictly ascending within (0,1]: got narrow=%g disruptive=%g debilitating=%g", t.Narrow, t.Disruptive, t.Debilitating)
 		}
 	}
+	if c.LEVEPSSThresholdIRV < 0 || c.LEVEPSSThresholdIRV > 1 {
+		return fmt.Errorf("levEpssThresholdIRV must be between 0 and 1: got %g", c.LEVEPSSThresholdIRV)
+	}
+	if c.LEVEPSSThresholdNIRV < 0 || c.LEVEPSSThresholdNIRV > 1 {
+		return fmt.Errorf("levEpssThresholdNIRV must be between 0 and 1: got %g", c.LEVEPSSThresholdNIRV)
+	}
 	return nil
 }
 
@@ -536,8 +546,8 @@ func (c *Config) Score(in Input) Result {
 
 	// Remediation: FedRAMP VDR-TFR-PVR matrix[Class][PAIN][column].
 	class, classSource := c.resolveClass(in.Labels, in.NamespaceLabels)
-	lev := c.isLEV(in)
 	irv := in.InternetReachable && isNetworkAttackVector(in.CVSSVector)
+	lev := c.isLEV(in, irv)
 	column := remediationColumn(lev, irv)
 	days, label := remediationDeadline(class, tier, column)
 
@@ -700,11 +710,17 @@ func isNetworkAttackVector(vector string) bool {
 // threshold or observed active exploitation. Internet reachability and the CVSS
 // exploitability metrics do not independently place a finding in LEV; reachability
 // is evaluated separately as IRV when selecting the remediation column.
-func (c *Config) isLEV(in Input) bool {
+func (c *Config) isLEV(in Input, irv bool) bool {
 	if strings.EqualFold(strings.TrimSpace(in.Exploitation), "active") {
 		return true
 	}
-	return in.EPSS >= 0 && in.EPSS >= c.LEVEPSSThreshold
+	if in.EPSS < 0 {
+		return false
+	}
+	if irv {
+		return in.EPSS >= c.LEVEPSSThresholdIRV
+	}
+	return in.EPSS >= c.LEVEPSSThresholdNIRV
 }
 
 func parseBoolLabel(v string) (bool, bool) {

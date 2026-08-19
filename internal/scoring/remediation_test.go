@@ -27,22 +27,29 @@ func TestRemediationColumnsAndMatrix(t *testing.T) {
 		wantLEV   bool
 		wantIRV   bool
 	}{
-		{"LEV+IRV via EPSS", dataSensitiveN5(0.8, "none", true), "LEV+IRV", 2, "2 days", true, true},
-		{"LEV+NIRV when public asset CVE is AV:L", func() Input {
-			in := dataSensitiveN5(0.8, "none", true)
+		{"LEV+IRV via EPSS >= 0.20", dataSensitiveN5(0.20, "none", true), "LEV+IRV", 2, "2 days", true, true},
+		{"NLEV when IRV but EPSS < 0.20", dataSensitiveN5(0.19, "none", true), "NLEV", 16, "16 days", false, true},
+		{"LEV+NIRV when public asset CVE is AV:L and EPSS >= 0.55", func() Input {
+			in := dataSensitiveN5(0.55, "none", true)
 			in.CVSSVector = "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 			return in
 		}(), "LEV+NIRV", 4, "4 days", true, false},
-		{"LEV+NIRV when public asset CVE lacks AV", func() Input {
-			in := dataSensitiveN5(0.8, "none", true)
+		{"NLEV when public asset CVE is AV:L and EPSS < 0.55", func() Input {
+			in := dataSensitiveN5(0.54, "none", true)
+			in.CVSSVector = "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+			return in
+		}(), "NLEV", 16, "16 days", false, false},
+		{"LEV+NIRV when public asset CVE lacks AV and EPSS >= 0.55", func() Input {
+			in := dataSensitiveN5(0.55, "none", true)
 			in.CVSSVector = "CVSS:3.1/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 			return in
 		}(), "LEV+NIRV", 4, "4 days", true, false},
-		{"NLEV (low EPSS, no active, not reachable)", dataSensitiveN5(0.49, "none", false), "NLEV", 16, "16 days", false, false},
-		{"LEV+NIRV via active exploitation", dataSensitiveN5(0.49, "active", false), "LEV+NIRV", 4, "4 days", true, false},
+		{"LEV+NIRV via EPSS >= 0.55", dataSensitiveN5(0.55, "none", false), "LEV+NIRV", 4, "4 days", true, false},
+		{"NLEV (low EPSS, no active, not reachable)", dataSensitiveN5(0.54, "none", false), "NLEV", 16, "16 days", false, false},
+		{"LEV+NIRV via active exploitation", dataSensitiveN5(0.10, "active", false), "LEV+NIRV", 4, "4 days", true, false},
 		// Reachability selects IRV only after LEV is established; an
 		// AV:N/AC:L/PR:N/UI:N vector does not independently establish LEV.
-		{"NLEV despite reachable network vector", dataSensitiveN5(0.49, "none", true), "NLEV", 16, "16 days", false, true},
+		{"NLEV despite reachable network vector when EPSS < 0.20", dataSensitiveN5(0.19, "none", true), "NLEV", 16, "16 days", false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,21 +117,36 @@ func TestRemediationN1NoDeadline(t *testing.T) {
 }
 
 func TestLEVThresholdBoundary(t *testing.T) {
-	cfg := Default() // threshold 0.50
-	if !cfg.isLEV(Input{EPSS: 0.50}) {
-		t.Error("EPSS 0.50 should be LEV (>= threshold)")
+	cfg := Default() // threshold IRV=0.20, NIRV=0.55
+
+	// IRV cases: InternetReachable=true, AV:N
+	if !cfg.isLEV(Input{EPSS: 0.20, InternetReachable: true, CVSSVector: vecCIAHigh}, true) {
+		t.Error("IRV: EPSS 0.20 should be LEV (>= 0.20)")
 	}
-	if cfg.isLEV(Input{EPSS: 0.49}) {
-		t.Error("EPSS 0.49 should not be LEV")
+	if cfg.isLEV(Input{EPSS: 0.19, InternetReachable: true, CVSSVector: vecCIAHigh}, true) {
+		t.Error("IRV: EPSS 0.19 should not be LEV (< 0.20)")
 	}
-	if !cfg.isLEV(Input{EPSS: -1, Exploitation: "active"}) {
-		t.Error("active exploitation should be LEV regardless of EPSS")
+
+	// NIRV cases: InternetReachable=false
+	if !cfg.isLEV(Input{EPSS: 0.55, InternetReachable: false, CVSSVector: vecCIAHigh}, false) {
+		t.Error("NIRV: EPSS 0.55 should be LEV (>= 0.55)")
 	}
-	if cfg.isLEV(Input{EPSS: -1, Exploitation: "none"}) {
+	if cfg.isLEV(Input{EPSS: 0.54, InternetReachable: false, CVSSVector: vecCIAHigh}, false) {
+		t.Error("NIRV: EPSS 0.54 should not be LEV (< 0.55)")
+	}
+	if cfg.isLEV(Input{EPSS: 0.30, InternetReachable: false, CVSSVector: vecCIAHigh}, false) {
+		t.Error("NIRV: EPSS 0.30 should not be LEV (< 0.55)")
+	}
+
+	// Active exploitation override
+	if !cfg.isLEV(Input{EPSS: -1, Exploitation: "active"}, false) {
+		t.Error("active exploitation should be LEV regardless of EPSS or reachability")
+	}
+	if cfg.isLEV(Input{EPSS: -1, Exploitation: "none"}, false) {
 		t.Error("no EPSS and not active should not be LEV")
 	}
 
-	if cfg.isLEV(Input{EPSS: -1, Exploitation: "none", InternetReachable: true, CVSSVector: vecCIAHigh}) {
+	if cfg.isLEV(Input{EPSS: -1, Exploitation: "none", InternetReachable: true, CVSSVector: vecCIAHigh}, true) {
 		t.Error("internet reachability and AV:N/AC:L/PR:N/UI:N alone must not establish LEV")
 	}
 }

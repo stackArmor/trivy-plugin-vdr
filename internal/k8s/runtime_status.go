@@ -43,6 +43,9 @@ func (c *Collector) CollectPodRuntimeIssues(ctx context.Context, opts Options) (
 			return nil, err
 		}
 		for i := range pods.Items {
+			if isExcludedNamespace(pods.Items[i].Namespace, opts.ExcludeNamespaces) {
+				continue
+			}
 			issues = append(issues, podRuntimeIssues(&pods.Items[i])...)
 		}
 	}
