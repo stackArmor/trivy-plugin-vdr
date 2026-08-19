@@ -62,6 +62,52 @@ func TestRunK8sPassesPullSecretAuthsToRegistryBuild(t *testing.T) {
 	}
 }
 
+func TestRunK8sSetsExcludeNamespacesInK8sOptions(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("ParseFile returned error: %v", err)
+	}
+
+	var found bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "runK8s" {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			comp, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			sel, ok := comp.Type.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Options" {
+				return true
+			}
+			for _, elt := range comp.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				key, ok := kv.Key.(*ast.Ident)
+				if !ok || key.Name != "ExcludeNamespaces" {
+					continue
+				}
+				val, ok := kv.Value.(*ast.SelectorExpr)
+				if ok && val.Sel.Name == "ExcludeNamespaces" {
+					found = true
+				}
+			}
+			return true
+		})
+		return false
+	})
+
+	if !found {
+		t.Fatal("runK8s does not set ExcludeNamespaces in k8s.Options")
+	}
+}
+
 func TestLogIncompatibleClusterConfigGivesMigrationGuidance(t *testing.T) {
 	var output bytes.Buffer
 	logIncompatibleClusterConfig(log.NewWithWriter(&output, log.LevelQuiet), fmt.Errorf("unknown securityImpactProfile %q", "old-value"))

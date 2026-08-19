@@ -20,7 +20,7 @@ The Kubernetes source collects workload image inventory, scans each unique image
 - Per-finding FedRAMP Rev5 VDR **PAIN** (Potential Agency Impact, N1–N5) and **VDR-TFR-PVR** remediation deadline, driven by an independently dimensional asset security-impact profile (see [PAIN scoring and remediation](#pain-scoring-and-remediation)).
 - Optional standalone HTML report with per-finding PAIN and FedRAMP remediation deadlines, plus filter controls for severity (multi-select), PAIN, namespace, internet exposure, automatable, exploitation status, EPSS score, technical impact, and remediation deadline (multi-select).
 - Optional CAPEC/ATT&CK chain-taxonomy evidence and same-resource transition candidates, enabled with `--include-chain-taxonomy`.
-- Namespace selection, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
+- Namespace selection and exclusion, all-namespace scanning, image source, parallel scanning, cache cleanup, timeout, severity, EPSS, enrichment, exposure, and debug flags.
 - Report context identity that is never empty: `--context-name` overrides it, otherwise the kubeconfig current-context is used, and when running in-cluster (where there is no current-context) it is derived from the API server host. Previously an in-cluster run emitted an empty `contextName`, which caused the CycloneDX document to omit its root component and the compliance report to record a blank cluster name.
 - Automatic private-registry authentication from the local Docker config, Kubernetes `imagePullSecrets`, ECS task `repositoryCredentials`, Google Artifact Registry/GCR (via `gcloud`), and AWS ECR (via the `aws` CLI).
 - Resilient scanning: a single image that fails to pull or scan is reported as a warning and the run continues, producing a partial (still enriched) report.
@@ -34,6 +34,8 @@ trivy vdr --help
 trivy vdr k8s --help
 trivy vdr k8s --namespace default --format json
 trivy vdr k8s -n default --format table
+trivy vdr k8s --exclude-namespace kube-system,monitoring
+trivy vdr k8s --all-namespaces --exclude-namespace kube-system --exclude-namespace kube-public
 trivy vdr k8s --all-namespaces --min-severity HIGH --min-epss 0.5
 trivy vdr k8s --view resources --output vdr-k8s.json
 trivy vdr k8s --image-src remote --parallel-scans 5
@@ -54,6 +56,7 @@ trivy vdr k8s --all-namespaces --scoring-config vdr-scoring.yaml
 trivy vdr k8s --all-namespaces --sip-config-map ./vdr-fedramp.yaml --output vdr-k8s.json
 trivy vdr k8s --all-namespaces --context-name tenant-prod-eks --output vdr-k8s.json
 trivy vdr k8s-compliance --namespace default
+trivy vdr k8s-compliance --exclude-namespace kube-system
 trivy vdr k8s-compliance --all-namespaces --min-severity HIGH
 trivy vdr k8s-compliance --all-namespaces --format json --output vdr-k8s-compliance.json
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --region us-central1 --output vdr-cloudrun.json
@@ -78,6 +81,17 @@ existing VDR JSON report without rescanning images. Legacy reports without
 `reportSchemaVersion` are accepted; unknown future schemas fail closed. Existing
 vulnerability, exposure, PAIN, and remediation fields are preserved. Retired
 legacy `chainableEntrypoint` fields are not copied into the current schema.
+
+## Namespace selection and exclusion
+
+For live Kubernetes vulnerability scans (`k8s`) and compliance scans (`k8s-compliance`), `vdr` defaults to scanning all namespaces (`--all-namespaces`).
+
+- `--namespace <ns>` / `-n <ns>`: Restricts the scan to one or more specific namespaces. May be repeated (`-n ns1 -n ns2`) or comma-separated (`-n ns1,ns2`). Cannot be combined with `--all-namespaces`.
+- `--exclude-namespace <ns>` (alias `--exclude-namespaces`): Excludes specific namespaces from the scan scope. May be repeated (`--exclude-namespace ns1 --exclude-namespace ns2`) or comma-separated (`--exclude-namespace ns1,ns2`).
+  - Namespace matching is exact (case-sensitive).
+  - Excluded namespaces are completely omitted from the scan scope: workloads, Ingress and Gateway routes, Service exposures, container security posture, pod runtime issue inspection, and private registry pull secrets in those namespaces are not collected or scanned.
+  - In `k8s-compliance` scans, compliance checks for resources in excluded namespaces and controller-index owner enrichment in those namespaces are skipped.
+  - `--exclude-namespace` is valid for `k8s` and `k8s-compliance` sources. It is rejected for `cloudrun`, `ecs`, `image`, and `helm` sources.
 
 ## Kubernetes compliance scanning
 

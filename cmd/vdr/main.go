@@ -235,6 +235,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	k8sOptions := k8s.Options{
 		Namespaces:            cfg.Namespaces,
 		AllNamespaces:         cfg.AllNamespaces,
+		ExcludeNamespaces:     cfg.ExcludeNamespaces,
 		IncludeZeroDaemonSets: cfg.IncludeZeroDaemonSets,
 	}
 	if cfg.SIPConfigMap != "" {
