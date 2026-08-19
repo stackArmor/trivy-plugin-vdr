@@ -1097,3 +1097,94 @@ func TestCollectSkipsCronJobOwnedJobs(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectWithExcludeNamespaces(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod-default", Namespace: "default"},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "nginx:latest"}}},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod-excluded", Namespace: "kube-system"},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "agent", Image: "agent:latest"}}},
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "deploy-default", Namespace: "default"},
+			Spec: appsv1.DeploymentSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "web", Image: "web:latest"}}},
+				},
+			},
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "deploy-excluded", Namespace: "kube-system"},
+			Spec: appsv1.DeploymentSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "coredns", Image: "coredns:latest"}}},
+				},
+			},
+		},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default", Labels: map[string]string{"env": "prod"}}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", Labels: map[string]string{"env": "system"}}},
+	)
+
+	collector := &Collector{Client: client}
+	inv, err := collector.Collect(context.Background(), Options{
+		AllNamespaces:     true,
+		ExcludeNamespaces: []string{"kube-system"},
+	})
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	for _, res := range inv.Resources {
+		if res.Resource.Namespace == "kube-system" {
+			t.Errorf("expected no resources in kube-system, found %s/%s", res.Resource.Kind, res.Resource.Name)
+		}
+	}
+	for _, img := range inv.Images {
+		if img.ImageRef == "coredns:latest" || img.ImageRef == "agent:latest" {
+			t.Errorf("expected excluded images to not be in inventory, found %s", img.ImageRef)
+		}
+	}
+	if _, ok := inv.Namespaces["kube-system"]; ok {
+		t.Errorf("expected namespace metadata for kube-system to be excluded")
+	}
+	if _, ok := inv.Namespaces["default"]; !ok {
+		t.Errorf("expected namespace metadata for default to be present")
+	}
+}
+
+func TestCollectExposureObjectsWithExcludeNamespaces(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "svc-default", Namespace: "default"},
+			Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "svc-excluded", Namespace: "kube-system"},
+			Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		},
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: "ing-default", Namespace: "default"},
+		},
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: "ing-excluded", Namespace: "kube-system"},
+		},
+	)
+	collector := &Collector{Client: client}
+	objects, _, err := collector.CollectExposureObjectsWithWarnings(context.Background(), Options{
+		AllNamespaces:     true,
+		ExcludeNamespaces: []string{"kube-system"},
+	})
+	if err != nil {
+		t.Fatalf("CollectExposureObjectsWithWarnings() error = %v", err)
+	}
+	if len(objects.Services) != 1 || objects.Services[0].Namespace != "default" {
+		t.Errorf("expected 1 service in default, got %v", objects.Services)
+	}
+	if len(objects.Ingresses) != 1 || objects.Ingresses[0].Namespace != "default" {
+		t.Errorf("expected 1 ingress in default, got %v", objects.Ingresses)
+	}
+}
+

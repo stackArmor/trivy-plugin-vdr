@@ -20,6 +20,7 @@ import (
 
 type Options struct {
 	Namespaces            []string
+	ExcludeNamespaces     []string
 	AllNamespaces         bool
 	IncludeZeroDaemonSets bool
 	// ClusterDefaultsOverride supplies the VDR SIP ConfigMap data from a local
@@ -149,29 +150,29 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 	}
 
 	for _, namespace := range namespaces {
-		if err := c.collectPods(ctx, namespace, &builder); err != nil {
+		if err := c.collectPods(ctx, namespace, opts, &builder); err != nil {
 			return nil, err
 		}
-		if err := c.collectDeployments(ctx, namespace, &builder); err != nil {
+		if err := c.collectDeployments(ctx, namespace, opts, &builder); err != nil {
 			return nil, err
 		}
-		if err := c.collectStatefulSets(ctx, namespace, &builder); err != nil {
+		if err := c.collectStatefulSets(ctx, namespace, opts, &builder); err != nil {
 			return nil, err
 		}
-		if err := c.collectDaemonSets(ctx, namespace, opts.IncludeZeroDaemonSets, &builder); err != nil {
+		if err := c.collectDaemonSets(ctx, namespace, opts, &builder); err != nil {
 			return nil, err
 		}
-		if err := c.collectJobs(ctx, namespace, &builder); err != nil {
+		if err := c.collectJobs(ctx, namespace, opts, &builder); err != nil {
 			return nil, err
 		}
-		if err := c.collectCronJobs(ctx, namespace, &builder); err != nil {
+		if err := c.collectCronJobs(ctx, namespace, opts, &builder); err != nil {
 			return nil, err
 		}
 		// Namespace-scoped posture facts (NetworkPolicy selection, PDBs) are captured
 		// read-only and best-effort: RBAC/API failures leave the fields unset rather
 		// than failing the scan.
-		c.collectNetworkPolicyPosture(ctx, namespace, &builder)
-		c.collectPodDisruptionBudgetPosture(ctx, namespace, &builder)
+		c.collectNetworkPolicyPosture(ctx, namespace, opts, &builder)
+		c.collectPodDisruptionBudgetPosture(ctx, namespace, opts, &builder)
 	}
 
 	// Namespace-level FedRAMP metadata and cluster-wide defaults are best-effort:
@@ -198,12 +199,18 @@ func (c *Collector) collectNamespaceMetadata(ctx context.Context, opts Options, 
 			return
 		}
 		for _, ns := range list.Items {
+			if isExcludedNamespace(ns.Name, opts.ExcludeNamespaces) {
+				continue
+			}
 			if len(ns.Labels) > 0 {
 				labels[ns.Name] = ns.Labels
 			}
 		}
 	} else {
 		for _, name := range opts.Namespaces {
+			if isExcludedNamespace(name, opts.ExcludeNamespaces) {
+				continue
+			}
 			ns, err := c.Client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 			if err != nil {
 				continue
@@ -245,6 +252,18 @@ func (c *Collector) collectClusterDefaults(ctx context.Context, opts Options, bu
 	builder.inventory.ClusterDefaults = cm.Data
 }
 
+func isExcludedNamespace(namespace string, excluded []string) bool {
+	if len(excluded) == 0 || namespace == "" {
+		return false
+	}
+	for _, ex := range excluded {
+		if namespace == ex {
+			return true
+		}
+	}
+	return false
+}
+
 func namespacesForCollection(opts Options) ([]string, error) {
 	if len(opts.Namespaces) > 0 && opts.AllNamespaces {
 		return nil, errors.New("cannot set namespaces with all-namespaces")
@@ -261,6 +280,9 @@ func namespacesForCollection(opts Options) ([]string, error) {
 	for _, namespace := range opts.Namespaces {
 		if strings.TrimSpace(namespace) == "" {
 			return nil, errors.New("namespace entries cannot be empty")
+		}
+		if isExcludedNamespace(namespace, opts.ExcludeNamespaces) {
+			continue
 		}
 		if _, ok := seen[namespace]; ok {
 			continue
@@ -282,13 +304,16 @@ var collectedControllerKinds = map[string]bool{
 	"Job":         true,
 }
 
-func (c *Collector) collectPods(ctx context.Context, namespace string, builder *inventoryBuilder) error {
+func (c *Collector) collectPods(ctx context.Context, namespace string, opts Options, builder *inventoryBuilder) error {
 	pods, err := c.Client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 	seenStaticPods := map[string]bool{}
 	for _, pod := range pods.Items {
+		if isExcludedNamespace(pod.Namespace, opts.ExcludeNamespaces) {
+			continue
+		}
 		// Only inventory standalone pods. Pods managed by a controller we already
 		// collect (Deployment/ReplicaSet, StatefulSet, DaemonSet, Job/CronJob) are
 		// covered by that controller's template; pods owned by other controllers
@@ -339,37 +364,46 @@ func ownedByCollectedController(pod corev1.Pod) bool {
 	return false
 }
 
-func (c *Collector) collectDeployments(ctx context.Context, namespace string, builder *inventoryBuilder) error {
+func (c *Collector) collectDeployments(ctx context.Context, namespace string, opts Options, builder *inventoryBuilder) error {
 	deployments, err := c.Client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 	for _, deployment := range deployments.Items {
+		if isExcludedNamespace(deployment.Namespace, opts.ExcludeNamespaces) {
+			continue
+		}
 		ref := workloadRef("apps/v1", "Deployment", deployment.Namespace, deployment.Name)
 		builder.addResource(ref, deployment.Spec.Template.Spec, deployment.Spec.Template.Annotations, deployment.Labels, deployment.Spec.Template.Labels, deployment.Spec.Replicas)
 	}
 	return nil
 }
 
-func (c *Collector) collectStatefulSets(ctx context.Context, namespace string, builder *inventoryBuilder) error {
+func (c *Collector) collectStatefulSets(ctx context.Context, namespace string, opts Options, builder *inventoryBuilder) error {
 	statefulSets, err := c.Client.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 	for _, statefulSet := range statefulSets.Items {
+		if isExcludedNamespace(statefulSet.Namespace, opts.ExcludeNamespaces) {
+			continue
+		}
 		ref := workloadRef("apps/v1", "StatefulSet", statefulSet.Namespace, statefulSet.Name)
 		builder.addResource(ref, statefulSet.Spec.Template.Spec, statefulSet.Spec.Template.Annotations, statefulSet.Labels, statefulSet.Spec.Template.Labels, statefulSet.Spec.Replicas)
 	}
 	return nil
 }
 
-func (c *Collector) collectDaemonSets(ctx context.Context, namespace string, includeZeroDesired bool, builder *inventoryBuilder) error {
+func (c *Collector) collectDaemonSets(ctx context.Context, namespace string, opts Options, builder *inventoryBuilder) error {
 	daemonSets, err := c.Client.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 	for _, daemonSet := range daemonSets.Items {
-		if daemonSet.Status.DesiredNumberScheduled == 0 && !includeZeroDesired {
+		if isExcludedNamespace(daemonSet.Namespace, opts.ExcludeNamespaces) {
+			continue
+		}
+		if daemonSet.Status.DesiredNumberScheduled == 0 && !opts.IncludeZeroDaemonSets {
 			continue
 		}
 		ref := workloadRef("apps/v1", "DaemonSet", daemonSet.Namespace, daemonSet.Name)
@@ -378,12 +412,15 @@ func (c *Collector) collectDaemonSets(ctx context.Context, namespace string, inc
 	return nil
 }
 
-func (c *Collector) collectJobs(ctx context.Context, namespace string, builder *inventoryBuilder) error {
+func (c *Collector) collectJobs(ctx context.Context, namespace string, opts Options, builder *inventoryBuilder) error {
 	jobs, err := c.Client.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 	for _, job := range jobs.Items {
+		if isExcludedNamespace(job.Namespace, opts.ExcludeNamespaces) {
+			continue
+		}
 		// CronJob-spawned Jobs are covered by their CronJob's job template; only
 		// standalone Jobs (Helm hooks, one-shot migrations) are inventoried here.
 		if ownedByCronJob(job) {
@@ -404,12 +441,15 @@ func ownedByCronJob(job batchv1.Job) bool {
 	return false
 }
 
-func (c *Collector) collectCronJobs(ctx context.Context, namespace string, builder *inventoryBuilder) error {
+func (c *Collector) collectCronJobs(ctx context.Context, namespace string, opts Options, builder *inventoryBuilder) error {
 	cronJobs, err := c.Client.BatchV1().CronJobs(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 	for _, cronJob := range cronJobs.Items {
+		if isExcludedNamespace(cronJob.Namespace, opts.ExcludeNamespaces) {
+			continue
+		}
 		ref := workloadRef("batch/v1", "CronJob", cronJob.Namespace, cronJob.Name)
 		builder.addResource(ref, cronJob.Spec.JobTemplate.Spec.Template.Spec, cronJob.Spec.JobTemplate.Spec.Template.Annotations, cronJob.Labels, cronJob.Spec.JobTemplate.Spec.Template.Labels, nil)
 	}

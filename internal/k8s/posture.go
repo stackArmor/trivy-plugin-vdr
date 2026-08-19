@@ -253,13 +253,16 @@ func writableVolumeNames(spec corev1.PodSpec) map[string]bool {
 // collectNetworkPolicyPosture reads NetworkPolicies in the namespace and records
 // the raw egress/ingress selection facts on the workloads each policy selects.
 // Best-effort and fail-open: an RBAC/API error leaves the fields unset.
-func (c *Collector) collectNetworkPolicyPosture(ctx context.Context, namespace string, builder *inventoryBuilder) {
+func (c *Collector) collectNetworkPolicyPosture(ctx context.Context, namespace string, opts Options, builder *inventoryBuilder) {
 	list, err := c.Client.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return
 	}
 	for i := range list.Items {
 		np := &list.Items[i]
+		if isExcludedNamespace(np.Namespace, opts.ExcludeNamespaces) {
+			continue
+		}
 		hasEgress := policyTypesInclude(np.Spec.PolicyTypes, networkingv1.PolicyTypeEgress)
 		hasIngress := policyTypesInclude(np.Spec.PolicyTypes, networkingv1.PolicyTypeIngress)
 		// When policyTypes is omitted the API implies Ingress, and Egress only when
@@ -320,13 +323,16 @@ func (c *Collector) collectNetworkPolicyPosture(ctx context.Context, namespace s
 // collectPodDisruptionBudgetPosture reads PodDisruptionBudgets in the namespace
 // and marks HasPodDisruptionBudget on the workloads each PDB selects. Best-effort
 // and fail-open.
-func (c *Collector) collectPodDisruptionBudgetPosture(ctx context.Context, namespace string, builder *inventoryBuilder) {
+func (c *Collector) collectPodDisruptionBudgetPosture(ctx context.Context, namespace string, opts Options, builder *inventoryBuilder) {
 	list, err := c.Client.PolicyV1().PodDisruptionBudgets(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return
 	}
 	for i := range list.Items {
 		pdb := &list.Items[i]
+		if isExcludedNamespace(pdb.Namespace, opts.ExcludeNamespaces) {
+			continue
+		}
 		if pdb.Spec.Selector == nil {
 			continue
 		}

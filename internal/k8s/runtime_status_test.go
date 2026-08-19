@@ -74,3 +74,32 @@ func TestCollectPodRuntimeIssuesReportsPendingPod(t *testing.T) {
 		t.Fatalf("issue = %#v", issue)
 	}
 }
+
+func TestCollectPodRuntimeIssuesWithExcludeNamespaces(t *testing.T) {
+	podExcluded := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-excluded", Namespace: "kube-system"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "agent",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "failed to pull"},
+					},
+				},
+			},
+		},
+	}
+	client := fake.NewSimpleClientset(podExcluded)
+	collector := &Collector{Client: client}
+	issues, err := collector.CollectPodRuntimeIssues(context.Background(), Options{
+		AllNamespaces:     true,
+		ExcludeNamespaces: []string{"kube-system"},
+	})
+	if err != nil {
+		t.Fatalf("CollectPodRuntimeIssues() error = %v", err)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues due to namespace exclusion, got %d", len(issues))
+	}
+}
+
