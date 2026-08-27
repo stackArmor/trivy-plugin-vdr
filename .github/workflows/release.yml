@@ -309,7 +309,7 @@ jobs:
             const blocks = [
               {
                 type: 'header',
-                text: { type: 'plain_text', text: `VDR ${tag} released`, emoji: true },
+                text: { type: 'plain_text', text: `Trivy VDR plugin ${tag} released`, emoji: true },
               },
               ...chunk(body, 2900).map((part) => ({
                 type: 'section',
@@ -332,7 +332,7 @@ jobs:
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  text: `VDR ${tag} released — ${releaseUrl}`,
+                  text: `Trivy VDR plugin ${tag} released — ${releaseUrl}`,
                   blocks,
                 }),
               });
