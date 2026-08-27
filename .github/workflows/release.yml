@@ -113,3 +113,234 @@ jobs:
           set -euo pipefail
           gh release create "${RELEASE_TAG}" dist/*.tar.gz --generate-notes \
             || gh release upload "${RELEASE_TAG}" dist/*.tar.gz --clobber
+
+  notify-slack:
+    name: Notify Slack
+    needs: release
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check Slack webhook secret
+        id: slack-secret
+        env:
+          SLACK_RELEASE_WEBHOOK_URL: ${{ secrets.SLACK_RELEASE_WEBHOOK_URL }}
+        run: |
+          if [ -z "${SLACK_RELEASE_WEBHOOK_URL}" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SLACK_RELEASE_WEBHOOK_URL is not configured; skipping Slack release notification."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authenticate to GCP for Vertex AI
+        if: steps.slack-secret.outputs.enabled == 'true'
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          project_id: armoryd2v-gss-prod
+          workload_identity_provider: "projects/50525838368/locations/global/workloadIdentityPools/armoryd2v-wl-pool/providers/armoryd2v-wl-pool-github"
+
+      - name: Get Vertex AI access token
+        if: steps.slack-secret.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          TOKEN="$(gcloud auth print-access-token)"
+          echo "::add-mask::${TOKEN}"
+          echo "VERTEX_TOKEN=${TOKEN}" >> "$GITHUB_ENV"
+
+      - name: Collect release context
+        if: steps.slack-secret.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
+          TAG_COMMIT="$(git rev-list -n1 "${RELEASE_TAG}")"
+          PREVIOUS_TAG="$(git describe --tags --abbrev=0 "${TAG_COMMIT}^" --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+
+          {
+            echo "# VDR Release Context"
+            echo
+            echo "Current tag: ${RELEASE_TAG}"
+            echo "Previous tag: ${PREVIOUS_TAG:-none}"
+            echo "Release URL: ${RELEASE_URL}"
+            echo
+            echo "## GitHub Release Notes"
+            gh release view "${RELEASE_TAG}" --json body --jq '.body // "(release notes unavailable)"'
+            echo
+            echo "## Commit Subjects"
+            if [ -n "${PREVIOUS_TAG}" ]; then
+              git log --no-merges --pretty=format:'- %s (%h)' "${PREVIOUS_TAG}..${RELEASE_TAG}" || true
+            else
+              git log --no-merges --pretty=format:'- %s (%h)' "${RELEASE_TAG}" || true
+            fi
+            echo
+            echo
+            echo "## Changed Files"
+            if [ -n "${PREVIOUS_TAG}" ]; then
+              git diff --name-status "${PREVIOUS_TAG}..${RELEASE_TAG}" > changed_files.txt
+            else
+              git show --name-status --format= "${RELEASE_TAG}" > changed_files.txt
+            fi
+            head -200 changed_files.txt
+          } > release_context.md
+
+          echo "RELEASE_URL=${RELEASE_URL}" >> "$GITHUB_ENV"
+          echo "Captured $(wc -c < release_context.md) bytes of release context"
+
+      - name: Summarize release and post to Slack
+        if: steps.slack-secret.outputs.enabled == 'true'
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        env:
+          VERTEX_TOKEN: ${{ env.VERTEX_TOKEN }}
+          SLACK_RELEASE_WEBHOOK_URL: ${{ secrets.SLACK_RELEASE_WEBHOOK_URL }}
+          RELEASE_URL: ${{ env.RELEASE_URL }}
+        with:
+          script: |
+            const fs = require('fs');
+
+            const webhookUrl = process.env.SLACK_RELEASE_WEBHOOK_URL;
+            if (!webhookUrl) {
+              core.warning('SLACK_RELEASE_WEBHOOK_URL is not configured; skipping Slack release notification.');
+              return;
+            }
+
+            const releaseContext = fs.readFileSync('release_context.md', 'utf8').slice(0, 30000);
+            const tag = process.env.RELEASE_TAG;
+            const releaseUrl = process.env.RELEASE_URL || `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/tag/${tag}`;
+
+            const systemPrompt =
+              'You summarize internal software release notes for Slack. ' +
+              'Use only the facts provided by the workflow context. Do not invent changes. ' +
+              'You write Slack "mrkdwn", which is NOT GitHub Markdown.';
+
+            const userPrompt =
+              'Summarize this trivy-plugin-vdr (VDR) release for an internal Slack announcement.\n\n' +
+              'Slack mrkdwn formatting rules (follow exactly):\n' +
+              '- Never use "#", "##" or "###" headings. Section labels are bold lines instead.\n' +
+              '- Bold is a single asterisk: *Highlights* (never **Highlights**).\n' +
+              '- Italic is a single underscore: _text_.\n' +
+              '- Bullets start with the literal character "•" followed by a space.\n' +
+              '- Inline code uses single backticks; never use fenced code blocks.\n' +
+              '- Links use <https://example.com|label>, never [label](url).\n\n' +
+              'Content requirements:\n' +
+              '- Open with a one-sentence plain-text summary of the release, no label.\n' +
+              '- Then a *Highlights* bold line followed by 2-5 bullets of user-facing changes.\n' +
+              '- Add a *Maintenance* bold line with bullets only if CI/dependency/packaging changes are material.\n' +
+              '- Do not include install or upgrade commands.\n' +
+              '- Do not include a release link or the version number heading; the workflow adds those.\n' +
+              '- Keep the summary under 1800 characters.\n\n' +
+              'Release context:\n---\n' + releaseContext + '\n---';
+
+            let summary;
+            try {
+              const resp = await fetch(
+                'https://aiplatform.googleapis.com/v1/projects/armoryd2v-gss-prod/locations/global/publishers/google/models/gemini-3.5-flash:generateContent',
+                {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': 'Bearer ' + process.env.VERTEX_TOKEN,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    systemInstruction: { parts: [{ text: systemPrompt }] },
+                    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+                    generationConfig: {
+                      temperature: 0.2,
+                      maxOutputTokens: 2048,
+                    },
+                  }),
+                }
+              );
+
+              if (!resp.ok) {
+                const errText = await resp.text();
+                core.warning('Vertex AI error ' + resp.status + ': ' + errText);
+                return;
+              }
+
+              const data = await resp.json();
+              summary = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+            } catch (err) {
+              core.warning('Vertex AI request failed: ' + err.message);
+              return;
+            }
+
+            if (!summary) {
+              core.warning('Empty response from Vertex AI; skipping Slack release notification.');
+              return;
+            }
+
+            // The model still leaks GitHub Markdown occasionally; Slack mrkdwn renders
+            // headings, ** bold and [](url) links literally, so rewrite them before posting.
+            const toMrkdwn = (text) => text
+              .replace(/^```[a-zA-Z0-9]*\n?/gm, '')
+              .replace(/^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*$/gm, '*$1*')
+              .replace(/\*\*(.+?)\*\*/g, '*$1*')
+              .replace(/__(.+?)__/g, '_$1_')
+              .replace(/^(\s*)[-*+]\s+/gm, '$1• ')
+              .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<$2|$1>')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+
+            // section blocks reject text over 3000 characters.
+            const chunk = (text, size) => {
+              const parts = [];
+              let rest = text;
+              while (rest.length > size) {
+                const cut = rest.lastIndexOf('\n', size);
+                const at = cut > size / 2 ? cut : size;
+                parts.push(rest.slice(0, at).trim());
+                rest = rest.slice(at).trim();
+              }
+              if (rest) parts.push(rest);
+              return parts;
+            };
+
+            const body = toMrkdwn(summary);
+            const repo = process.env.GITHUB_REPOSITORY;
+            const blocks = [
+              {
+                type: 'header',
+                text: { type: 'plain_text', text: `VDR ${tag} released`, emoji: true },
+              },
+              ...chunk(body, 2900).map((part) => ({
+                type: 'section',
+                text: { type: 'mrkdwn', text: part },
+              })),
+              { type: 'divider' },
+              {
+                type: 'context',
+                elements: [
+                  {
+                    type: 'mrkdwn',
+                    text: `<${releaseUrl}|Release notes>  •  <https://github.com/${repo}|${repo}>  •  \`${tag}\``,
+                  },
+                ],
+              },
+            ];
+
+            try {
+              const resp = await fetch(webhookUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  text: `VDR ${tag} released — ${releaseUrl}`,
+                  blocks,
+                }),
+              });
+
+              if (!resp.ok) {
+                const errText = await resp.text();
+                core.warning('Slack webhook error ' + resp.status + ': ' + errText);
+              }
+            } catch (err) {
+              core.warning('Slack webhook request failed: ' + err.message);
+            }
