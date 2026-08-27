@@ -46,6 +46,9 @@ type Options struct {
 	// ChainCatalog overrides the built-in generated CAPEC/ATT&CK catalog. Tests
 	// and offline evaluators can supply a pinned fixture catalog.
 	ChainCatalog *chaincatalog.Catalog
+	// FailedImages lists the image refs Trivy failed to scan, for every scan
+	// type. Feeds Summary.ImageScans.
+	FailedImages []string
 }
 
 func Build(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, options Options) model.Report {
@@ -110,6 +113,7 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	}
 	transitions := chainanalysis.FindReportTransitions(active, resourceReports, catalog)
 	summary := buildSummary(inventory, active, resourceReports)
+	summary.ImageScans = buildImageScanSummary(summary.Images, options.FailedImages)
 	chainanalysis.AddTransitionSummary(summary.ChainTaxonomy, transitions)
 	report := model.Report{
 		ReportSchemaVersion: ReportSchemaVersion,
@@ -645,6 +649,30 @@ func buildSummary(inventory *model.Inventory, findings []model.Finding, resource
 		}
 	}
 	return summary
+}
+
+// buildImageScanSummary reports Trivy's scan outcome across the inventory's
+// images. It returns nil when there is nothing to report (no images and no
+// failures), so an image-less scan (e.g. classification-only Kubernetes
+// compliance runs) does not emit a misleading zero-image summary.
+func buildImageScanSummary(total int, failedImages []string) *model.ImageScanSummary {
+	if total == 0 && len(failedImages) == 0 {
+		return nil
+	}
+	failed := append([]string(nil), failedImages...)
+	sort.Strings(failed)
+	succeeded := total - len(failed)
+	var percent float64
+	if total > 0 {
+		percent = math.Round(float64(succeeded)/float64(total)*10000) / 100
+	}
+	return &model.ImageScanSummary{
+		Total:            total,
+		Succeeded:        succeeded,
+		Failed:           len(failed),
+		SucceededPercent: percent,
+		FailedImages:     failed,
+	}
 }
 
 func findingsWithBestExposure(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Finding {

@@ -616,6 +616,19 @@ type Summary struct {
 	ChainTaxonomy           *ChainTaxonomySummary `json:"chainTaxonomy,omitempty"`
 	BySeverity              map[string]int        `json:"bySeverity,omitempty"`
 	InternetAccessible      int                   `json:"internetAccessible,omitempty"`
+	// ImageScans reports how many of the inventory's images Trivy successfully
+	// scanned, for every scan type (k8s, ECS, Cloud Run, Helm, standalone images).
+	ImageScans *ImageScanSummary `json:"imageScans,omitempty"`
+}
+
+// ImageScanSummary reports the outcome of scanning the inventory's images with
+// Trivy: how many succeeded, how many failed, and which images failed.
+type ImageScanSummary struct {
+	Total            int      `json:"total"`
+	Succeeded        int      `json:"succeeded"`
+	Failed           int      `json:"failed"`
+	SucceededPercent float64  `json:"succeededPercent"`
+	FailedImages     []string `json:"failedImages,omitempty"`
 }
 
 // ChainTaxonomySummary reports coverage of the offline taxonomy projection over

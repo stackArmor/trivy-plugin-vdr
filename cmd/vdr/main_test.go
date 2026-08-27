@@ -302,7 +302,7 @@ func TestReportInventoryIncludesEnrichmentWarnings(t *testing.T) {
 		Format: config.FormatJSON,
 	}
 	var output bytes.Buffer
-	err := reportInventory(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output, inventory, findings, warnings, nil)
+	err := reportInventory(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output, inventory, findings, warnings, nil, nil)
 	if err != nil {
 		t.Fatalf("reportInventory returned error: %v", err)
 	}

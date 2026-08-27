@@ -198,7 +198,7 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures, nil)
 	}
 
 	var dockerConfigDir string
@@ -301,7 +301,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures, nil)
 	}
 
 	var dockerConfigDir string
@@ -381,7 +381,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures, nil)
 	}
 
 	var dockerConfigDir string
@@ -453,7 +453,7 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
-		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures)
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures, nil)
 	}
 
 	var dockerConfigDir string
@@ -564,7 +564,8 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 	}
 	// Per-image failures are already logged inline as they occur (with full
 	// detail) by the scanner; here we only emit a concise aggregated summary.
-	scanFailures := imageFailureCount(scanWarnings)
+	failedImages := failedImageRefs(scanWarnings)
+	scanFailures := len(failedImages)
 	if scanFailures > 0 {
 		logger.Warn("%d of %d images failed to scan:", scanFailures, len(inventory.Images))
 		for _, w := range scanWarnings {
@@ -598,7 +599,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 
 	warnings = append(warnings, scannerWarnings(scanWarnings)...)
 
-	if err := reportInventory(ctx, cfg, logger, stdout, inventory, findings, warnings, exposures); err != nil {
+	if err := reportInventory(ctx, cfg, logger, stdout, inventory, findings, warnings, exposures, failedImages); err != nil {
 		return err
 	}
 
@@ -610,7 +611,7 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 	return nil
 }
 
-func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, findings []model.Finding, warnings []string, exposures map[model.ResourceRef]model.Exposure) error {
+func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer, inventory *model.Inventory, findings []model.Finding, warnings []string, exposures map[model.ResourceRef]model.Exposure, failedImages []string) error {
 	if cfg.Dedupe {
 		logger.Info("duplicate findings are merged by default since v2.0.0; pass --no-dedupe for the previous behavior")
 	}
@@ -667,6 +668,7 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 		SuppressEnrichments:  cfg.ScanReachabilityOnly,
 		IncludeChainTaxonomy: cfg.IncludeChainTaxonomy,
 		Dedupe:               cfg.Dedupe,
+		FailedImages:         failedImages,
 	})
 	if err := writePrimaryReport(stdout, cfg.Output, cfg.Format, primary); err != nil {
 		return err
@@ -684,6 +686,7 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 			SuppressEnrichments:  cfg.ScanReachabilityOnly,
 			IncludeChainTaxonomy: cfg.IncludeChainTaxonomy,
 			Dedupe:               cfg.Dedupe,
+			FailedImages:         failedImages,
 		})
 		if err := writeHTMLReport(cfg.HTMLOutput, cfg.HTMLTemplate, htmlReport); err != nil {
 			return err
@@ -781,16 +784,16 @@ func warningText(warning scanner.Warning) string {
 	return fmt.Sprintf("%s: %s", warning.ImageRef, warning.Message)
 }
 
-// imageFailureCount returns the number of warnings that represent a failed image
-// scan (those carrying an image reference).
-func imageFailureCount(warnings []scanner.Warning) int {
-	n := 0
+// failedImageRefs returns the image refs of warnings that represent a failed
+// image scan (those carrying an image reference).
+func failedImageRefs(warnings []scanner.Warning) []string {
+	var refs []string
 	for _, warning := range warnings {
 		if warning.ImageRef != "" {
-			n++
+			refs = append(refs, warning.ImageRef)
 		}
 	}
-	return n
+	return refs
 }
 
 // inventoryImageRefs returns the de-duplicated image references in the inventory.

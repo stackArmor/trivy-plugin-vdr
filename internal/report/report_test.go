@@ -654,6 +654,40 @@ func TestBuildSummaryCountsFindingsWithSpecificCWE(t *testing.T) {
 	}
 }
 
+func TestBuildSummaryIncludesImageScanFailures(t *testing.T) {
+	inventory := sampleInventory()
+	inventory.Images = append(inventory.Images, model.ImageInventory{ImageRef: "example/broken:v1"})
+	findings := []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}
+
+	report := Build(inventory, findings, nil, Options{
+		GeneratedAt:  fixedTime(),
+		FailedImages: []string{"example/broken:v1"},
+	})
+
+	got := report.Summary.ImageScans
+	if got == nil {
+		t.Fatalf("Summary.ImageScans = nil, want populated summary")
+	}
+	want := model.ImageScanSummary{
+		Total:            2,
+		Failed:           1,
+		Succeeded:        1,
+		SucceededPercent: 50,
+		FailedImages:     []string{"example/broken:v1"},
+	}
+	if !reflect.DeepEqual(*got, want) {
+		t.Fatalf("Summary.ImageScans = %#v, want %#v", *got, want)
+	}
+}
+
+func TestBuildSummaryOmitsImageScanSummaryWithoutImages(t *testing.T) {
+	report := Build(nil, nil, nil, Options{GeneratedAt: fixedTime()})
+
+	if report.Summary.ImageScans != nil {
+		t.Fatalf("Summary.ImageScans = %#v, want nil for empty inventory", report.Summary.ImageScans)
+	}
+}
+
 func TestRenderClassificationOnlyTableOmitsScoringAndEnrichmentColumns(t *testing.T) {
 	classification := &model.AssetClassification{Class: "B", SecurityImpactProfile: "dev-test", SecurityImpactProfileSource: "label"}
 	report := model.Report{
