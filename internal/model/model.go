@@ -624,11 +624,21 @@ type Summary struct {
 // ImageScanSummary reports the outcome of scanning the inventory's images with
 // Trivy: how many succeeded, how many failed, and which images failed.
 type ImageScanSummary struct {
-	Total            int      `json:"total"`
-	Succeeded        int      `json:"succeeded"`
-	Failed           int      `json:"failed"`
-	SucceededPercent float64  `json:"succeededPercent"`
-	FailedImages     []string `json:"failedImages,omitempty"`
+	Total            int               `json:"total"`
+	Succeeded        int               `json:"succeeded"`
+	Failed           int               `json:"failed"`
+	SucceededPercent float64           `json:"succeededPercent"`
+	FailedImages     []FailedImageScan `json:"failedImages,omitempty"`
+}
+
+// FailedImageScan identifies an image Trivy failed to scan and the resources
+// that reference it, so a failure can be traced back to affected workloads.
+type FailedImageScan struct {
+	ImageRef string `json:"imageRef"`
+	// AffectedResources renders each resource as
+	// "namespace.resourceType.name.containerType.name" (or the project/region
+	// scope in place of namespace for non-Kubernetes resources).
+	AffectedResources []string `json:"affectedResources,omitempty"`
 }
 
 // ChainTaxonomySummary reports coverage of the offline taxonomy projection over

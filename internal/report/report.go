@@ -113,7 +113,7 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	}
 	transitions := chainanalysis.FindReportTransitions(active, resourceReports, catalog)
 	summary := buildSummary(inventory, active, resourceReports)
-	summary.ImageScans = buildImageScanSummary(summary.Images, options.FailedImages)
+	summary.ImageScans = buildImageScanSummary(inventory, summary.Images, options.FailedImages)
 	chainanalysis.AddTransitionSummary(summary.ChainTaxonomy, transitions)
 	report := model.Report{
 		ReportSchemaVersion: ReportSchemaVersion,
@@ -655,13 +655,21 @@ func buildSummary(inventory *model.Inventory, findings []model.Finding, resource
 // images. It returns nil when there is nothing to report (no images and no
 // failures), so an image-less scan (e.g. classification-only Kubernetes
 // compliance runs) does not emit a misleading zero-image summary.
-func buildImageScanSummary(total int, failedImages []string) *model.ImageScanSummary {
+func buildImageScanSummary(inventory *model.Inventory, total int, failedImages []string) *model.ImageScanSummary {
 	if total == 0 && len(failedImages) == 0 {
 		return nil
 	}
-	failed := append([]string(nil), failedImages...)
-	sort.Strings(failed)
-	succeeded := total - len(failed)
+	refs := append([]string(nil), failedImages...)
+	sort.Strings(refs)
+	imageResources := indexImageResources(inventory)
+	failed := make([]model.FailedImageScan, 0, len(refs))
+	for _, ref := range refs {
+		failed = append(failed, model.FailedImageScan{
+			ImageRef:          ref,
+			AffectedResources: dottedResourceLabels(imageResources[ref]),
+		})
+	}
+	succeeded := total - len(refs)
 	var percent float64
 	if total > 0 {
 		percent = math.Round(float64(succeeded)/float64(total)*10000) / 100
@@ -669,10 +677,42 @@ func buildImageScanSummary(total int, failedImages []string) *model.ImageScanSum
 	return &model.ImageScanSummary{
 		Total:            total,
 		Succeeded:        succeeded,
-		Failed:           len(failed),
+		Failed:           len(refs),
 		SucceededPercent: percent,
 		FailedImages:     failed,
 	}
+}
+
+// indexImageResources maps each inventory image ref to the resources that
+// reference it.
+func indexImageResources(inventory *model.Inventory) map[string][]model.ResourceRef {
+	index := map[string][]model.ResourceRef{}
+	if inventory == nil {
+		return index
+	}
+	for _, image := range inventory.Images {
+		index[image.ImageRef] = image.Resources
+	}
+	return index
+}
+
+// dottedResourceLabels renders each resource as
+// "namespace.resourceType.name.containerType.name", substituting the
+// project/region scope for namespace on non-Kubernetes resources.
+func dottedResourceLabels(refs []model.ResourceRef) []string {
+	if len(refs) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		parts := []string{resourceScope(ref), ref.Kind, ref.Name}
+		if ref.ContainerType != "" || ref.ContainerName != "" {
+			parts = append(parts, ref.ContainerType, ref.ContainerName)
+		}
+		values = append(values, strings.Join(parts, "."))
+	}
+	sort.Strings(values)
+	return values
 }
 
 func findingsWithBestExposure(findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, sc *scoring.Config, idx, nsLabels map[string]map[string]string, classificationOnly bool) []model.Finding {

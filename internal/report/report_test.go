@@ -656,7 +656,11 @@ func TestBuildSummaryCountsFindingsWithSpecificCWE(t *testing.T) {
 
 func TestBuildSummaryIncludesImageScanFailures(t *testing.T) {
 	inventory := sampleInventory()
-	inventory.Images = append(inventory.Images, model.ImageInventory{ImageRef: "example/broken:v1"})
+	brokenResource := model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api", ContainerName: "api", ContainerType: "container"}
+	inventory.Images = append(inventory.Images, model.ImageInventory{
+		ImageRef:  "example/broken:v1",
+		Resources: []model.ResourceRef{brokenResource},
+	})
 	findings := []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}
 
 	report := Build(inventory, findings, nil, Options{
@@ -673,7 +677,10 @@ func TestBuildSummaryIncludesImageScanFailures(t *testing.T) {
 		Failed:           1,
 		Succeeded:        1,
 		SucceededPercent: 50,
-		FailedImages:     []string{"example/broken:v1"},
+		FailedImages: []model.FailedImageScan{{
+			ImageRef:          "example/broken:v1",
+			AffectedResources: []string{"default.Deployment.api.container.api"},
+		}},
 	}
 	if !reflect.DeepEqual(*got, want) {
 		t.Fatalf("Summary.ImageScans = %#v, want %#v", *got, want)
