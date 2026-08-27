@@ -209,7 +209,48 @@ func marshalDockerConfig(base map[string]json.RawMessage, auths map[string]Docke
 		return nil, err
 	}
 	out["auths"] = authData
+	if err := dropResolvedCredHelpers(out, auths); err != nil {
+		return nil, err
+	}
 	return json.MarshalIndent(out, "", "  ")
+}
+
+// dropResolvedCredHelpers removes ambient credHelpers entries for hosts we
+// have a resolved static credential for. Docker (and the go-containerregistry
+// keychain Trivy uses) route a host through its credHelpers entry instead of a
+// static auths entry when both are present, so an unfiltered ambient
+// `gcloud auth configure-docker` entry would silently discard the token this
+// package just resolved and make Trivy re-invoke the credential helper once
+// per image pull instead of reusing it.
+func dropResolvedCredHelpers(out map[string]json.RawMessage, auths map[string]DockerAuth) error {
+	raw, ok := out["credHelpers"]
+	if !ok {
+		return nil
+	}
+	var helpers map[string]string
+	if err := json.Unmarshal(raw, &helpers); err != nil {
+		return err
+	}
+	changed := false
+	for host := range auths {
+		if _, exists := helpers[host]; exists {
+			delete(helpers, host)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if len(helpers) == 0 {
+		delete(out, "credHelpers")
+		return nil
+	}
+	data, err := json.Marshal(helpers)
+	if err != nil {
+		return err
+	}
+	out["credHelpers"] = data
+	return nil
 }
 
 // runToken runs a command expected to print a credential token to stdout and

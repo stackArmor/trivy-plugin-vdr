@@ -213,6 +213,73 @@ func TestBuildMergesAmbientDockerConfigWithGeneratedCredentials(t *testing.T) {
 	}
 }
 
+// TestBuildStripsConflictingCredHelperForResolvedHost guards against a real
+// incident: Docker (and the go-containerregistry keychain Trivy uses) route a
+// registry through an ambient credHelpers[host] entry INSTEAD OF a static
+// auths[host] entry when both are present for the same host. An ambient
+// `gcloud auth configure-docker` leaves exactly that credHelpers entry for GAR
+// hosts, so carrying it through unchanged silently discards the single
+// pre-fetched gcloud token this package exists to provide and makes Trivy
+// re-invoke `docker-credential-gcloud` per image pull instead -- which is what
+// crashed under `--parallel-scans` concurrency (gRPC/gcloud SDK abort,
+// thd.h:170 "Check failed: state_ == FAILED", exit 134).
+func TestBuildStripsConflictingCredHelperForResolvedHost(t *testing.T) {
+	ambientDir := t.TempDir()
+	data, err := json.Marshal(map[string]any{
+		"auths": map[string]DockerAuth{
+			"https://index.docker.io/v1/": newAuth("hub-user", "hub-pass"),
+		},
+		"credHelpers": map[string]string{
+			"gcr.io":     "gcloud",
+			"other.host": "some-other-helper",
+		},
+		"credsStore": "desktop",
+	})
+	if err != nil {
+		t.Fatalf("marshal ambient docker config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ambientDir, "config.json"), data, 0o600); err != nil {
+		t.Fatalf("write ambient docker config: %v", err)
+	}
+	t.Setenv("DOCKER_CONFIG", ambientDir)
+
+	runner := &fakeRunner{outputs: map[string]string{"gcloud": "gar-token"}}
+	res, err := Build(context.Background(),
+		[]string{"gcr.io/p/a:1"},
+		nil,
+		Options{EnableGcloud: true, Runner: runner},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	defer res.Cleanup()
+
+	auths := readAuths(t, res.Dir)
+	if auths["gcr.io"].Password != "gar-token" {
+		t.Fatalf("missing generated GAR auth: %+v", auths["gcr.io"])
+	}
+
+	raw := readRawDockerConfig(t, res.Dir)
+	var credHelpers map[string]string
+	if helpersRaw, ok := raw["credHelpers"]; ok {
+		if err := json.Unmarshal(helpersRaw, &credHelpers); err != nil {
+			t.Fatalf("unmarshal credHelpers: %v", err)
+		}
+	}
+	if _, stillPresent := credHelpers["gcr.io"]; stillPresent {
+		t.Fatalf("credHelpers still shadows resolved host gcr.io: %v", credHelpers)
+	}
+	// Unrelated hosts keep their ambient credential helper.
+	if credHelpers["other.host"] != "some-other-helper" {
+		t.Fatalf("credHelpers dropped unrelated host: %v", credHelpers)
+	}
+	// The global credsStore fallback for hosts VDR doesn't resolve is untouched.
+	if string(raw["credsStore"]) != `"desktop"` {
+		t.Fatalf("credsStore = %s, want desktop", raw["credsStore"])
+	}
+}
+
 func TestBuildGcloudFailureWarnsNoToken(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
