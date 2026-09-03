@@ -198,11 +198,19 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 	if r.useOCIVEX(image) {
 		args = append(args, "--vex", "oci", "--show-suppressed")
 	}
+	seenDirs := make(map[string]bool)
 	for _, dir := range options.SkipDirs {
 		if dir == "" {
 			continue
 		}
-		args = append(args, "--skip-dir", dir)
+		if !seenDirs[dir] {
+			seenDirs[dir] = true
+			args = append(args, "--skip-dirs", dir)
+		}
+		if trimmed := strings.TrimPrefix(dir, "/"); trimmed != "" && !seenDirs[trimmed] {
+			seenDirs[trimmed] = true
+			args = append(args, "--skip-dirs", trimmed)
+		}
 	}
 	args = append(args, "--timeout", timeout.String(), image)
 	stdout, stderr, err := r.imageCommandRunner(image).Run(ctx, r.binary(), args...)

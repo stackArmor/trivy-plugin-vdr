@@ -191,7 +191,33 @@ func TestCollectAddsGoogleBaseImageUpdateSkipDirs(t *testing.T) {
 	if ref.DisplayID != "gcp-cloud-run://p/us-east4/function/fn" {
 		t.Fatalf("function DisplayID = %q", ref.DisplayID)
 	}
-	want := []string{"/cnb", "layers/sbom"}
+	want := []string{"/cnb", "cnb", "layers/sbom"}
+	if !reflect.DeepEqual(got.Images[0].SkipDirs, want) {
+		t.Fatalf("SkipDirs = %#v, want %#v", got.Images[0].SkipDirs, want)
+	}
+}
+
+func TestCollectAddsSkipDirsForCloudFunctionWithoutRuntimeClassName(t *testing.T) {
+	client := &fakeInventoryClient{
+		services: map[string][]Service{
+			"us-east4": {{
+				Project:    "p",
+				Region:     "us-east4",
+				Name:       "fn-no-runtime-class",
+				Labels:     map[string]string{"goog-managed-by": "cloudfunctions"},
+				Containers: []Container{{Name: "app", Image: "example.com/fn:1"}},
+			}},
+		},
+	}
+
+	got, err := (Collector{Client: client}).Collect(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}})
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if len(got.Images) != 1 {
+		t.Fatalf("images = %#v, want one image", got.Images)
+	}
+	want := []string{"/cnb", "cnb", "layers/sbom"}
 	if !reflect.DeepEqual(got.Images[0].SkipDirs, want) {
 		t.Fatalf("SkipDirs = %#v, want %#v", got.Images[0].SkipDirs, want)
 	}

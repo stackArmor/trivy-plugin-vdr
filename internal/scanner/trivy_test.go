@@ -285,7 +285,7 @@ func TestTrivyRunnerBuildsImageScanCommandWithSkipDirs(t *testing.T) {
 		t.Fatalf("ScanImageWithOptions returned error: %v", err)
 	}
 
-	wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--skip-dir", "/cnb", "--skip-dir", "layers/sbom", "--timeout", "45s", "registry.example.com/app:v1"}
+	wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--skip-dirs", "/cnb", "--skip-dirs", "cnb", "--skip-dirs", "layers/sbom", "--timeout", "45s", "registry.example.com/app:v1"}
 	if !reflect.DeepEqual(fake.args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
 	}

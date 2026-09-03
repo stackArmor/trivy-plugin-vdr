@@ -782,6 +782,78 @@ func TestRenderTableLabelsCloudFunctionsAsFunctions(t *testing.T) {
 	}
 }
 
+func TestBuildScoresCloudFunctionsAsN2NLEV(t *testing.T) {
+	fnRef := model.ResourceRef{
+		APIVersion:    "run.googleapis.com/v1",
+		Kind:          "Function",
+		Provider:      "gcp-cloud-run",
+		Project:       "armory-gss-prod",
+		Region:        "us-east4",
+		Name:          "processor",
+		ContainerName: "worker",
+		ContainerType: "container",
+	}
+
+	finding := sampleFinding("CVE-2026-9999", "CRITICAL", 0.99)
+	finding.CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+	finding.AffectedResources = []model.ResourceRef{fnRef}
+
+	inv := &model.Inventory{
+		Resources: []model.ResourceInventory{{
+			Resource: fnRef,
+			Labels:   map[string]string{"goog-managed-by": "cloudfunctions"},
+			Images: []model.ContainerImage{{
+				Name:          "worker",
+				ContainerType: "container",
+				ImageRef:      "example/processor:v1",
+			}},
+		}},
+		Images: []model.ImageInventory{{
+			ImageRef:  "example/processor:v1",
+			Resources: []model.ResourceRef{fnRef},
+		}},
+	}
+
+	exposures := map[model.ResourceRef]model.Exposure{
+		fnRef: {InternetAccessible: true, Provider: "gcp-cloud-run"},
+	}
+
+	rep := Build(inv, []model.Finding{finding}, exposures, Options{
+		GeneratedAt: fixedTime(),
+		View:        ViewFindings,
+	})
+
+	if len(rep.Findings) != 1 {
+		t.Fatalf("len(rep.Findings) = %d, want 1", len(rep.Findings))
+	}
+	f := rep.Findings[0]
+	if f.Pain == nil || f.Pain.Tier != "N2" || f.Pain.Word != "Narrow" {
+		t.Fatalf("f.Pain = %#v, want N2 Narrow", f.Pain)
+	}
+	if f.Remediation == nil || f.Remediation.Column != "NLEV" || f.Remediation.Deadline != "192 days" {
+		t.Fatalf("f.Remediation = %#v, want NLEV 192 days", f.Remediation)
+	}
+
+	// Also verify in ViewResources
+	resRep := Build(inv, []model.Finding{finding}, exposures, Options{
+		GeneratedAt: fixedTime(),
+		View:        ViewResources,
+	})
+	if len(resRep.Resources) != 1 {
+		t.Fatalf("len(resRep.Resources) = %d, want 1", len(resRep.Resources))
+	}
+	if len(resRep.Resources[0].Findings) != 1 {
+		t.Fatalf("len(resRep.Resources[0].Findings) = %d, want 1", len(resRep.Resources[0].Findings))
+	}
+	rf := resRep.Resources[0].Findings[0]
+	if rf.Pain == nil || rf.Pain.Tier != "N2" {
+		t.Fatalf("resource finding Pain = %#v, want N2", rf.Pain)
+	}
+	if rf.Remediation == nil || rf.Remediation.Column != "NLEV" {
+		t.Fatalf("resource finding Remediation = %#v, want NLEV", rf.Remediation)
+	}
+}
+
 func sampleInventory() *model.Inventory {
 	privileged := true
 	return &model.Inventory{

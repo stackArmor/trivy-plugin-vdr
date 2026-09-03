@@ -702,3 +702,87 @@ func TestScoringConfigDefaultsAreAttributed(t *testing.T) {
 		t.Errorf("Class/ClassSource = %s/%s, want C/configMap", r.Class, r.ClassSource)
 	}
 }
+
+func TestScoreCloudFunctionStaticallySetsN2NLEV(t *testing.T) {
+	cfg := Default()
+
+	// High impact, network vector finding on an asset that would normally be N4/N5
+	highInput := Input{
+		CVSSVector:        vecCIAHigh,
+		Severity:          "CRITICAL",
+		InternetReachable: true,
+		EPSS:              0.95,
+		Exploitation:      "active",
+		Namespace:         "prod",
+		WorkloadName:      "test-fn",
+	}
+
+	testCases := []struct {
+		name         string
+		workloadKind string
+		labels       map[string]string
+		wantN2NLEV   bool
+	}{
+		{
+			name:         "WorkloadKind Function",
+			workloadKind: "Function",
+			wantN2NLEV:   true,
+		},
+		{
+			name:         "WorkloadKind function (case-insensitive)",
+			workloadKind: "function",
+			wantN2NLEV:   true,
+		},
+		{
+			name:         "Service with goog-managed-by cloudfunctions",
+			workloadKind: "Service",
+			labels:       map[string]string{"goog-managed-by": "cloudfunctions"},
+			wantN2NLEV:   true,
+		},
+		{
+			name:         "Service with goog-cloudfunctions-runtime",
+			workloadKind: "Service",
+			labels:       map[string]string{"goog-cloudfunctions-runtime": "python311"},
+			wantN2NLEV:   true,
+		},
+		{
+			name:         "Standard Service without function labels",
+			workloadKind: "Service",
+			wantN2NLEV:   false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := highInput
+			in.WorkloadKind = tc.workloadKind
+			in.Labels = tc.labels
+
+			res := cfg.Score(in)
+			if tc.wantN2NLEV {
+				if res.Tier != "N2" {
+					t.Errorf("Tier = %q, want N2", res.Tier)
+				}
+				if res.Word != "Narrow" {
+					t.Errorf("Word = %q, want Narrow", res.Word)
+				}
+				if res.Column != "NLEV" {
+					t.Errorf("Column = %q, want NLEV", res.Column)
+				}
+				if res.LEV {
+					t.Errorf("LEV = true, want false")
+				}
+				if res.IRV {
+					t.Errorf("IRV = true, want false")
+				}
+				if res.RemediationLabel != "192 days" {
+					t.Errorf("RemediationLabel = %q, want 192 days", res.RemediationLabel)
+				}
+			} else {
+				if res.Tier == "N2" && res.Column == "NLEV" {
+					t.Errorf("Standard service unexpectedly scored as N2 NLEV")
+				}
+			}
+		})
+	}
+}

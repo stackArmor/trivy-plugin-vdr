@@ -551,6 +551,15 @@ func (c *Config) Score(in Input) Result {
 	column := remediationColumn(lev, irv)
 	days, label := remediationDeadline(class, tier, column)
 
+	if isCloudFunctionWorkload(in.WorkloadKind, in.Labels) {
+		tier = "N2"
+		word = "Narrow"
+		column = "NLEV"
+		lev = false
+		irv = false
+		days, label = remediationDeadline(class, tier, column)
+	}
+
 	return Result{
 		Tier:                              tier,
 		Word:                              word,
@@ -697,6 +706,18 @@ func (c *Config) resolveClass(labels, nsLabels map[string]string) (string, strin
 		return v, "builtin"
 	}
 	return "B", "builtin"
+}
+
+func isCloudFunctionWorkload(kind string, labels map[string]string) bool {
+	if strings.EqualFold(kind, "Function") || strings.EqualFold(kind, "cloudfunction") || strings.EqualFold(kind, "cloudfunctions") {
+		return true
+	}
+	if labels != nil {
+		if labels["goog-managed-by"] == "cloudfunctions" || labels["goog-cloudfunctions-runtime"] != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // isNetworkAttackVector reports whether a finding's CVSS vector explicitly

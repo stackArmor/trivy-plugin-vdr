@@ -14,7 +14,7 @@ import (
 
 const googleBaseImageUpdateRuntime = "run.googleapis.com/linux-base-image-update"
 
-var googleBaseImageUpdateSkipDirs = []string{"/cnb", "layers/sbom"}
+var googleBaseImageUpdateSkipDirs = []string{"/cnb", "cnb", "layers/sbom"}
 
 func (c Collector) Collect(ctx context.Context, opts Options) (*model.Inventory, error) {
 	inventory, _, _, err := c.CollectResources(ctx, opts)
@@ -93,7 +93,7 @@ func (b *inventoryBuilder) addService(service Service) {
 	}
 	ref.CanonicalID = cloudRunBaseCanonicalID(ref)
 	ref.DisplayID = ref.CanonicalID
-	b.addResource(ref, service.Labels, service.Containers, skipDirsForRuntime(service.RuntimeClassName), service.ExecutionEnvironment)
+	b.addResource(ref, service.Labels, service.Containers, skipDirsForService(service), service.ExecutionEnvironment)
 }
 
 func (b *inventoryBuilder) addJob(job Job) {
@@ -261,6 +261,13 @@ func isCloudFunctionService(service Service) bool {
 		return true
 	}
 	return service.Labels["goog-cloudfunctions-runtime"] != ""
+}
+
+func skipDirsForService(service Service) []string {
+	if isCloudFunctionService(service) || service.RuntimeClassName == googleBaseImageUpdateRuntime {
+		return append([]string(nil), googleBaseImageUpdateSkipDirs...)
+	}
+	return nil
 }
 
 func skipDirsForRuntime(runtimeClassName string) []string {
