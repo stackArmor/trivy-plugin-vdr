@@ -62,6 +62,55 @@ func TestBuildFindingsViewDedupeMergesAcrossImages(t *testing.T) {
 	}
 }
 
+func TestBuildDedupePreservesAndCopiesCVSSEvidence(t *testing.T) {
+	findings := crossImageDuplicates()
+	nvdScore := 9.8
+	redHatScore := 4.2
+	findings[0].CVSS = map[string]model.CVSSInfo{
+		"nvd": {V3Vector: findings[0].CVSSVector, V3Score: &nvdScore},
+	}
+	findings[1].CVSS = map[string]model.CVSSInfo{
+		"redhat": {V3Vector: "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:L", V3Score: &redHatScore},
+	}
+
+	findingsView := Build(dedupeInventory(), findings, nil, Options{GeneratedAt: fixedTime(), View: ViewFindings, Dedupe: true})
+	if len(findingsView.Findings) != 1 || len(findingsView.Findings[0].CVSS) != 2 {
+		t.Fatalf("merged CVSS = %#v, want NVD and Red Hat evidence", findingsView.Findings)
+	}
+
+	resourceFindings := []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7), sampleFinding("CVE-2026-0001", "HIGH", 0.7)}
+	resourceFindings[0].CVSS = findings[0].CVSS
+	resourceFindings[1].CVSS = findings[1].CVSS
+	resourcesView := Build(sampleInventory(), resourceFindings, nil, Options{GeneratedAt: fixedTime(), View: ViewResources, Dedupe: true})
+	for _, resource := range resourcesView.Resources {
+		if len(resource.Findings) != 1 || len(resource.Findings[0].CVSS) != 2 {
+			t.Fatalf("resource %s CVSS = %#v, want merged NVD and Red Hat evidence", resource.Resource.Name, resource.Findings)
+		}
+	}
+
+	findings[0].CVSS["nvd"] = model.CVSSInfo{V3Vector: "mutated"}
+	if findingsView.Findings[0].CVSS["nvd"].V3Vector == "mutated" {
+		t.Fatal("deduplicated CVSS map aliases scanner input")
+	}
+}
+
+func TestMergeCVSSCompletesSourceWithoutReplacingSurvivor(t *testing.T) {
+	firstScore := 9.8
+	secondScore := 8.7
+	destination := map[string]model.CVSSInfo{
+		"nvd": {V3Vector: "survivor-v3", V3Score: &firstScore},
+	}
+	source := map[string]model.CVSSInfo{
+		"nvd": {V3Vector: "conflicting-v3", V40Vector: "additional-v4", V40Score: &secondScore},
+	}
+
+	merged := mergeCVSS(destination, source)
+	got := merged["nvd"]
+	if got.V3Vector != "survivor-v3" || got.V40Vector != "additional-v4" || got.V40Score == nil || *got.V40Score != 8.7 {
+		t.Fatalf("merged nvd = %#v, want survivor conflict retained and missing v4 filled", got)
+	}
+}
+
 func TestBuildFindingsViewDedupeKeepsWorstPain(t *testing.T) {
 	exposures := map[model.ResourceRef]model.Exposure{
 		apiContainerRef(): {InternetAccessible: true, Provider: "gke", RouteKind: "Ingress", RouteName: "api"},

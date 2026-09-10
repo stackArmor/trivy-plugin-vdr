@@ -38,6 +38,59 @@ func TestTrivyRunnerVersion(t *testing.T) {
 	}
 }
 
+func TestBestCVSSVectorPreservesLegacySelection(t *testing.T) {
+	tests := []struct {
+		name string
+		cvss map[string]trivyCVSS
+		want string
+	}{
+		{
+			name: "NVD v3 beats lower-scored vendor v3",
+			cvss: map[string]trivyCVSS{
+				"redhat": {V3Vector: "vendor-v3", V3Score: float64Pointer(2.0)},
+				"nvd":    {V3Vector: "nvd-v3", V3Score: float64Pointer(9.8)},
+			},
+			want: "nvd-v3",
+		},
+		{
+			name: "vendor v3 beats NVD v4",
+			cvss: map[string]trivyCVSS{
+				"nvd":    {V40Vector: "nvd-v4"},
+				"redhat": {V3Vector: "vendor-v3"},
+			},
+			want: "vendor-v3",
+		},
+		{
+			name: "NVD v4 wins when only v4 is present",
+			cvss: map[string]trivyCVSS{
+				"redhat": {V40Vector: "vendor-v4"},
+				"nvd":    {V40Vector: "nvd-v4"},
+			},
+			want: "nvd-v4",
+		},
+		{
+			name: "unknown sources are deterministic",
+			cvss: map[string]trivyCVSS{
+				"zeta":  {V3Vector: "zeta-v3"},
+				"alpha": {V3Vector: "alpha-v3"},
+			},
+			want: "alpha-v3",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := bestCVSSVector(test.cvss); got != test.want {
+				t.Fatalf("bestCVSSVector() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func float64Pointer(value float64) *float64 {
+	return &value
+}
+
 func TestTrivyRunnerVersionRejectsMissingVersion(t *testing.T) {
 	runner := TrivyRunner{CommandRunner: &fakeCommandRunner{stdout: []byte(`{"VulnerabilityDB":{"Version":2}}`)}}
 
@@ -426,8 +479,8 @@ func TestTrivyRunnerParsesVulnerabilitiesFromMultipleResults(t *testing.T) {
 								"LastModifiedDate": "2026-02-03T04:05:06Z",
 								"Status": "fixed",
 								"CVSS": {
-									"redhat": { "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:L" },
-									"nvd": { "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" }
+									"redhat": { "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:L", "V3Score": 4.2 },
+									"nvd": { "V2Vector": "AV:N/AC:L/Au:N/C:C/I:C/A:C", "V2Score": 10.0, "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "V3Score": 9.8 }
 								}
 							}
 						]
@@ -497,6 +550,15 @@ func TestTrivyRunnerParsesVulnerabilitiesFromMultipleResults(t *testing.T) {
 	}
 	if first.CVSSVector != "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" {
 		t.Fatalf("CVSSVector = %q, want NVD v3 vector preferred over redhat", first.CVSSVector)
+	}
+	if len(first.CVSS) != 2 {
+		t.Fatalf("CVSS = %#v, want source-keyed NVD and Red Hat entries", first.CVSS)
+	}
+	if got := first.CVSS["nvd"]; got.V2Vector != "AV:N/AC:L/Au:N/C:C/I:C/A:C" || got.V2Score == nil || *got.V2Score != 10.0 || got.V3Score == nil || *got.V3Score != 9.8 {
+		t.Fatalf("CVSS[nvd] = %#v, want v2/v3 vectors and scores preserved", got)
+	}
+	if got := first.CVSS["redhat"]; got.V3Vector != "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:L" || got.V3Score == nil || *got.V3Score != 4.2 {
+		t.Fatalf("CVSS[redhat] = %#v, want vendor vector and score preserved", got)
 	}
 	if !reflect.DeepEqual(first.References, []string{"https://example.com/cve"}) {
 		t.Fatalf("References = %#v", first.References)

@@ -514,9 +514,9 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 		}
 		reports[ref] = report
 	}
-	var seen map[model.ResourceRef]map[dedupeKey]struct{}
+	var seen map[model.ResourceRef]map[dedupeKey]int
 	if dedupe {
-		seen = map[model.ResourceRef]map[dedupeKey]struct{}{}
+		seen = map[model.ResourceRef]map[dedupeKey]int{}
 	}
 	for _, finding := range findings {
 		for _, ref := range finding.AffectedResources {
@@ -525,14 +525,16 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 				// first occurrence (input is sorted) is representative.
 				keys := seen[ref]
 				if keys == nil {
-					keys = map[dedupeKey]struct{}{}
+					keys = map[dedupeKey]int{}
 					seen[ref] = keys
 				}
 				key := findingDedupeKey(finding)
-				if _, dup := keys[key]; dup {
+				if at, dup := keys[key]; dup {
+					if report := reports[ref]; report != nil && at < len(report.Findings) {
+						report.Findings[at].CVSS = mergeCVSS(report.Findings[at].CVSS, finding.CVSS)
+					}
 					continue
 				}
-				keys[key] = struct{}{}
 			}
 			report := reports[ref]
 			if report == nil {
@@ -565,6 +567,9 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 				scoped.Affected[0].Remediation = rem
 			}
 			report.Findings = append(report.Findings, scoped)
+			if dedupe {
+				seen[ref][findingDedupeKey(finding)] = len(report.Findings) - 1
+			}
 		}
 	}
 
@@ -941,6 +946,7 @@ func bestExposure(resources []model.ResourceRef, exposures map[model.ResourceRef
 func cloneFinding(finding model.Finding) model.Finding {
 	clone := finding
 	clone.VendorSeverity = copyStringMap(finding.VendorSeverity)
+	clone.CVSS = copyCVSSMap(finding.CVSS)
 	clone.ImageRefs = append([]string(nil), finding.ImageRefs...)
 	clone.VendorIDs = append([]string(nil), finding.VendorIDs...)
 	clone.References = append([]string(nil), finding.References...)
@@ -995,6 +1001,76 @@ func cloneFinding(finding model.Finding) model.Finding {
 		clone.WouldHaveBeenRemediation = &value
 	}
 	return clone
+}
+
+func copyCVSSMap(values map[string]model.CVSSInfo) map[string]model.CVSSInfo {
+	if len(values) == 0 {
+		return nil
+	}
+	copied := make(map[string]model.CVSSInfo, len(values))
+	for source, value := range values {
+		copied[source] = cloneCVSSInfo(value)
+	}
+	return copied
+}
+
+// mergeCVSS adds evidence absent from the deterministic survivor. If the same
+// source reports conflicting data, the survivor remains authoritative so the
+// merge cannot change legacy selection or become input-order dependent later.
+func mergeCVSS(destination, source map[string]model.CVSSInfo) map[string]model.CVSSInfo {
+	if len(source) == 0 {
+		return destination
+	}
+	if destination == nil {
+		destination = make(map[string]model.CVSSInfo, len(source))
+	}
+	for authority, value := range source {
+		if existing, exists := destination[authority]; exists {
+			destination[authority] = mergeCVSSInfo(existing, value)
+		} else {
+			destination[authority] = cloneCVSSInfo(value)
+		}
+	}
+	return destination
+}
+
+func mergeCVSSInfo(destination, source model.CVSSInfo) model.CVSSInfo {
+	merged := cloneCVSSInfo(destination)
+	if merged.V2Vector == "" {
+		merged.V2Vector = source.V2Vector
+	}
+	if merged.V2Score == nil {
+		merged.V2Score = cloneFloat64(source.V2Score)
+	}
+	if merged.V3Vector == "" {
+		merged.V3Vector = source.V3Vector
+	}
+	if merged.V3Score == nil {
+		merged.V3Score = cloneFloat64(source.V3Score)
+	}
+	if merged.V40Vector == "" {
+		merged.V40Vector = source.V40Vector
+	}
+	if merged.V40Score == nil {
+		merged.V40Score = cloneFloat64(source.V40Score)
+	}
+	return merged
+}
+
+func cloneCVSSInfo(value model.CVSSInfo) model.CVSSInfo {
+	clone := value
+	clone.V2Score = cloneFloat64(value.V2Score)
+	clone.V3Score = cloneFloat64(value.V3Score)
+	clone.V40Score = cloneFloat64(value.V40Score)
+	return clone
+}
+
+func cloneFloat64(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func cloneChainTaxonomy(in *model.ChainTaxonomyEvidence) *model.ChainTaxonomyEvidence {

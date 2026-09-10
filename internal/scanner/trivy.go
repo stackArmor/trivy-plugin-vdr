@@ -808,6 +808,7 @@ func findingFromTrivyVulnerability(vulnerability trivyVulnerability, image strin
 		PublishedDate:       vulnerability.PublishedDate,
 		LastModifiedDate:    vulnerability.LastModifiedDate,
 		CVSSVector:          bestCVSSVector(vulnerability.CVSS),
+		CVSS:                copyCVSSFromTrivy(vulnerability.CVSS),
 	}
 }
 
@@ -940,9 +941,29 @@ type trivyModifiedFinding struct {
 	Finding   trivyVulnerability `json:"Finding"`
 }
 
-type trivyCVSS struct {
-	V3Vector  string `json:"V3Vector"`
-	V40Vector string `json:"V40Vector"`
+type trivyCVSS = model.CVSSInfo
+
+func copyCVSSFromTrivy(values map[string]trivyCVSS) map[string]model.CVSSInfo {
+	if len(values) == 0 {
+		return nil
+	}
+	copied := make(map[string]model.CVSSInfo, len(values))
+	for source, value := range values {
+		clone := value
+		clone.V2Score = copyFloat64(value.V2Score)
+		clone.V3Score = copyFloat64(value.V3Score)
+		clone.V40Score = copyFloat64(value.V40Score)
+		copied[source] = clone
+	}
+	return copied
+}
+
+func copyFloat64(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 // bestCVSSVector returns a single CVSS base vector, preferring NVD, then Red Hat,

@@ -231,6 +231,10 @@ type Finding struct {
 	// It feeds the report's automatability fallback when CISA Vulnrichment has no
 	// record for the CVE.
 	CVSSVector string `json:"cvssVector,omitempty"`
+	// CVSS preserves the scanner's source-keyed CVSS evidence for downstream
+	// analyst review. CVSSVector remains the selected scoring baseline; this map
+	// is additive and must not be used implicitly to change that selection.
+	CVSS map[string]CVSSInfo `json:"cvss,omitempty"`
 	// CWEs holds the CWE identifiers assigned to this finding's CVE (e.g.
 	// "CWE-787"), surfaced from the per-CVE enrichment record. It is empty when no
 	// specific CWE is known; the generic placeholders NVD-CWE-noinfo/NVD-CWE-Other
@@ -263,6 +267,18 @@ type Finding struct {
 	// not been dispositioned as suppressed.
 	WouldHaveBeenPain        *Pain        `json:"wouldHaveBeenPain,omitempty"`
 	WouldHaveBeenRemediation *Remediation `json:"wouldHaveBeenRemediation,omitempty"`
+}
+
+// CVSSInfo is the versioned CVSS evidence Trivy reports for one source. Scores
+// are pointers so a reported zero remains distinguishable from an absent score.
+// CVSS v2 is retained as source evidence but is not used by VDR PAIN scoring.
+type CVSSInfo struct {
+	V2Vector  string   `json:"V2Vector,omitempty"`
+	V2Score   *float64 `json:"V2Score,omitempty"`
+	V3Vector  string   `json:"V3Vector,omitempty"`
+	V3Score   *float64 `json:"V3Score,omitempty"`
+	V40Vector string   `json:"V40Vector,omitempty"`
+	V40Score  *float64 `json:"V40Score,omitempty"`
 }
 
 type VulnerabilityDataSource struct {

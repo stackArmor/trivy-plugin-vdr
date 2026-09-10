@@ -66,6 +66,7 @@ func dedupeFindings(findings []model.Finding) []model.Finding {
 			continue
 		}
 		merged[at].AffectedResources = append(merged[at].AffectedResources, finding.AffectedResources...)
+		merged[at].CVSS = mergeCVSS(merged[at].CVSS, finding.CVSS)
 		if chainTaxonomyRank(finding.ChainTaxonomy) > chainTaxonomyRank(merged[at].ChainTaxonomy) {
 			merged[at].ChainTaxonomy = cloneChainTaxonomy(finding.ChainTaxonomy)
 		}
