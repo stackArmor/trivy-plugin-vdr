@@ -96,6 +96,9 @@ func (c *Collector) CollectExposureObjectsWithWarnings(ctx context.Context, opts
 	unstructuredObjects, dynamicWarnings := c.collectUnstructuredExposureObjects(ctx, namespaces, opts)
 	warnings = append(warnings, dynamicWarnings...)
 	objects.Unstructured = unstructuredObjects
+	// Scoped collection can miss cross-namespace routes. An absent optional
+	// CRD is fine, but authorization/discovery warnings preclude negatives.
+	objects.CollectionComplete = len(warnings) == 0 && ctx.Err() == nil && opts.AllNamespaces && len(opts.ExcludeNamespaces) == 0
 	return objects, warnings, nil
 }
 

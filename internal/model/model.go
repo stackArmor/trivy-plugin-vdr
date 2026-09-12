@@ -27,8 +27,11 @@ type ImageInventory struct {
 }
 
 type ResourceInventory struct {
-	Resource ResourceRef       `json:"resource"`
-	Labels   map[string]string `json:"labels,omitempty"`
+	// DirectNodeAccess prevents Service-only analysis from asserting a negative
+	// for hostNetwork/hostPort workloads; collected from the pod spec.
+	DirectNodeAccess bool              `json:"-"`
+	Resource         ResourceRef       `json:"resource"`
+	Labels           map[string]string `json:"labels,omitempty"`
 	// PodLabels are the labels on the actual pod or pod template. Kubernetes
 	// Service selectors are evaluated against these labels, never controller
 	// metadata labels. A non-nil empty map means the pod template has no labels.
@@ -415,6 +418,8 @@ type CAPECTransitionFindingReference struct {
 
 type Exposure struct {
 	InternetAccessible bool `json:"internetAccessible"`
+	// AssessmentStatus is additive; legacy producers omit it.
+	AssessmentStatus string `json:"assessmentStatus,omitempty"`
 	// AssessmentBasis distinguishes live-cluster observations from static Helm
 	// deployment intent. Helm scans set this to "declared" because rendered
 	// manifests do not contain load-balancer provisioning or runtime status.

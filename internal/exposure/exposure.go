@@ -15,10 +15,13 @@ import (
 )
 
 type Objects struct {
-	Services       []corev1.Service
-	Ingresses      []networkingv1.Ingress
-	IngressClasses []networkingv1.IngressClass
-	Unstructured   []unstructured.Unstructured
+	// CollectionComplete requires successful cluster-wide discovery of all
+	// supported route families. Partial or skipped discovery proves no negative.
+	CollectionComplete bool
+	Services           []corev1.Service
+	Ingresses          []networkingv1.Ingress
+	IngressClasses     []networkingv1.IngressClass
+	Unstructured       []unstructured.Unstructured
 	// InternetAccessible*Classes and NotInternetAccessible*Classes are class
 	// names an operator declared reachable or not-reachable in the cluster
 	// ConfigMap. Negative lists override positive lists and built-in class
@@ -130,6 +133,70 @@ func AnalyzeWithOptions(inventory *model.Inventory, objects Objects, opts Analyz
 			item.AssessmentBasis = "declared"
 			item.Evidence = appendUnique(item.Evidence, "Exposure evaluated from rendered Helm configuration; deployment intent is declared, but load-balancer provisioning and runtime status were not observed.")
 			result[ref] = item
+		}
+	}
+	if objects.CollectionComplete && !opts.Declared {
+		declaredRoutes := workloadsWithRouteDeclarations(objects, workloadsByService)
+		for _, workload := range inventory.Resources {
+			if workload.DirectNodeAccess || declaredRoutes[workload.Resource] {
+				continue
+			}
+			switch workload.Resource.Kind {
+			case "Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob":
+			default:
+				continue
+			}
+			for _, image := range workload.Images {
+				ref := workload.Resource
+				ref.ContainerName = image.Name
+				ref.ContainerType = image.ContainerType
+				ref.RestartPolicy = image.RestartPolicy
+				if _, assessed := result[ref]; assessed {
+					continue
+				}
+				result[ref] = model.Exposure{
+					InternetAccessible: false,
+					AssessmentStatus:   "assessed",
+					AssessmentBasis:    "observed",
+					Provider:           "kubernetes",
+					Evidence:           []string{"Completed cluster-wide Kubernetes exposure discovery: no supported external Ingress, Gateway route, or LoadBalancer Service targets this workload."},
+				}
+			}
+		}
+	}
+	return result
+}
+
+// An unresolved, unsupported-class, or still-provisioning route is not evidence
+// of absence. Reserve synthesized negatives for workloads with no such targets.
+func workloadsWithRouteDeclarations(objects Objects, selected map[serviceKey][]model.ResourceInventory) map[model.ResourceRef]bool {
+	services := map[serviceKey]bool{}
+	for _, svc := range objects.Services {
+		if svc.Spec.Type == corev1.ServiceTypeLoadBalancer || svc.Spec.Type == corev1.ServiceTypeNodePort || len(svc.Spec.ExternalIPs) > 0 {
+			services[serviceKey{namespace: svc.Namespace, name: svc.Name}] = true
+		}
+	}
+	for _, ingress := range objects.Ingresses {
+		for _, ref := range ingressServiceRefs(ingress) {
+			services[serviceKey{namespace: ingress.Namespace, name: ref.name}] = true
+		}
+	}
+	for _, route := range objects.Unstructured {
+		if !hasAPIGroup(route, "gateway.networking.k8s.io") || !isGatewayRouteKind(route.GetKind()) {
+			continue
+		}
+		for _, ref := range routeBackendRefs(route) {
+			namespace := ref.namespace
+			if namespace == "" {
+				namespace = route.GetNamespace()
+			}
+			services[serviceKey{namespace: namespace, name: ref.name}] = true
+		}
+	}
+	result := map[model.ResourceRef]bool{}
+	for key := range services {
+		for _, workload := range selected[key] {
+			result[workload.Resource] = true
 		}
 	}
 	return result

@@ -477,10 +477,11 @@ type inventoryBuilder struct {
 // (Helm values.labels render to the workload object) are visible to scoring.
 func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string, replicas *int32) {
 	resourceInventory := model.ResourceInventory{
-		Resource:  resource,
-		Labels:    mergeLabels(workloadLabels, templateLabels),
-		PodLabels: copyPodLabels(templateLabels),
-		Posture:   workloadPosture(spec, replicas),
+		DirectNodeAccess: spec.HostNetwork,
+		Resource:         resource,
+		Labels:           mergeLabels(workloadLabels, templateLabels),
+		PodLabels:        copyPodLabels(templateLabels),
+		Posture:          workloadPosture(spec, replicas),
 	}
 	for _, c := range spec.Containers {
 		b.addContainer(&resourceInventory, resource, spec, annotations, c, "container")
@@ -494,6 +495,11 @@ func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.P
 }
 
 func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, spec corev1.PodSpec, annotations map[string]string, c corev1.Container, containerType string) {
+	for _, port := range c.Ports {
+		if port.HostPort > 0 {
+			resourceInventory.DirectNodeAccess = true
+		}
+	}
 	if c.Image == "" {
 		return
 	}
