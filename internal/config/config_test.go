@@ -511,6 +511,7 @@ func TestParseECSRejectsKubernetesAndCloudRunFlags(t *testing.T) {
 		{name: "all namespaces", args: []string{"ecs", "--region", "us-east-1", "--all-namespaces"}, want: "--all-namespaces"},
 		{name: "include zero daemonsets", args: []string{"ecs", "--region", "us-east-1", "--include-zero-daemonsets"}, want: "--include-zero-daemonsets"},
 		{name: "project", args: []string{"ecs", "--region", "us-east-1", "--project", "p"}, want: "--project"},
+		{name: "include functions", args: []string{"ecs", "--region", "us-east-1", "--include-functions"}, want: "--include-functions"},
 	}
 
 	for _, tt := range tests {
@@ -520,6 +521,24 @@ func TestParseECSRejectsKubernetesAndCloudRunFlags(t *testing.T) {
 				t.Fatalf("error = %v, want %s rejection", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseCloudRunIncludeFunctions(t *testing.T) {
+	cfg, err := Parse([]string{"cloudrun", "--project", "p", "--region", "us-east4"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.IncludeFunctions {
+		t.Fatalf("IncludeFunctions = true, want false by default")
+	}
+
+	cfg, err = Parse([]string{"cloudrun", "--project", "p", "--region", "us-east4", "--include-functions"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.IncludeFunctions {
+		t.Fatalf("IncludeFunctions = false, want true")
 	}
 }
 

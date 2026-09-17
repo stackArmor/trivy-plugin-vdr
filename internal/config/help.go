@@ -79,7 +79,7 @@ func sourceDescription(source string) string {
 	case SourceK8sCompliance:
 		return "Scan Kubernetes resource definitions with Trivy's built-in misconfiguration and RBAC rules."
 	case SourceCloudRun:
-		return "Inventory and scan Cloud Run services and jobs in selected regions."
+		return "Inventory and scan Cloud Run services and jobs in selected regions; Cloud Run functions are excluded unless --include-functions is set."
 	case SourceECS:
 		return "Inventory and scan active AWS ECS task definitions in selected regions."
 	case SourceImage:
@@ -121,6 +121,7 @@ func sourceExamples(source string) string {
 	case SourceCloudRun:
 		return `  vdr cloudrun --project my-project --region us-east4
   vdr cloudrun --project my-project --region us-east4 --region us-central1 --output cloudrun.json
+  vdr cloudrun --project my-project --region us-east4 --include-functions
   vdr cloudrun --project my-project --region us-east4 --reachability-only --view resources`
 	case SourceECS:
 		return `  vdr ecs --region us-east-1
@@ -182,7 +183,7 @@ func sourceHelpSections(source string) []helpSection {
 	case SourceCloudRun:
 		sections = append(sections, helpSection{
 			title: "Cloud Run source",
-			flags: []string{"project", "region"},
+			flags: []string{"project", "region", "include-functions"},
 		})
 	case SourceECS:
 		sections = append(sections, helpSection{

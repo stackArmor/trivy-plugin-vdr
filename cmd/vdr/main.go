@@ -351,7 +351,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 		}
 	}()
 
-	options := cloudrun.Options{Project: cfg.Project, Regions: cfg.Regions}
+	options := cloudrun.Options{Project: cfg.Project, Regions: cfg.Regions, IncludeFunctions: cfg.IncludeFunctions}
 	collector := cloudrun.Collector{Client: client}
 	logger.Info("collecting Cloud Run inventory from project %q regions %v", cfg.Project, cfg.Regions)
 	inventory, services, jobs, err := collector.CollectResources(ctx, options)

@@ -46,6 +46,7 @@ func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.I
 	}
 	var allServices []Service
 	var allJobs []Job
+	excludedFunctions := 0
 	for _, region := range opts.Regions {
 		region = strings.TrimSpace(region)
 		if region == "" {
@@ -56,9 +57,13 @@ func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.I
 			return nil, nil, nil, fmt.Errorf("list cloudrun services in %s: %w", region, err)
 		}
 		for _, service := range services {
+			if !opts.IncludeFunctions && isCloudFunctionService(service) {
+				excludedFunctions++
+				continue
+			}
 			builder.addService(service)
+			allServices = append(allServices, service)
 		}
-		allServices = append(allServices, services...)
 		jobs, err := c.Client.ListJobs(ctx, opts.Project, region)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("list cloudrun jobs in %s: %w", region, err)
@@ -67,6 +72,9 @@ func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.I
 			builder.addJob(job)
 		}
 		allJobs = append(allJobs, jobs...)
+	}
+	if excludedFunctions > 0 {
+		builder.inventory.Warnings = append(builder.inventory.Warnings, fmt.Sprintf("cloudrun excluded %d Cloud Run function(s) from project %s; functions as a service are out of scope by default, rerun with --include-functions to scan them", excludedFunctions, opts.Project))
 	}
 	return builder.finish(), allServices, allJobs, nil
 }

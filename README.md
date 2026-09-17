@@ -61,6 +61,7 @@ trivy vdr k8s-compliance --all-namespaces --min-severity HIGH
 trivy vdr k8s-compliance --all-namespaces --format json --output vdr-k8s-compliance.json
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --region us-central1 --output vdr-cloudrun.json
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --view resources --html-output vdr-cloudrun.html
+trivy vdr cloudrun --project my-gcp-project --region us-east4 --include-functions --output vdr-cloudrun.json
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --reachability-only --output vdr-cloudrun-reachability.json
 trivy vdr cloudrun --project my-gcp-project --region us-east4 --scan-reachability-only --output vdr-cloudrun-scan-reachability.json
 trivy vdr ecs --region us-east-1 --region us-gov-west-1 --output vdr-ecs.json
@@ -92,6 +93,23 @@ For live Kubernetes vulnerability scans (`k8s`) and compliance scans (`k8s-compl
   - Excluded namespaces are completely omitted from the scan scope: workloads, Ingress and Gateway routes, Service exposures, container security posture, pod runtime issue inspection, and private registry pull secrets in those namespaces are not collected or scanned.
   - In `k8s-compliance` scans, compliance checks for resources in excluded namespaces and controller-index owner enrichment in those namespaces are skipped.
   - `--exclude-namespace` is valid for `k8s` and `k8s-compliance` sources. It is rejected for `cloudrun`, `ecs`, `image`, and `helm` sources.
+
+## Cloud Run function scope
+
+`trivy vdr cloudrun` inventories Cloud Run services and jobs. Cloud Run functions
+(services managed by Cloud Functions) are **excluded by default**: function-as-a-service
+workloads are generally outside the audited application boundary, and the provider
+manages their runtime image.
+
+- `--include-functions`: Includes Cloud Run functions in the inventory, exposure
+  analysis, and image scans. Use it when a system fronts functions with an API
+  gateway or load balancer and they serve as the actual application.
+- A service is treated as a function when it carries the
+  `cloudfunctions.googleapis.com/function-id` annotation, the
+  `goog-managed-by: cloudfunctions` label, or a `goog-cloudfunctions-runtime` label.
+- When functions are excluded, the report records a warning naming how many were
+  skipped, so the omission stays visible in the evidence.
+- `--include-functions` is only valid for the `cloudrun` source.
 
 ## Kubernetes compliance scanning
 

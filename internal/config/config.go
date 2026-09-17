@@ -61,6 +61,7 @@ type Config struct {
 	ExcludeNamespaces            []string
 	AllNamespaces                bool
 	IncludeZeroDaemonSets        bool
+	IncludeFunctions             bool
 	Format                       string
 	View                         string
 	Dedupe                       bool
@@ -204,6 +205,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.Var(&excludeNamespaces, "exclude-namespaces", "alias for --exclude-namespace")
 	fs.BoolVar(&cfg.AllNamespaces, "all-namespaces", cfg.AllNamespaces, "scan all namespaces")
 	fs.BoolVar(&cfg.IncludeZeroDaemonSets, "include-zero-daemonsets", cfg.IncludeZeroDaemonSets, "include DaemonSets with zero desired pods")
+	fs.BoolVar(&cfg.IncludeFunctions, "include-functions", cfg.IncludeFunctions, "include Cloud Run functions, which are excluded by default as function-as-a-service workloads outside the audited application boundary")
 	fs.StringVar(&cfg.Format, "format", cfg.Format, "output format: json, table, or cyclonedx")
 	fs.StringVar(&cfg.Format, "f", cfg.Format, "alias for --format")
 	fs.StringVar(&cfg.View, "view", cfg.View, "report view: findings or resources")
@@ -305,6 +307,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	complianceUnsupportedFlag := ""
 	helmSpecificFlag := ""
 	k8sSpecificFlag := ""
+	cloudRunSpecificFlag := ""
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "all-namespaces":
@@ -331,6 +334,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			helmSpecificFlag = f.Name
 		case "sip-config-map":
 			k8sSpecificFlag = f.Name
+		case "include-functions":
+			cloudRunSpecificFlag = f.Name
 		}
 		if source == SourceK8sCompliance && !complianceFlagAllowed(f.Name) && complianceUnsupportedFlag == "" {
 			complianceUnsupportedFlag = f.Name
@@ -523,6 +528,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	}
 	if cfg.Source != SourceK8s && k8sSpecificFlag != "" {
 		return Config{}, fmt.Errorf("--%s is only valid for source k8s", k8sSpecificFlag)
+	}
+	if cfg.Source != SourceCloudRun && cloudRunSpecificFlag != "" {
+		return Config{}, fmt.Errorf("--%s is only valid for source cloudrun", cloudRunSpecificFlag)
 	}
 	if len(cfg.Namespaces) > 0 && allNamespacesSet && cfg.AllNamespaces {
 		return Config{}, errors.New("cannot use --namespace with --all-namespaces")

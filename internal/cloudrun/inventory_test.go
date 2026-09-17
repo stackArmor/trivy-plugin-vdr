@@ -3,6 +3,7 @@ package cloudrun
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -171,7 +172,7 @@ func TestCollectAddsGoogleBaseImageUpdateSkipDirs(t *testing.T) {
 		},
 	}
 
-	got, err := (Collector{Client: client}).Collect(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}})
+	got, err := (Collector{Client: client}).Collect(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}, IncludeFunctions: true})
 	if err != nil {
 		t.Fatalf("Collect returned error: %v", err)
 	}
@@ -210,7 +211,7 @@ func TestCollectAddsSkipDirsForCloudFunctionWithoutRuntimeClassName(t *testing.T
 		},
 	}
 
-	got, err := (Collector{Client: client}).Collect(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}})
+	got, err := (Collector{Client: client}).Collect(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}, IncludeFunctions: true})
 	if err != nil {
 		t.Fatalf("Collect returned error: %v", err)
 	}
@@ -220,6 +221,73 @@ func TestCollectAddsSkipDirsForCloudFunctionWithoutRuntimeClassName(t *testing.T
 	want := []string{"/cnb", "cnb", "layers/sbom"}
 	if !reflect.DeepEqual(got.Images[0].SkipDirs, want) {
 		t.Fatalf("SkipDirs = %#v, want %#v", got.Images[0].SkipDirs, want)
+	}
+}
+
+func TestCollectExcludesCloudFunctionsByDefault(t *testing.T) {
+	client := &fakeInventoryClient{
+		services: map[string][]Service{
+			"us-east4": {
+				{
+					Project:    "p",
+					Region:     "us-east4",
+					Name:       "fn",
+					Labels:     map[string]string{"goog-managed-by": "cloudfunctions"},
+					Containers: []Container{{Name: "app", Image: "example.com/fn:1"}},
+				},
+				{
+					Project:    "p",
+					Region:     "us-east4",
+					Name:       "api",
+					Containers: []Container{{Name: "app", Image: "example.com/api:1"}},
+				},
+			},
+		},
+	}
+
+	got, services, _, err := (Collector{Client: client}).CollectResources(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}})
+	if err != nil {
+		t.Fatalf("CollectResources returned error: %v", err)
+	}
+	if len(got.Resources) != 1 || got.Resources[0].Resource.Name != "api" {
+		t.Fatalf("resources = %#v, want only the api service", got.Resources)
+	}
+	if len(got.Images) != 1 || got.Images[0].ImageRef != "example.com/api:1" {
+		t.Fatalf("images = %#v, want only the api image", got.Images)
+	}
+	if len(services) != 1 || services[0].Name != "api" {
+		t.Fatalf("services = %#v, want only the api service", services)
+	}
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "--include-functions") {
+		t.Fatalf("warnings = %#v, want an exclusion notice naming --include-functions", got.Warnings)
+	}
+}
+
+func TestCollectIncludesCloudFunctionsWhenRequested(t *testing.T) {
+	client := &fakeInventoryClient{
+		services: map[string][]Service{
+			"us-east4": {{
+				Project:    "p",
+				Region:     "us-east4",
+				Name:       "fn",
+				Labels:     map[string]string{"goog-managed-by": "cloudfunctions"},
+				Containers: []Container{{Name: "app", Image: "example.com/fn:1"}},
+			}},
+		},
+	}
+
+	got, services, _, err := (Collector{Client: client}).CollectResources(context.Background(), Options{Project: "p", Regions: []string{"us-east4"}, IncludeFunctions: true})
+	if err != nil {
+		t.Fatalf("CollectResources returned error: %v", err)
+	}
+	if len(got.Resources) != 1 || got.Resources[0].Resource.Kind != "Function" {
+		t.Fatalf("resources = %#v, want the function resource", got.Resources)
+	}
+	if len(services) != 1 || services[0].Name != "fn" {
+		t.Fatalf("services = %#v, want the function service", services)
+	}
+	if len(got.Warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none", got.Warnings)
 	}
 }
 

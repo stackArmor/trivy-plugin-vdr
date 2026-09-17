@@ -11,6 +11,12 @@ const Provider = "gcp-cloud-run"
 type Options struct {
 	Project string
 	Regions []string
+	// IncludeFunctions scans Cloud Run functions (services managed by
+	// Cloud Functions) alongside ordinary services and jobs. Functions are
+	// excluded by default: function-as-a-service workloads are generally
+	// outside the audited application boundary, and are only in scope when a
+	// system fronts them with an API gateway as the application itself.
+	IncludeFunctions bool
 }
 
 type Container struct {
