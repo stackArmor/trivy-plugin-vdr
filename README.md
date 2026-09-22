@@ -353,6 +353,9 @@ rules:
     resources: ["pods", "services", "namespaces", "configmaps"]
     verbs: ["get", "list"]
   - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"] # optional: cloud provider/account/region detection
+  - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get"]
   - apiGroups: ["apps"]
@@ -481,6 +484,25 @@ For live Kubernetes scans, successful cluster-wide exposure discovery now emits 
 Missing/null exposure still means unassessed, not false. Negatives are not synthesized for `--skip-exposure`, namespace-limited or excluded discovery, collection failures/RBAC warnings, declared Helm manifests, unresolved route declarations, or hostNetwork/hostPort workloads. Use `--all-namespaces` without namespace exclusions and resolve exposure-discovery warnings for complete observations. An absent optional CRD is not an error. Older JSON remains compatible; consumers must not infer a negative just from the plugin/schema version or presence of `assets[]`.
 
 The top-level JSON metadata includes `scannerVersion` for the Trivy binary used by the plugin and `pluginVersion` for the VDR plugin build.
+
+### Cloud account and region
+
+When the scan target lives in a cloud, the report records that scope in a top-level `cloud` block and on every resource (`resources[].cloud` in the resources view, `assets[].cloud` in the findings view):
+
+```json
+"cloud": { "provider": "gcp", "accountType": "project", "accountId": "my-project", "regions": ["us-east4", "us-central1"] },
+"resources": [{ "resource": { "...": "..." }, "cloud": { "provider": "gcp", "accountType": "project", "accountId": "my-project", "region": "us-east4" } }]
+```
+
+`provider` is `gcp`, `aws`, or `azure`; `accountType` names the matching top-level scope (`project`, `account`, or `subscription`) and `accountId` carries its ID. The per-resource `region` is the resource's own region when it has one, otherwise the single region of the cluster; it is omitted when the inventory spans several regions and the resource does not name one. Fields that cannot be determined are omitted, and the whole block is omitted when nothing is detected (Helm and standalone `image` runs). CycloneDX output carries the same values as `vdr:cloudProvider`, `vdr:cloudAccountType`, `vdr:cloudAccountId`, and `vdr:cloudRegions` tool properties, plus `vdr:cloudRegion` on each asset component.
+
+Where each source gets the values:
+
+- `cloudrun`: `--project` and `--region`.
+- `ecs`: `--region`, with the AWS account ID read from the task definition ARNs (no extra IAM permission). If the ARNs span more than one account the top-level `accountId` is omitted and a warning is recorded.
+- `k8s`: detected from the cluster. Node `spec.providerID` values identify GKE (`gce://<project>/...`), EKS (`aws:///...`), and AKS (`azure:///subscriptions/<subscription>/...`); the `topology.kubernetes.io/region` node label supplies the region. The kubeconfig context name is used next (`gke_<project>_<location>_<cluster>` for direct GKE access, `connectgateway_<project>_<location>_<membership>` for GKE Connect Gateway, where a `global` location records no region, or the EKS cluster ARN, which is the only source of the AWS account ID), then the API server host (`*.<region>.eks.amazonaws.com`, `*.hcp.<region>.azmk8s.io`, `[<region>-]connectgateway.googleapis.com`). Listing nodes needs `list` on `nodes`; without it a warning is recorded and detection falls back to the context name and host. An in-cluster EKS run therefore reports the provider and region but no account ID.
+
+For `k8s` scans the report also carries a top-level `clusterName` (and a `vdr:clusterName` CycloneDX tool property) parsed from the same kubeconfig context name: the `<cluster>` segment of `gke_<project>_<location>_<cluster>`, the `<membership>` segment of a Connect Gateway `connectgateway_<project>_<location>_<membership>` context, or the name after `cluster/` in an EKS ARN. It is omitted when the context does not follow one of these conventions, including AKS (whose default context is just the cluster name, indistinguishable from an arbitrary context), renamed contexts, and in-cluster runs; `contextName` still identifies the environment in those cases.
 
 CAPEC/ATT&CK chain-taxonomy enrichment is disabled by default. Use `--include-chain-taxonomy` to opt a scan into loading the release-pinned embedded catalog, calculating transition candidates, and emitting the related report fields. When enabled, every finding includes informational `chainTaxonomy` evidence projected through the catalog. The projection preserves each `CWE -> CAPEC -> ATT&CK` path, structured CAPEC consequence impacts, and explicit CAPEC predecessor/successor IDs. `taxonomyRole` is `producer_candidate`, `consumer_candidate`, `bridge_candidate`, `isolated_in_capec`, or `unknown`; these are pattern-level evidence labels, not proof of a CVE-specific exploit chain.
 

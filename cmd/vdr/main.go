@@ -252,6 +252,9 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		return err
 	}
 	logger.Info("inventory: %d workloads, %d unique images", len(inventory.Resources), len(inventory.Images))
+	if cloud := inventory.Cloud; cloud != nil {
+		logger.Info("cloud scope: provider=%s %s=%s regions=%v", cloud.Provider, cloud.AccountType, cloud.AccountID, cloud.Regions)
+	}
 	if runtimeIssues, runtimeErr := collector.CollectPodRuntimeIssues(ctx, k8sOptions); runtimeErr != nil {
 		// Runtime status is operational context only. It must not prevent an
 		// inventory and image-vulnerability report when the status read fails.

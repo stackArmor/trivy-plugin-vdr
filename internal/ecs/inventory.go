@@ -45,7 +45,11 @@ func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.I
 		}
 		allTaskDefinitions = append(allTaskDefinitions, taskDefinitions...)
 	}
-	return buildInventoryFromTaskDefinitions(collectedTaskDefinitions), allTaskDefinitions, nil
+	inventory := buildInventoryFromTaskDefinitions(collectedTaskDefinitions)
+	cloud, cloudWarnings := cloudContext(opts.Regions, collectedTaskDefinitions)
+	inventory.Cloud = cloud
+	inventory.Warnings = append(inventory.Warnings, cloudWarnings...)
+	return inventory, allTaskDefinitions, nil
 }
 
 func buildInventoryFromTaskDefinitions(taskDefinitions []TaskDefinition) *model.Inventory {
@@ -57,6 +61,44 @@ func buildInventoryFromTaskDefinitions(taskDefinitions []TaskDefinition) *model.
 		builder.addTaskDefinition(taskDefinition)
 	}
 	return builder.finish()
+}
+
+// cloudContext describes the AWS scope of the scan. The account ID is taken
+// from the task definition ARNs so no extra STS call or permission is needed;
+// when the ARNs name more than one account the ID is left empty and a warning
+// is recorded.
+func cloudContext(regions []string, taskDefinitions []TaskDefinition) (*model.CloudContext, []string) {
+	seen := map[string]struct{}{}
+	var accounts []string
+	for _, taskDefinition := range taskDefinitions {
+		account := accountIDFromARN(taskDefinition.Arn)
+		if _, ok := seen[account]; ok || account == "" {
+			continue
+		}
+		seen[account] = struct{}{}
+		accounts = append(accounts, account)
+	}
+	if len(accounts) > 1 {
+		sort.Strings(accounts)
+		warning := fmt.Sprintf("ECS task definitions span multiple AWS accounts (%s); the report-level cloud accountId is omitted", strings.Join(accounts, ", "))
+		return model.NewCloudContext(model.CloudProviderAWS, "", regions), []string{warning}
+	}
+	accountID := ""
+	if len(accounts) == 1 {
+		accountID = accounts[0]
+	}
+	return model.NewCloudContext(model.CloudProviderAWS, accountID, regions), nil
+}
+
+// accountIDFromARN returns the account field of an AWS ARN
+// (arn:<partition>:<service>:<region>:<account>:<resource>), or "" when the
+// value is not a well-formed ARN.
+func accountIDFromARN(arn string) string {
+	parts := strings.SplitN(strings.TrimSpace(arn), ":", 6)
+	if len(parts) < 6 || parts[0] != "arn" {
+		return ""
+	}
+	return parts[4]
 }
 
 type inventoryBuilder struct {

@@ -33,8 +33,11 @@ func (c Collector) CollectResources(ctx context.Context, opts Options) (*model.I
 	}
 
 	builder := inventoryBuilder{
-		inventory: &model.Inventory{ContextName: "cloudrun/" + opts.Project},
-		images:    map[string]*model.ImageInventory{},
+		inventory: &model.Inventory{
+			ContextName: "cloudrun/" + opts.Project,
+			Cloud:       model.NewCloudContext(model.CloudProviderGCP, opts.Project, opts.Regions),
+		},
+		images: map[string]*model.ImageInventory{},
 	}
 	if labelClient, ok := c.Client.(ProjectLabelClient); ok {
 		labels, err := labelClient.GetProjectLabels(ctx, opts.Project)

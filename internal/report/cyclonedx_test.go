@@ -224,6 +224,58 @@ func TestToCycloneDXStructure(t *testing.T) {
 	}
 }
 
+func TestToCycloneDXEmitsCloudProperties(t *testing.T) {
+	report := sampleCycloneDXReport()
+	report.Cloud = model.NewCloudContext("aws", "123456789012", []string{"us-east-1"})
+
+	doc := ToCycloneDX(report)
+
+	toolProps := propMap(doc.Metadata.Tools.Components[0].Properties)
+	if toolProps["vdr:cloudProvider"] != "aws" ||
+		toolProps["vdr:cloudAccountType"] != "account" ||
+		toolProps["vdr:cloudAccountId"] != "123456789012" ||
+		toolProps["vdr:cloudRegions"] != "us-east-1" {
+		t.Errorf("tool properties = %#v, want cloud scope", toolProps)
+	}
+	multiRegion := sampleCycloneDXReport()
+	multiRegion.Cloud = model.NewCloudContext("aws", "123456789012", []string{"us-west-2", "us-east-1"})
+	if got := propMap(ToCycloneDX(multiRegion).Metadata.Tools.Components[0].Properties)["vdr:cloudRegions"]; got != "us-east-1,us-west-2" {
+		t.Errorf("vdr:cloudRegions = %q, want us-east-1,us-west-2", got)
+	}
+	if len(doc.Components) != 1 {
+		t.Fatalf("components = %d, want 1", len(doc.Components))
+	}
+	assetProps := propMap(doc.Components[0].Properties)
+	if assetProps["vdr:cloudProvider"] != "aws" ||
+		assetProps["vdr:cloudAccountType"] != "account" ||
+		assetProps["vdr:cloudAccountId"] != "123456789012" ||
+		assetProps["vdr:cloudRegion"] != "us-east-1" {
+		t.Errorf("asset properties = %#v, want per-asset cloud scope", assetProps)
+	}
+
+	// Without a cloud scope, none of the properties are emitted.
+	plain := ToCycloneDX(sampleCycloneDXReport())
+	for _, name := range []string{"vdr:cloudProvider", "vdr:cloudAccountType", "vdr:cloudAccountId", "vdr:cloudRegions"} {
+		if _, ok := propMap(plain.Metadata.Tools.Components[0].Properties)[name]; ok {
+			t.Errorf("tool property %s present without cloud scope", name)
+		}
+	}
+	if _, ok := propMap(plain.Components[0].Properties)["vdr:cloudRegion"]; ok {
+		t.Errorf("asset cloud property present without cloud scope")
+	}
+}
+
+func TestToCycloneDXEmitsClusterName(t *testing.T) {
+	report := sampleCycloneDXReport()
+	report.ClusterName = "prod"
+	if got := propMap(ToCycloneDX(report).Metadata.Tools.Components[0].Properties)["vdr:clusterName"]; got != "prod" {
+		t.Errorf("vdr:clusterName = %q, want prod", got)
+	}
+	if _, ok := propMap(ToCycloneDX(sampleCycloneDXReport()).Metadata.Tools.Components[0].Properties)["vdr:clusterName"]; ok {
+		t.Errorf("vdr:clusterName present without a cluster name")
+	}
+}
+
 func TestToCycloneDXOneVulnPerCVEAsset(t *testing.T) {
 	doc := ToCycloneDX(sampleCycloneDXReport())
 

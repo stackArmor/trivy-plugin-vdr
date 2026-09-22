@@ -146,6 +146,15 @@ func ToCycloneDX(report model.Report) cdxDocument {
 	if report.ReportSchemaVersion != "" {
 		toolProperties = append(toolProperties, cdxProperty{Name: "vdr:reportSchemaVersion", Value: report.ReportSchemaVersion})
 	}
+	if report.ClusterName != "" {
+		toolProperties = append(toolProperties, cdxProperty{Name: "vdr:clusterName", Value: report.ClusterName})
+	}
+	if cloud := report.Cloud; cloud != nil {
+		toolProperties = appendCloudAccountProperties(toolProperties, cloud.CloudAccount)
+		if len(cloud.Regions) > 0 {
+			toolProperties = append(toolProperties, cdxProperty{Name: "vdr:cloudRegions", Value: strings.Join(cloud.Regions, ",")})
+		}
+	}
 	if catalog := report.ChainCatalog; catalog != nil {
 		toolProperties = append(toolProperties,
 			cdxProperty{Name: "vdr:chainCatalogSchema", Value: catalog.SchemaVersion},
@@ -188,7 +197,7 @@ func ToCycloneDX(report model.Report) cdxDocument {
 		if _, ok := components[id]; ok {
 			return id
 		}
-		comp := buildAssetComponent(id, ref, exposure, posture, image)
+		comp := buildAssetComponent(id, ref, report.Cloud.ForResource(ref), exposure, posture, image)
 		components[id] = &comp
 		order = append(order, id)
 		return id
@@ -293,7 +302,7 @@ func assetBOMRef(ref model.ResourceRef) string {
 	return "urn:vdr:asset:" + strings.Join(parts, "/")
 }
 
-func buildAssetComponent(id string, ref model.ResourceRef, exposure *model.Exposure, posture *model.WorkloadPosture, image string) cdxComponent {
+func buildAssetComponent(id string, ref model.ResourceRef, cloud *model.ResourceCloud, exposure *model.Exposure, posture *model.WorkloadPosture, image string) cdxComponent {
 	compType := "application"
 	if ref.Kind == "Image" {
 		compType = "container"
@@ -317,6 +326,10 @@ func buildAssetComponent(id string, ref model.ResourceRef, exposure *model.Expos
 	if image != "" {
 		add("vdr:imageRef", image)
 	}
+	if cloud != nil {
+		props = appendCloudAccountProperties(props, cloud.CloudAccount)
+		add("vdr:cloudRegion", cloud.Region)
+	}
 	if exposure != nil {
 		add("vdr:assetInternetReachable", strconv.FormatBool(exposure.InternetAccessible))
 		if route, ok := backendRoute(exposure); ok {
@@ -329,6 +342,19 @@ func buildAssetComponent(id string, ref model.ResourceRef, exposure *model.Expos
 	props = append(props, postureProperties(posture)...)
 	comp.Properties = props
 	return comp
+}
+
+func appendCloudAccountProperties(props []cdxProperty, account model.CloudAccount) []cdxProperty {
+	for _, p := range []cdxProperty{
+		{Name: "vdr:cloudProvider", Value: account.Provider},
+		{Name: "vdr:cloudAccountType", Value: account.AccountType},
+		{Name: "vdr:cloudAccountId", Value: account.AccountID},
+	} {
+		if p.Value != "" {
+			props = append(props, p)
+		}
+	}
+	return props
 }
 
 // backendRoute returns the first route that records a backend protocol, so the
