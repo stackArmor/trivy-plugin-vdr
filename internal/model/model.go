@@ -1,20 +1,123 @@
 package model
 
-import "time"
+import (
+	"sort"
+	"strings"
+	"time"
+)
 
 type Inventory struct {
-	ContextName string              `json:"contextName"`
+	ContextName string `json:"contextName"`
+	// ClusterName is the managed Kubernetes cluster name, when it can be
+	// determined (currently from GKE and EKS kubeconfig context names).
+	ClusterName string              `json:"clusterName,omitempty"`
 	Resources   []ResourceInventory `json:"resources"`
 	Images      []ImageInventory    `json:"images"`
 	// Namespaces maps a namespace name to its object labels. Used to resolve
 	// namespace-level FedRAMP metadata (security-impact profile, multi-agency, class).
 	Namespaces map[string]map[string]string `json:"namespaces,omitempty"`
+	// Cloud identifies the cloud provider, account/project/subscription, and
+	// regions the inventory was collected from, when known.
+	Cloud *CloudContext `json:"cloud,omitempty"`
 	// ClusterDefaults holds cluster-wide FedRAMP metadata read from the cluster
 	// ConfigMap (e.g. class, multiAgency). Not serialized in the report.
 	ClusterDefaults map[string]string `json:"-"`
 	// Warnings holds best-effort collection warnings (e.g. a missing cluster
 	// ConfigMap) to be surfaced into the report. Not serialized here.
 	Warnings []string `json:"-"`
+}
+
+// Cloud provider identifiers recorded in CloudContext.Provider.
+const (
+	CloudProviderGCP   = "gcp"
+	CloudProviderAWS   = "aws"
+	CloudProviderAzure = "azure"
+)
+
+// Cloud account-type identifiers recorded in CloudContext.AccountType. They
+// name the provider's top-level billing/ownership scope: a GCP project, an AWS
+// account, or an Azure subscription.
+const (
+	CloudAccountTypeProject      = "project"
+	CloudAccountTypeAccount      = "account"
+	CloudAccountTypeSubscription = "subscription"
+)
+
+// CloudAccount names a cloud provider and its top-level account scope. Fields
+// that could not be determined are left empty and omitted from the JSON.
+type CloudAccount struct {
+	// Provider is "gcp", "aws", or "azure".
+	Provider string `json:"provider"`
+	// AccountType is "project" (GCP), "account" (AWS), or "subscription" (Azure).
+	AccountType string `json:"accountType,omitempty"`
+	// AccountID is the GCP project ID, AWS account ID, or Azure subscription ID.
+	AccountID string `json:"accountId,omitempty"`
+}
+
+// CloudContext identifies the cloud scope a scan ran against. Build it with
+// NewCloudContext so AccountType and Regions are always normalized.
+type CloudContext struct {
+	CloudAccount
+	// Regions lists every cloud region the inventory spans, sorted and unique.
+	Regions []string `json:"regions,omitempty"`
+}
+
+// NewCloudContext derives AccountType from provider, trims, de-duplicates, and
+// sorts regions, and returns nil when nothing about the cloud scope is known.
+func NewCloudContext(provider, accountID string, regions []string) *CloudContext {
+	cloud := &CloudContext{CloudAccount: CloudAccount{
+		Provider:  strings.TrimSpace(provider),
+		AccountID: strings.TrimSpace(accountID),
+	}}
+	cloud.AccountType = cloudAccountType(cloud.Provider)
+	seen := map[string]struct{}{}
+	for _, region := range regions {
+		region = strings.TrimSpace(region)
+		if _, ok := seen[region]; ok || region == "" {
+			continue
+		}
+		seen[region] = struct{}{}
+		cloud.Regions = append(cloud.Regions, region)
+	}
+	sort.Strings(cloud.Regions)
+	if cloud.Provider == "" && cloud.AccountID == "" && len(cloud.Regions) == 0 {
+		return nil
+	}
+	return cloud
+}
+
+func cloudAccountType(provider string) string {
+	switch provider {
+	case CloudProviderGCP:
+		return CloudAccountTypeProject
+	case CloudProviderAWS:
+		return CloudAccountTypeAccount
+	case CloudProviderAzure:
+		return CloudAccountTypeSubscription
+	}
+	return ""
+}
+
+// ResourceCloud is the per-resource projection of CloudContext: the same
+// provider and account, with the single region the resource lives in.
+type ResourceCloud struct {
+	CloudAccount
+	Region string `json:"region,omitempty"`
+}
+
+// ForResource projects the scope onto one resource. The region is the
+// resource's own (Cloud Run, ECS) when it carries one, otherwise the scope's
+// single region (a Kubernetes cluster); when the scope spans several regions
+// and the resource does not name one, the region is left empty.
+func (c *CloudContext) ForResource(ref ResourceRef) *ResourceCloud {
+	if c == nil {
+		return nil
+	}
+	region := ref.Region
+	if region == "" && len(c.Regions) == 1 {
+		region = c.Regions[0]
+	}
+	return &ResourceCloud{CloudAccount: c.CloudAccount, Region: region}
 }
 
 type ImageInventory struct {
@@ -567,6 +670,12 @@ type Report struct {
 	// ContextName is the Kubernetes context (kubectx) the inventory was collected
 	// from. Shown in the report header.
 	ContextName string `json:"contextName,omitempty"`
+	// ClusterName is the Kubernetes cluster name the inventory was collected
+	// from. Omitted when it could not be determined.
+	ClusterName string `json:"clusterName,omitempty"`
+	// Cloud is the cloud provider, account/project/subscription, and regions the
+	// inventory was collected from. Omitted when no cloud scope was detected.
+	Cloud *CloudContext `json:"cloud,omitempty"`
 	// Class is the cluster-wide FedRAMP Certification Class (A/B/C/D) in effect for
 	// scoring. Shown in the report header.
 	Class    string    `json:"class,omitempty"`
@@ -602,6 +711,7 @@ type Report struct {
 // the entire findings payload into a second asset-centric section.
 type AssetFacts struct {
 	Resource       ResourceRef          `json:"resource"`
+	Cloud          *ResourceCloud       `json:"cloud,omitempty"`
 	Images         []ContainerImage     `json:"images,omitempty"`
 	Exposure       *Exposure            `json:"exposure,omitempty"`
 	Runtime        *RuntimeMetadata     `json:"runtime,omitempty"`
@@ -612,6 +722,7 @@ type AssetFacts struct {
 
 type ResourceReport struct {
 	Resource         ResourceRef          `json:"resource"`
+	Cloud            *ResourceCloud       `json:"cloud,omitempty"`
 	Images           []ContainerImage     `json:"images,omitempty"`
 	Exposure         *Exposure            `json:"exposure,omitempty"`
 	Runtime          *RuntimeMetadata     `json:"runtime,omitempty"`

@@ -2,8 +2,44 @@ package model
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
+
+func TestNewCloudContextNormalizes(t *testing.T) {
+	got := NewCloudContext(" azure ", " sub ", []string{"westus", " eastus", "", "westus"})
+	want := &CloudContext{CloudAccount: CloudAccount{Provider: "azure", AccountType: "subscription", AccountID: "sub"}, Regions: []string{"eastus", "westus"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NewCloudContext = %#v, want %#v", got, want)
+	}
+	if got := NewCloudContext("", "", []string{" "}); got != nil {
+		t.Fatalf("NewCloudContext with no evidence = %#v, want nil", got)
+	}
+}
+
+func TestCloudContextJSONFlattensAccount(t *testing.T) {
+	data, err := json.Marshal(NewCloudContext("gcp", "p", []string{"us-east4"}).ForResource(ResourceRef{}))
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if got, want := string(data), `{"provider":"gcp","accountType":"project","accountId":"p","region":"us-east4"}`; got != want {
+		t.Fatalf("JSON = %s, want %s", got, want)
+	}
+}
+
+func TestForResourcePrefersResourceRegionAndOmitsAmbiguousRegion(t *testing.T) {
+	cloud := NewCloudContext("aws", "123456789012", []string{"us-east-1", "us-west-2"})
+	if got := cloud.ForResource(ResourceRef{Region: "us-west-2"}); got.Region != "us-west-2" {
+		t.Fatalf("resource region = %q, want us-west-2", got.Region)
+	}
+	if got := cloud.ForResource(ResourceRef{}); got.Region != "" {
+		t.Fatalf("resource region = %q, want empty for multi-region scope", got.Region)
+	}
+	var none *CloudContext
+	if got := none.ForResource(ResourceRef{Region: "us-west-2"}); got != nil {
+		t.Fatalf("nil.ForResource = %#v, want nil", got)
+	}
+}
 
 func TestAccessProtectionJSONUsesAuthProxyFieldNames(t *testing.T) {
 	data, err := json.Marshal(AccessProtection{

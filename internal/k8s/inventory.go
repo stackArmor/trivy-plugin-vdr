@@ -53,6 +53,9 @@ type Collector struct {
 	// through to the Trivy CLI, which requires a real kubectx; use ContextName
 	// for anything that identifies the environment in output.
 	KubeContext string
+	// APIServer is the rest.Config Host the client talks to. Used only as
+	// cloud-detection evidence (EKS/AKS control-plane hostnames).
+	APIServer string
 }
 
 // ResolveContextName picks the identity recorded as Inventory.ContextName.
@@ -131,6 +134,7 @@ func NewForCurrentContext(explicitContextName string) (*Collector, string, error
 		Dynamic:     dynamicClient,
 		ContextName: contextName,
 		KubeContext: kubeContext,
+		APIServer:   config.Host,
 	}, contextName, nil
 }
 
@@ -185,7 +189,12 @@ func (c *Collector) Collect(ctx context.Context, opts Options) (*model.Inventory
 		c.collectClusterDefaults(ctx, opts, &builder)
 	}
 
-	return builder.finish(), nil
+	inventory := builder.finish()
+	cloud, cloudWarnings := c.detectCloud(ctx)
+	inventory.Cloud = cloud
+	inventory.ClusterName = clusterNameFromKubeContext(c.KubeContext)
+	inventory.Warnings = append(inventory.Warnings, cloudWarnings...)
+	return inventory, nil
 }
 
 // collectNamespaceMetadata records each in-scope namespace's object labels so

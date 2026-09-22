@@ -62,6 +62,25 @@ func TestInventoryCollectsTaskDefinitions(t *testing.T) {
 	if got.Images[0].NormalizedImage != "123.dkr.ecr.us-gov-west-1.amazonaws.com/api" {
 		t.Fatalf("NormalizedImage = %q", got.Images[0].NormalizedImage)
 	}
+	wantCloud := &model.CloudContext{CloudAccount: model.CloudAccount{Provider: "aws", AccountType: "account", AccountID: "123"}, Regions: []string{"us-gov-west-1"}}
+	if !reflect.DeepEqual(got.Cloud, wantCloud) {
+		t.Fatalf("Cloud = %#v, want %#v", got.Cloud, wantCloud)
+	}
+}
+
+func TestCloudContextOmitsAccountWhenARNsSpanAccounts(t *testing.T) {
+	got, warnings := cloudContext([]string{"us-east-1", " us-west-2 "}, []TaskDefinition{
+		{Arn: "arn:aws:ecs:us-east-1:111111111111:task-definition/a:1"},
+		{Arn: "arn:aws:ecs:us-west-2:222222222222:task-definition/b:1"},
+		{Arn: "not-an-arn"},
+	})
+	want := &model.CloudContext{CloudAccount: model.CloudAccount{Provider: "aws", AccountType: "account"}, Regions: []string{"us-east-1", "us-west-2"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cloudContext = %#v, want %#v", got, want)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one multi-account warning", warnings)
+	}
 }
 
 func TestInventoryDeduplicatesSharedTaskDefinitionImages(t *testing.T) {

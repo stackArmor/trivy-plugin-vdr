@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
 func TestCollectInventoriesServicesAndJobs(t *testing.T) {
@@ -82,6 +84,10 @@ func TestCollectDeduplicatesSharedImages(t *testing.T) {
 	}
 	if len(got.Images[0].Resources) != 2 {
 		t.Fatalf("image resources = %#v, want service and job refs", got.Images[0].Resources)
+	}
+	wantCloud := &model.CloudContext{CloudAccount: model.CloudAccount{Provider: "gcp", AccountType: "project", AccountID: "p"}, Regions: []string{"us-east4"}}
+	if !reflect.DeepEqual(got.Cloud, wantCloud) {
+		t.Fatalf("Cloud = %#v, want %#v", got.Cloud, wantCloud)
 	}
 }
 

@@ -59,6 +59,80 @@ func TestBuildAndRenderJSONIncludeVersionMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesCloudScopeToReportAndResources(t *testing.T) {
+	inv := sampleInventory()
+	inv.Cloud = model.NewCloudContext("gcp", "my-proj", []string{"us-east4"})
+	findings := []model.Finding{sampleFinding("CVE-2026-0001", "HIGH", 0.7)}
+	wantCloud := inv.Cloud
+	wantResourceCloud := &model.ResourceCloud{CloudAccount: inv.Cloud.CloudAccount, Region: "us-east4"}
+
+	resources := Build(inv, findings, nil, Options{GeneratedAt: fixedTime(), View: ViewResources})
+	if !reflect.DeepEqual(resources.Cloud, wantCloud) {
+		t.Fatalf("resources view Cloud = %#v, want %#v", resources.Cloud, wantCloud)
+	}
+	if len(resources.Resources) != 1 || !reflect.DeepEqual(resources.Resources[0].Cloud, wantResourceCloud) {
+		t.Fatalf("resources[0].Cloud = %#v, want %#v", resources.Resources, wantResourceCloud)
+	}
+
+	findingsView := Build(inv, findings, nil, Options{GeneratedAt: fixedTime(), View: ViewFindings})
+	if !reflect.DeepEqual(findingsView.Cloud, wantCloud) {
+		t.Fatalf("findings view Cloud = %#v, want %#v", findingsView.Cloud, wantCloud)
+	}
+	if len(findingsView.Assets) != 1 || !reflect.DeepEqual(findingsView.Assets[0].Cloud, wantResourceCloud) {
+		t.Fatalf("assets[0].Cloud = %#v, want %#v", findingsView.Assets, wantResourceCloud)
+	}
+
+	var output bytes.Buffer
+	if err := RenderJSON(&output, resources); err != nil {
+		t.Fatalf("RenderJSON returned error: %v", err)
+	}
+	var decoded struct {
+		Cloud     map[string]any   `json:"cloud"`
+		Resources []map[string]any `json:"resources"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode rendered JSON: %v", err)
+	}
+	if decoded.Cloud["provider"] != "gcp" || decoded.Cloud["accountId"] != "my-proj" || decoded.Cloud["accountType"] != "project" {
+		t.Fatalf("rendered cloud = %#v", decoded.Cloud)
+	}
+	if got, _ := decoded.Resources[0]["cloud"].(map[string]any); got["region"] != "us-east4" {
+		t.Fatalf("rendered resources[0].cloud = %#v", decoded.Resources[0]["cloud"])
+	}
+}
+
+func TestBuildCarriesClusterName(t *testing.T) {
+	inv := sampleInventory()
+	inv.ClusterName = "prod"
+	for _, view := range []string{ViewFindings, ViewResources} {
+		var output bytes.Buffer
+		if err := RenderJSON(&output, Build(inv, nil, nil, Options{GeneratedAt: fixedTime(), View: view})); err != nil {
+			t.Fatalf("RenderJSON returned error: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+			t.Fatalf("decode rendered JSON: %v", err)
+		}
+		if decoded["clusterName"] != "prod" {
+			t.Fatalf("%s view clusterName = %#v, want prod", view, decoded["clusterName"])
+		}
+	}
+
+	var output bytes.Buffer
+	if err := RenderJSON(&output, Build(sampleInventory(), nil, nil, Options{GeneratedAt: fixedTime()})); err != nil {
+		t.Fatalf("RenderJSON returned error: %v", err)
+	}
+	if bytes.Contains(output.Bytes(), []byte(`"clusterName"`)) {
+		t.Fatalf("clusterName rendered without a known cluster name")
+	}
+}
+
+func TestBuildOmitsCloudWithoutScope(t *testing.T) {
+	if got := Build(sampleInventory(), nil, nil, Options{GeneratedAt: fixedTime()}); got.Cloud != nil {
+		t.Fatalf("Cloud = %#v, want nil when the inventory has no cloud scope", got.Cloud)
+	}
+}
+
 func TestBuildIncludesPathPreservingChainTaxonomyAndCoverage(t *testing.T) {
 	mapped := sampleFinding("CVE-2026-0094", "HIGH", 0.7)
 	mapped.CWEs = []string{"CWE-94"}

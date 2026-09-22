@@ -72,9 +72,12 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	if class == "" {
 		class = "B"
 	}
-	contextName := ""
+	contextName, clusterName := "", ""
+	var cloud *model.CloudContext
 	if inventory != nil {
 		contextName = inventory.ContextName
+		clusterName = inventory.ClusterName
+		cloud = inventory.Cloud
 	}
 
 	warnings := append([]string(nil), options.Warnings...)
@@ -122,6 +125,8 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		PluginVersion:       options.PluginVersion,
 		ChainCatalog:        chainanalysis.CatalogMetadata(catalog),
 		ContextName:         contextName,
+		ClusterName:         clusterName,
+		Cloud:               cloud,
 		Class:               class,
 		Summary:             summary,
 		CAPECTransitions:    transitions,
@@ -156,6 +161,7 @@ func assetFacts(reports []model.ResourceReport) []model.AssetFacts {
 		report := reports[i]
 		facts = append(facts, model.AssetFacts{
 			Resource:       report.Resource,
+			Cloud:          report.Cloud,
 			Images:         report.Images,
 			Exposure:       report.Exposure,
 			Runtime:        report.Runtime,
@@ -499,6 +505,7 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 	for ref, inv := range indexContainerInventory(inventory) {
 		report := &model.ResourceReport{
 			Resource:         ref,
+			Cloud:            inventory.Cloud.ForResource(ref),
 			Images:           append([]model.ContainerImage(nil), inv.images...),
 			Labels:           copyStringMap(inv.labels),
 			ProviderMetadata: copyStringMap(inv.providerMetadata),
@@ -538,7 +545,7 @@ func buildResourceReports(inventory *model.Inventory, findings []model.Finding, 
 			}
 			report := reports[ref]
 			if report == nil {
-				report = &model.ResourceReport{Resource: ref}
+				report = &model.ResourceReport{Resource: ref, Cloud: inventory.Cloud.ForResource(ref)}
 				if exposure, ok := exposures[ref]; ok {
 					value := exposure
 					report.Exposure = &value
