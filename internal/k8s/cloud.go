@@ -18,8 +18,13 @@ const (
 )
 
 var (
-	// gke_<project>_<location>_<cluster>; project IDs never contain "_".
-	gkeContextPattern = regexp.MustCompile(`^gke_([^_]+)_([^_]+)_(.+)$`)
+	// gke_<project>_<location>_<cluster> (direct control-plane access) or
+	// connectgateway_<project>_<location>_<membership> (fleet Connect Gateway,
+	// where location is often "global"); project IDs never contain "_".
+	gkeContextPattern = regexp.MustCompile(`^(?:gke|connectgateway)_([^_]+)_([^_]+)_(.+)$`)
+	// connectgateway.googleapis.com, or <region>-connectgateway.googleapis.com
+	// for regional fleet memberships.
+	connectGatewayHostPattern = regexp.MustCompile(`^(?:([a-z]+-[a-z]+\d+)-)?connectgateway\.googleapis\.com$`)
 	// arn:<partition>:eks:<region>:<account>:cluster/<name>
 	eksContextPattern = regexp.MustCompile(`^arn:[a-z0-9-]+:eks:([a-z0-9-]+):(\d{12}):cluster/(.+)$`)
 	// <id>.<hash>.<region>.eks.amazonaws.com (also .amazonaws.com.cn)
@@ -134,12 +139,14 @@ func cloudEvidenceFromProviderID(providerID string) cloudEvidence {
 }
 
 // cloudEvidenceFromKubeContext parses the conventional context names written by
-// `gcloud container clusters get-credentials` and `aws eks update-kubeconfig`.
+// `gcloud container clusters get-credentials` (with or without
+// `--connect-gateway`, or `gcloud container fleet memberships get-credentials`)
+// and `aws eks update-kubeconfig`.
 func cloudEvidenceFromKubeContext(kubeContext string) cloudEvidence {
 	kubeContext = strings.TrimSpace(kubeContext)
 	if m := gkeContextPattern.FindStringSubmatch(kubeContext); m != nil {
 		ev := cloudEvidence{Provider: model.CloudProviderGCP, AccountID: m[1]}
-		if region := gceZoneToRegion(m[2]); region != "" {
+		if region := gceZoneToRegion(m[2]); region != "" && region != "global" {
 			ev.Regions = []string{region}
 		}
 		return ev
@@ -150,8 +157,8 @@ func cloudEvidenceFromKubeContext(kubeContext string) cloudEvidence {
 	return cloudEvidence{}
 }
 
-// clusterNameFromKubeContext extracts the cluster name from the same
-// conventional GKE and EKS context names. Other contexts (AKS, kind, renamed
+// clusterNameFromKubeContext extracts the cluster (or, for Connect Gateway,
+// fleet membership) name from the same conventional GKE and EKS context names. Other contexts (AKS, kind, renamed
 // contexts) carry no recognizable cluster name and yield "".
 func clusterNameFromKubeContext(kubeContext string) string {
 	kubeContext = strings.TrimSpace(kubeContext)
@@ -165,11 +172,20 @@ func clusterNameFromKubeContext(kubeContext string) string {
 }
 
 // cloudEvidenceFromAPIServer parses the managed-control-plane hostnames used by
-// EKS and AKS. GKE endpoints are bare IPs and carry no evidence.
+// EKS, AKS, and GKE Connect Gateway. Direct GKE endpoints are bare IPs and
+// carry no evidence. The Connect Gateway URL path names the project by number,
+// not ID, so it is not used as the account.
 func cloudEvidenceFromAPIServer(apiServer string) cloudEvidence {
 	host := strings.ToLower(apiServerHost(apiServer))
 	if host == "" {
 		return cloudEvidence{}
+	}
+	if m := connectGatewayHostPattern.FindStringSubmatch(host); m != nil {
+		ev := cloudEvidence{Provider: model.CloudProviderGCP}
+		if m[1] != "" {
+			ev.Regions = []string{m[1]}
+		}
+		return ev
 	}
 	if m := eksHostPattern.FindStringSubmatch(host); m != nil {
 		return cloudEvidence{Provider: model.CloudProviderAWS, Regions: []string{m[1]}}

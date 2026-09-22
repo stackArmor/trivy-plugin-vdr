@@ -41,6 +41,9 @@ func TestCloudEvidenceFromKubeContext(t *testing.T) {
 		{"gke_my-proj_us-central1-c_zonal", cloudEvidence{Provider: "gcp", AccountID: "my-proj", Regions: []string{"us-central1"}}},
 		{"arn:aws:eks:us-east-1:123456789012:cluster/prod", cloudEvidence{Provider: "aws", AccountID: "123456789012", Regions: []string{"us-east-1"}}},
 		{"arn:aws-us-gov:eks:us-gov-west-1:123456789012:cluster/gov", cloudEvidence{Provider: "aws", AccountID: "123456789012", Regions: []string{"us-gov-west-1"}}},
+		{"connectgateway_armory-rally-prod_us-east4_rally-anywhere-prod-cluster", cloudEvidence{Provider: "gcp", AccountID: "armory-rally-prod", Regions: []string{"us-east4"}}},
+		// A global fleet membership names no region.
+		{"connectgateway_armory-patlytics-prod_global_patlytics-prod-us-east4", cloudEvidence{Provider: "gcp", AccountID: "armory-patlytics-prod"}},
 		{"my-aks-cluster", cloudEvidence{}},
 		{"", cloudEvidence{}},
 	}
@@ -57,6 +60,19 @@ func TestClusterNameFromKubeContext(t *testing.T) {
 		"gke_my-proj_us-central1-c_zonal_with_underscores":          "zonal_with_underscores",
 		"arn:aws:eks:us-east-1:123456789012:cluster/prod":           "prod",
 		"arn:aws-us-gov:eks:us-gov-west-1:123456789012:cluster/gov": "gov",
+		// Real-world contexts: EKS GovCloud, GKE Connect Gateway, and direct GKE.
+		"arn:aws-us-gov:eks:us-gov-west-1:280640247078:cluster/scrumptious-mongoose-1743595680": "scrumptious-mongoose-1743595680",
+		"arn:aws-us-gov:eks:us-gov-west-1:280640247078:cluster/vdr-eks-managed-eval":            "vdr-eks-managed-eval",
+		"connectgateway_armory-athena-staging_global_athena-staging-gke-us-east4":               "athena-staging-gke-us-east4",
+		"connectgateway_armory-patlytics-prod_global_patlytics-prod-us-east4":                   "patlytics-prod-us-east4",
+		"connectgateway_armory-patlytics-staging_global_patlytics-staging-us-east4":             "patlytics-staging-us-east4",
+		"connectgateway_armory-rally-prod_us-east4_rally-anywhere-prod-cluster":                 "rally-anywhere-prod-cluster",
+		"connectgateway_armory-rally-staging_us-east4_rally-anywhere-staging-cluster":           "rally-anywhere-staging-cluster",
+		"connectgateway_armoryd2v-tcs-dev-prod_us-east4_tcs-prod-cluster":                       "tcs-prod-cluster",
+		"gke_armory-patlytics-staging_us-east4_patlytics-staging-us-east4":                      "patlytics-staging-us-east4",
+		"gke_armory-rally-prod_us-east4_rally-anywhere-prod-cluster":                            "rally-anywhere-prod-cluster",
+		"gke_armory-rally-staging_us-east4_rally-anywhere-staging-cluster":                      "rally-anywhere-staging-cluster",
+		"gke_armory-ripcord-staging_us-east4_ripcord-steelix-cluster":                           "ripcord-steelix-cluster",
 		"my-aks-cluster": "",
 		"kind-kind":      "",
 		"":               "",
@@ -77,6 +93,8 @@ func TestCloudEvidenceFromAPIServer(t *testing.T) {
 		{"https://abcdef.yl4.us-gov-west-1.eks.amazonaws.com:443", cloudEvidence{Provider: "aws", Regions: []string{"us-gov-west-1"}}},
 		{"https://prod-dns-abc123.hcp.eastus.azmk8s.io:443", cloudEvidence{Provider: "azure", Regions: []string{"eastus"}}},
 		{"https://gov-abc123.hcp.usgovvirginia.azmk8s.us", cloudEvidence{Provider: "azure", Regions: []string{"usgovvirginia"}}},
+		{"https://connectgateway.googleapis.com/v1/projects/123456789012/locations/global/gkeMemberships/patlytics-prod-us-east4", cloudEvidence{Provider: "gcp"}},
+		{"https://us-east4-connectgateway.googleapis.com/v1/projects/123456789012/locations/us-east4/gkeMemberships/tcs-prod-cluster", cloudEvidence{Provider: "gcp", Regions: []string{"us-east4"}}},
 		{"https://35.1.2.3", cloudEvidence{}},
 		{"", cloudEvidence{}},
 	}
@@ -150,6 +168,26 @@ func TestDetectCloudFallsBackWhenNodeListForbidden(t *testing.T) {
 	}
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one node-list warning", warnings)
+	}
+}
+
+func TestDetectCloudConnectGatewayWithoutNodeAccess(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("nodes is forbidden")
+	})
+	collector := &Collector{
+		Client:      client,
+		KubeContext: "connectgateway_armoryd2v-tcs-dev-prod_us-east4_tcs-prod-cluster",
+		APIServer:   "https://connectgateway.googleapis.com/v1/projects/123456789012/locations/us-east4/gkeMemberships/tcs-prod-cluster",
+	}
+	got, _ := collector.detectCloud(context.Background())
+	want := &model.CloudContext{CloudAccount: model.CloudAccount{Provider: "gcp", AccountType: "project", AccountID: "armoryd2v-tcs-dev-prod"}, Regions: []string{"us-east4"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("detectCloud = %#v, want %#v", got, want)
+	}
+	if name := clusterNameFromKubeContext(collector.KubeContext); name != "tcs-prod-cluster" {
+		t.Fatalf("cluster name = %q, want tcs-prod-cluster", name)
 	}
 }
 
