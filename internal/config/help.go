@@ -66,7 +66,7 @@ Examples:
 `)
 	printHelpSections(fs, "", []helpSection{{
 		title: "Common flags",
-		flags: []string{"format", "view", "no-dedupe", "output", "timeout", "quiet", "debug"},
+		flags: []string{"format", "view", "no-dedupe", "output", "timeout", "quiet", "debug", "skip-update-check"},
 	}})
 	helpFprintln(fs.Output(), "Run 'vdr <source> --help' for source-specific flags and examples.")
 	helpFprintln(fs.Output(), "For the helm source, -f means --values; use --format for the report format.")
@@ -177,7 +177,7 @@ func sourceHelpSections(source string) []helpSection {
 			},
 			{
 				title: "Logging",
-				flags: []string{"quiet", "debug"},
+				flags: []string{"quiet", "debug", "skip-update-check"},
 			},
 		}
 	case SourceCloudRun:
@@ -237,7 +237,7 @@ func sourceHelpSections(source string) []helpSection {
 		},
 		helpSection{
 			title: "Logging",
-			flags: []string{"quiet", "debug"},
+			flags: []string{"quiet", "debug", "skip-update-check"},
 		},
 	)
 	return sections
