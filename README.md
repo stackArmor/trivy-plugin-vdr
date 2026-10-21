@@ -421,7 +421,7 @@ ECS resources include a `runtime` object in resource-view JSON. Runtime status i
 
 ## VEX attestations
 
-`vdr` can opt into Trivy's experimental OCI VEX attestation discovery:
+`vdr` can read CycloneDX VEX attestations attached to images in their registry:
 
 ```sh
 trivy vdr k8s --oci-vex-included
@@ -429,23 +429,54 @@ trivy vdr k8s -O
 trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
 ```
 
-By default, OCI VEX attestation lookup is off. `--oci-vex-included` / `-O` enables registry VEX lookup for every scanned image. `--vex-oci-registries` is the narrower form: it accepts registry hosts (`registry.example.com`) or repository prefixes (`ghcr.io/acme`), and only matching images are scanned with `trivy image --vex oci --show-suppressed`. Other images are scanned without OCI VEX. Suppressed VEX findings are not silently dropped: reports keep them in `suppressedFindings` with the VEX status, justification, source, and informational `wouldHaveBeenPain` / `wouldHaveBeenRemediation` values. They are excluded from the active finding count and remediation queue.
+By default, OCI VEX attestation lookup is off. `--oci-vex-included` / `-O` enables registry VEX lookup for every scanned image. `--vex-oci-registries` is the narrower form: it accepts registry hosts (`registry.example.com`) or repository prefixes (`ghcr.io/acme`), and only matching images are looked up. Other images are scanned without OCI VEX.
 
-> **Important — sign attestations with cosign v2.** Trivy discovers the classic cosign
-> attestation (`.att` tag) layout. cosign **v3** publishes attestations as OCI 1.1
-> referrers, which Trivy does **not** read yet — a v3 attestation is silently ignored by
-> `--vex oci` (the scan logs `No VEX attestations found`). Create attestations with cosign
-> **v2** so they land as the `.att` tag Trivy can find:
->
-> ```sh
-> cosign attest --predicate vex.json --type openvex --key <gcpkms-or-key> --tlog-upload=false --yes <image>@<digest>
-> ```
->
-> Revisit once a referrer-aware Trivy ships.
+`vdr` reads the attestations itself rather than through Trivy's `--vex oci`, which collapses CycloneDX `analysis.justification` and `analysis.detail` into one statement. For each opted-in image it resolves the image digest, then looks for attestations through the OCI 1.1 referrers API (cosign v3 / Sigstore bundles) and the cosign v2 `sha256-<digest>.att` tag, using the same host-scoped registry credentials handed to Trivy. Only DSSE/in-toto statements with predicate type `https://cyclonedx.org/vex`, or a CycloneDX BOM predicate carrying `vulnerabilities[]`, are used; other predicates (OpenVEX, SLSA, SBOMs) are ignored.
+
+A VEX statement does not suppress anything. The matching finding stays in `findings[]` (and `resources[].findings[]`) with its full per-asset `pain` and `remediation`, and gains a `vex` object holding the CycloneDX values verbatim, so a reviewer can accept or reject the claim downstream:
+
+```json
+"vex": {
+  "source": "oci-cyclonedx-vex",
+  "format": "cyclonedx",
+  "state": "not_affected",
+  "justification": "code_not_reachable",
+  "detail": "Ingress TLS terminates at Envoy; the backend never registers a gRPC server.",
+  "responses": ["will_not_fix"],
+  "statementSource": "oci://registry.example.com/app@sha256:<image digest>",
+  "attestationDigest": "sha256:<attestation manifest digest>"
+}
+```
+
+Statements match on the vulnerability `id` or a `references[].id` alias. A statement whose `affects[]` names components (by purl or `bom-ref`) only applies to findings in those packages; one without component-level `affects` applies to the CVE anywhere in the image. Findings from different images are not merged by `--dedupe` when their VEX statements differ, so a statement is never projected onto another image's resources. An attestation lookup or parse failure is logged as a warning and leaves the findings un-annotated; it never fails the image scan.
+
+The attestation describes the image, so every workload running that image carries the same `vex` object. ThreatAlert (TSW) ingests these findings as ordinary scored findings and submits each claim as one attestation covering all of those workloads, which an ISSM approves or rejects; nothing is closed until it is approved.
+
+Limits:
+
+- Attestation signatures are not verified yet (Trivy's `--vex oci` did not verify them either). Treat the `vex` object as an unreviewed upstream claim.
+- For a multi-architecture image, attestations are looked up against the image index digest, not the per-platform manifests.
+- The CycloneDX report output (`--format cyclonedx`) does not project the claim; those findings keep the default analysis of an active finding.
+
+Create an attestation with cosign, for example:
+
+```sh
+cosign attest --predicate vex.cdx.json --type https://cyclonedx.org/vex --key <gcpkms-or-key> --yes <image>@<digest>
+```
 
 ## Logging
 
 Progress is logged to stderr (the report is written to stdout or `--output`, so logs never contaminate it). The default level is INFO and announces each phase: inventory collection, registry auth, scanning, EPSS/vulnrichment fetch-vs-cache, and report output. During Kubernetes scans, image-pull failures (`ImagePullBackOff`, `ErrImagePull`, or `ImagePullErr`) and Pods still `Pending` are logged with the workload, Pod, container when applicable, and a cluster-administrator action note. Use `--quiet` for warnings and errors only, or `--debug` for verbose diagnostics.
+
+### Update check
+
+Each run looks up the latest release on GitHub in the background and, when a newer version exists, ends with a `WARN` line such as:
+
+```
+WARN	trivy-plugin-vdr 4.12.0 is available (running 4.11.0); upgrade with 'trivy plugin upgrade vdr'. Release notes: https://github.com/stackArmor/trivy-plugin-vdr/releases/tag/v4.12.0
+```
+
+The lookup is bounded to 3 seconds, never fails or delays a scan beyond that, and is skipped for development builds. A failed lookup (offline, blocked egress, rate limit) is only reported with `--debug`. Disable it with `--skip-update-check` or `VDR_NO_UPDATE_CHECK=1`, for example on air-gapped runners.
 
 ## Image scanning and Trivy cache cleanup
 
