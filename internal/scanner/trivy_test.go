@@ -143,150 +143,110 @@ func TestTrivyRunnerBuildsImageScanCommandWithCustomImageSource(t *testing.T) {
 	}
 }
 
-func TestTrivyRunnerAddsOCIVEXForAllowedRegistry(t *testing.T) {
-	fake := &fakeCommandRunner{
-		stdout: []byte(`{"Results":[]}`),
-	}
-	runner := TrivyRunner{
-		Binary:           "trivy-test",
-		VEXOCIRegistries: []string{"registry.example.com", "ghcr.io/acme"},
-		CommandRunner:    fake,
-	}
-
-	_, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second)
-	if err != nil {
-		t.Fatalf("ScanImage returned error: %v", err)
-	}
-
-	wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--vex", "oci", "--show-suppressed", "--timeout", "45s", "registry.example.com/app:v1"}
-	if !reflect.DeepEqual(fake.args, wantArgs) {
-		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
-	}
-}
-
-func TestTrivyRunnerAddsOCIVEXWhenIncluded(t *testing.T) {
-	fake := &fakeCommandRunner{
-		stdout: []byte(`{"Results":[]}`),
-	}
-	runner := TrivyRunner{
-		Binary:         "trivy-test",
-		OCIVEXIncluded: true,
-		CommandRunner:  fake,
-	}
-
-	_, err := runner.ScanImage(context.Background(), "docker.io/library/alpine:3.20", 45*time.Second)
-	if err != nil {
-		t.Fatalf("ScanImage returned error: %v", err)
-	}
-
-	wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--vex", "oci", "--show-suppressed", "--timeout", "45s", "docker.io/library/alpine:3.20"}
-	if !reflect.DeepEqual(fake.args, wantArgs) {
-		t.Fatalf("command args = %#v, want %#v", fake.args, wantArgs)
-	}
-}
-
-func TestTrivyRunnerRetriesWithoutOCIVEXWhenAttestationFetchFails(t *testing.T) {
-	fake := &sequenceCommandRunner{
-		results: []commandResult{
-			{
-				stderr: []byte("FATAL Fatal error run error: filter error: filtering error: VEX error: VEX OCI error: failed to retrieve VEX attestation: fetching payload: GET https://us-east4-docker.pkg.dev/v2/k8s-artifacts-prod/images/ingress-nginx/kube-webhook-certgen/blobs/sha256:fed643: BLOB_UNKNOWN: Unknown blob"),
-				err:    errors.New("exit status 1"),
-			},
-			{
-				stdout: []byte(`{"Results":[{"Target":"app","Vulnerabilities":[{"VulnerabilityID":"CVE-2026-0001","PkgName":"openssl","InstalledVersion":"1.0","Severity":"HIGH","Status":"fixed"}]}]}`),
-			},
+func TestTrivyRunnerReadsOCIVEXForOptedInImagesWithoutTrivyVEXFlags(t *testing.T) {
+	tests := []struct {
+		name   string
+		runner TrivyRunner
+		image  string
+	}{
+		{
+			name:   "allowed registry",
+			runner: TrivyRunner{VEXOCIRegistries: []string{"registry.example.com", "ghcr.io/acme"}},
+			image:  "registry.example.com/app:v1",
+		},
+		{
+			name:   "included",
+			runner: TrivyRunner{OCIVEXIncluded: true},
+			image:  "docker.io/library/alpine:3.20",
 		},
 	}
-	runner := TrivyRunner{
-		Binary:         "trivy-test",
-		OCIVEXIncluded: true,
-		CommandRunner:  fake,
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeCommandRunner{
+				stdout: []byte(`{"Results":[{"Target":"app","Vulnerabilities":[{"VulnerabilityID":"CVE-2026-0001","PkgName":"openssl","InstalledVersion":"1.0","Severity":"HIGH"}]}]}`),
+			}
+			fetcher := &fakeOCIVEXFetcher{result: &OCIVEXResult{
+				StatementSource: "oci://registry.example.com/app@sha256:abc",
+				Statements: []OCIVEXStatement{{
+					IDs:               []string{"CVE-2026-0001"},
+					State:             "not_affected",
+					Justification:     "code_not_reachable",
+					Detail:            "never called",
+					Responses:         []string{"will_not_fix"},
+					AttestationDigest: "sha256:att",
+				}},
+			}}
+			runner := tt.runner
+			runner.Binary = "trivy-test"
+			runner.CommandRunner = fake
+			runner.OCIVEXFetcher = fetcher
 
-	findings, err := runner.ScanImage(context.Background(), "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.2", 45*time.Second)
-	if err != nil {
-		t.Fatalf("ScanImage returned error: %v", err)
-	}
-	if len(findings) != 1 || findings[0].ID != "CVE-2026-0001" {
-		t.Fatalf("findings = %#v, want retry findings", findings)
-	}
-	if len(fake.callArgs) != 2 {
-		t.Fatalf("calls = %d, want initial VEX scan plus retry", len(fake.callArgs))
-	}
-	if !containsArg(fake.callArgs[0], "--vex") {
-		t.Fatalf("first call args = %#v, want VEX enabled", fake.callArgs[0])
-	}
-	if containsArg(fake.callArgs[1], "--vex") || containsArg(fake.callArgs[1], "--show-suppressed") {
-		t.Fatalf("retry args = %#v, want no VEX flags", fake.callArgs[1])
+			findings, err := runner.ScanImage(context.Background(), tt.image, 45*time.Second)
+			if err != nil {
+				t.Fatalf("ScanImage returned error: %v", err)
+			}
+			wantArgs := []string{"image", "--image-src", "remote", "--skip-version-check", "--format", "json", "--scanners", "vuln", "--timeout", "45s", tt.image}
+			if !reflect.DeepEqual(fake.args, wantArgs) {
+				t.Fatalf("command args = %#v, want %#v (no --vex oci / --show-suppressed)", fake.args, wantArgs)
+			}
+			if !reflect.DeepEqual(fetcher.images, []string{tt.image}) {
+				t.Fatalf("fetched images = %#v, want %q", fetcher.images, tt.image)
+			}
+			if len(findings) != 1 || findings[0].Suppressed || findings[0].VEX == nil {
+				t.Fatalf("findings = %#v, want one active VEX-annotated finding", findings)
+			}
+			want := model.VEXAnalysis{
+				Source:            "oci-cyclonedx-vex",
+				Format:            "cyclonedx",
+				State:             "not_affected",
+				Justification:     "code_not_reachable",
+				Detail:            "never called",
+				Responses:         []string{"will_not_fix"},
+				StatementSource:   "oci://registry.example.com/app@sha256:abc",
+				AttestationDigest: "sha256:att",
+			}
+			if !reflect.DeepEqual(*findings[0].VEX, want) {
+				t.Fatalf("VEX = %#v, want %#v", *findings[0].VEX, want)
+			}
+		})
 	}
 }
 
-func TestTrivyRunnerLogsConciseWarningForOCIVEXUnauthorized(t *testing.T) {
-	const trivyStderr = `2026-07-13T13:08:23-04:00 WARN Unable to get vulnerability details (CVE may be rejected) err.context.vuln_id="CVE-2026-6791" err.stacktrace="Oops: no vulnerability details"
-2026-07-13T13:08:23-04:00 FATAL Fatal error run error: filtering error: VEX OCI error: failed to retrieve VEX attestation: GET https://registry.example.com/v1/token: unexpected status code 401 Unauthorized: {"message":"missing_authorization_header_error","statusCode":401}`
-	fake := &sequenceCommandRunner{
-		results: []commandResult{
-			{stderr: []byte(trivyStderr), err: errors.New("exit status 1")},
-			{stdout: []byte(`{"Results":[]}`)},
-		},
+func TestTrivyRunnerOCIVEXLookupFailureKeepsFindingsUnannotated(t *testing.T) {
+	fake := &fakeCommandRunner{
+		stdout: []byte(`{"Results":[{"Target":"app","Vulnerabilities":[{"VulnerabilityID":"CVE-2026-0001","PkgName":"openssl","InstalledVersion":"1.0","Severity":"HIGH"}]}]}`),
 	}
 	var logs strings.Builder
 	runner := TrivyRunner{
 		Binary:         "trivy-test",
 		OCIVEXIncluded: true,
 		CommandRunner:  fake,
+		OCIVEXFetcher:  &fakeOCIVEXFetcher{err: errors.New("registry returned 401 Unauthorized")},
 		Logger:         log.NewWithWriter(&logs, log.LevelInfo),
 	}
 
-	if _, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second); err != nil {
+	findings, err := runner.ScanImage(context.Background(), "registry.example.com/app:v1", 45*time.Second)
+	if err != nil {
 		t.Fatalf("ScanImage returned error: %v", err)
 	}
-
-	got := logs.String()
-	for _, want := range []string{
-		"WARN\tOCI VEX lookup failed for registry.example.com/app:v1",
-		"registry returned 401 Unauthorized",
-		"retrying vulnerability scan without OCI VEX",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("warning missing %q: %s", want, got)
-		}
+	if len(findings) != 1 || findings[0].VEX != nil || findings[0].Suppressed {
+		t.Fatalf("findings = %#v, want one un-annotated finding", findings)
 	}
-	for _, unwanted := range []string{"FATAL", "stacktrace", "CVE-2026-6791", "/v1/token"} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("warning contains Trivy stderr fragment %q: %s", unwanted, got)
-		}
+	if got := logs.String(); !strings.Contains(got, "WARN\tOCI VEX lookup failed for registry.example.com/app:v1") || !strings.Contains(got, "401 Unauthorized") {
+		t.Fatalf("logs = %q, want OCI VEX lookup warning", got)
 	}
 }
 
-func TestSummarizeOCIVEXRetrievalFailure(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want string
-	}{
-		{name: "unauthorized", err: errors.New("unexpected status code 401 Unauthorized"), want: "registry returned 401 Unauthorized"},
-		{name: "forbidden JSON", err: errors.New(`{"statusCode":403}`), want: "registry returned 403 Forbidden"},
-		{name: "missing artifact", err: errors.New("BLOB_UNKNOWN: Unknown blob"), want: "attestation artifact is unavailable"},
-		{name: "other", err: errors.New("VEX OCI error"), want: "attestation lookup failed"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := summarizeOCIVEXRetrievalFailure(tt.err); got != tt.want {
-				t.Fatalf("summarizeOCIVEXRetrievalFailure() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTrivyRunnerDoesNotAddOCIVEXForUnmatchedRegistry(t *testing.T) {
+func TestTrivyRunnerDoesNotReadOCIVEXForUnmatchedRegistry(t *testing.T) {
 	fake := &fakeCommandRunner{
-		stdout: []byte(`{"Results":[]}`),
+		stdout: []byte(`{"Results":[{"Target":"app","Vulnerabilities":[{"VulnerabilityID":"CVE-2026-0001","PkgName":"openssl","InstalledVersion":"1.0","Severity":"HIGH"}]}]}`),
 	}
+	fetcher := &fakeOCIVEXFetcher{}
 	runner := TrivyRunner{
 		Binary:           "trivy-test",
 		VEXOCIRegistries: []string{"registry.example.com"},
 		CommandRunner:    fake,
+		OCIVEXFetcher:    fetcher,
 	}
 
 	_, err := runner.ScanImage(context.Background(), "docker.io/library/alpine:3.20", 45*time.Second)
@@ -299,6 +259,23 @@ func TestTrivyRunnerDoesNotAddOCIVEXForUnmatchedRegistry(t *testing.T) {
 			t.Fatalf("command args = %#v, want no VEX flags for unmatched registry", fake.args)
 		}
 	}
+	if len(fetcher.images) != 0 {
+		t.Fatalf("fetched images = %#v, want no OCI VEX lookup for unmatched registry", fetcher.images)
+	}
+}
+
+type fakeOCIVEXFetcher struct {
+	mu     sync.Mutex
+	images []string
+	result *OCIVEXResult
+	err    error
+}
+
+func (f *fakeOCIVEXFetcher) FetchVEX(ctx context.Context, image string) (*OCIVEXResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.images = append(f.images, image)
+	return f.result, f.err
 }
 
 func TestTrivyRunnerBuildsImageScanCommandWithCacheDir(t *testing.T) {

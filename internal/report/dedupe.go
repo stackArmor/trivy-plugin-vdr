@@ -8,10 +8,14 @@ import (
 
 // dedupeKey identifies findings that describe the same vulnerability in the
 // same package version, regardless of which image or scan target surfaced them.
+// An OCI VEX statement is scoped to one image, so findings carrying different
+// statements (or one with and one without) are kept apart; otherwise the merged
+// survivor would project one image's VEX claim onto another image's resources.
 type dedupeKey struct {
 	ID               string
 	PackageName      string
 	InstalledVersion string
+	VEX              string
 }
 
 func findingDedupeKey(finding model.Finding) dedupeKey {
@@ -19,7 +23,15 @@ func findingDedupeKey(finding model.Finding) dedupeKey {
 		ID:               finding.ID,
 		PackageName:      finding.PackageName,
 		InstalledVersion: finding.InstalledVersion,
+		VEX:              vexDedupeIdentity(finding.VEX),
 	}
+}
+
+func vexDedupeIdentity(vex *model.VEXAnalysis) string {
+	if vex == nil {
+		return ""
+	}
+	return vex.StatementSource + "|" + vex.AttestationDigest + "|" + vex.State + "|" + vex.Justification
 }
 
 // uniqueResourceRefs returns refs with duplicates removed, preserving the order
