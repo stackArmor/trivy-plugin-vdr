@@ -385,3 +385,58 @@ func readRawDockerConfig(t *testing.T, dir string) map[string]json.RawMessage {
 	}
 	return raw
 }
+
+// envRecordingRunner records the extra environment of each command.
+type envRecordingRunner struct {
+	fakeRunner
+	envs map[string][]string // keyed by "name args..."
+}
+
+func (r *envRecordingRunner) RunWithEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, []byte, error) {
+	if r.envs == nil {
+		r.envs = map[string][]string{}
+	}
+	r.envs[name+" "+strings.Join(args, " ")] = append([]string(nil), env...)
+	return r.Run(ctx, name, args...)
+}
+
+func TestRegistryECRUsesProfile(t *testing.T) {
+	runner := &envRecordingRunner{fakeRunner: fakeRunner{outputs: map[string]string{"aws": "ecr-token"}}}
+	res, err := Build(context.Background(),
+		[]string{"111111111111.dkr.ecr.us-east-1.amazonaws.com/a:1"},
+		nil,
+		Options{EnableECR: true, AWSProfile: "p", Runner: runner},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	defer res.Cleanup()
+	env := runner.envs["aws ecr get-login-password --region us-east-1"]
+	if len(env) != 1 || env[0] != "AWS_PROFILE=p" {
+		t.Fatalf("ecr login env = %v, want AWS_PROFILE=p", env)
+	}
+}
+
+func TestRegistryAssumesRoleFromProfile(t *testing.T) {
+	runner := &envRecordingRunner{fakeRunner: fakeRunner{outputsByArgs: map[string]string{
+		"aws sts assume-role --role-arn arn:aws:iam::123456789012:role/R --role-session-name vdr-ecr-auth": `{"Credentials": {"AccessKeyId": "ASIAVDR", "SecretAccessKey": "s", "SessionToken": "t"}}`,
+		"aws ecr get-login-password --region us-east-1":                                                    "ecr-token",
+	}}}
+	res, err := Build(context.Background(),
+		[]string{"111111111111.dkr.ecr.us-east-1.amazonaws.com/a:1"},
+		nil,
+		Options{EnableECR: true, AWSProfile: "p", AWSRoleARN: "arn:aws:iam::123456789012:role/R", Runner: runner},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	defer res.Cleanup()
+	if env := runner.envs["aws sts assume-role --role-arn arn:aws:iam::123456789012:role/R --role-session-name vdr-ecr-auth"]; len(env) != 1 || env[0] != "AWS_PROFILE=p" {
+		t.Fatalf("assume-role env = %v, want the base profile", env)
+	}
+	if env := strings.Join(runner.envs["aws ecr get-login-password --region us-east-1"], " "); !strings.Contains(env, "AWS_ACCESS_KEY_ID=ASIAVDR") {
+		t.Fatalf("ecr login env = %q, want the assumed role's credentials", env)
+	}
+}

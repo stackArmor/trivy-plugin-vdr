@@ -242,7 +242,7 @@ func sourceHelpSections(source string) []helpSection {
 		},
 		helpSection{
 			title: "Registry authentication and VEX",
-			flags: []string{"skip-registry-auth", "no-gcloud-auth", "no-ecr-auth", "gcp-impersonate-service-account", "aws-role-arn", "oci-vex-included", "vex-oci-registries"},
+			flags: []string{"skip-registry-auth", "no-gcloud-auth", "no-ecr-auth", "gcp-impersonate-service-account", "aws-role-arn", "aws-profile", "oci-vex-included", "vex-oci-registries"},
 		},
 		helpSection{
 			title: "Cache management",
@@ -340,6 +340,7 @@ func helpValueName(name string) string {
 		"services-file":                   "FILE",
 		"swarm-config":                    "FILE",
 		"aws-role-arn":                    "ARN",
+		"aws-profile":                     "PROFILE",
 		"cache-cleanup":                   "POLICY",
 		"cache-dir":                       "DIR",
 		"cache-min-free-gb":               "GB",

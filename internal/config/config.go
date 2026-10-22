@@ -92,8 +92,10 @@ type Config struct {
 	ContextName                  string
 	GCPImpersonateServiceAccount string
 	AWSRoleARN                   string
-	OCIVEXIncluded               bool
-	VEXOCIRegistries             []string
+	// AWSProfile is the base shared-config profile for every AWS call (SDK and aws CLI).
+	AWSProfile       string
+	OCIVEXIncluded   bool
+	VEXOCIRegistries []string
 	// SwarmServicesFile is `docker service inspect` output for source swarm.
 	SwarmServicesFile string
 	// SwarmConfigFile is the vdr-fedramp Swarm config (docker config inspect output or plain YAML).
@@ -242,7 +244,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.NoECRAuth, "no-ecr-auth", cfg.NoECRAuth, "skip aws CLI authentication for ECR images")
 	fs.StringVar(&cfg.ContextName, "context-name", cfg.ContextName, "identity recorded as the report context; defaults to the kubeconfig current-context, or a value derived from the API server host when running in-cluster")
 	fs.StringVar(&cfg.GCPImpersonateServiceAccount, "gcp-impersonate-service-account", cfg.GCPImpersonateServiceAccount, "Google service account email to impersonate for Cloud Run metadata and GAR/GCR auth")
-	fs.StringVar(&cfg.AWSRoleARN, "aws-role-arn", cfg.AWSRoleARN, "AWS role ARN to assume for ECR auth")
+	fs.StringVar(&cfg.AWSRoleARN, "aws-role-arn", cfg.AWSRoleARN, "AWS role ARN to assume for every AWS call (ECS, EC2, SSM, ECR auth)")
+	fs.StringVar(&cfg.AWSProfile, "aws-profile", cfg.AWSProfile, "AWS shared-config profile for base credentials (default: AWS_PROFILE or the SDK default chain)")
 	fs.BoolVar(&cfg.OCIVEXIncluded, "oci-vex-included", cfg.OCIVEXIncluded, "include OCI VEX attestations from image registries")
 	fs.BoolVar(&cfg.OCIVEXIncluded, "O", cfg.OCIVEXIncluded, "alias for --oci-vex-included")
 	fs.Var((*commaList)(&cfg.VEXOCIRegistries), "vex-oci-registries", "comma-separated registry hosts or repository prefixes that may use OCI VEX attestations")

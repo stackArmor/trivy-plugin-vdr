@@ -1190,3 +1190,13 @@ func TestSwarmHelpListsFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAWSProfile(t *testing.T) {
+	cfg, err := Parse([]string{"ecs", "--region", "us-gov-west-1", "--aws-profile", "customer-prod", "--aws-role-arn", "arn:aws-us-gov:iam::111111111111:role/r"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.AWSProfile != "customer-prod" || cfg.AWSRoleARN != "arn:aws-us-gov:iam::111111111111:role/r" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}

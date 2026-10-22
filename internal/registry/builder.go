@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/stackArmor/trivy-plugin-vdr/internal/awsconfig"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 )
 
@@ -25,7 +26,10 @@ type Options struct {
 	EnableECR                    bool
 	GCPImpersonateServiceAccount string
 	AWSRoleARN                   string
-	Runner                       CommandRunner
+	// AWSProfile is the base profile for the aws CLI calls (AWS_PROFILE); the
+	// role, when set, is assumed from it.
+	AWSProfile string
+	Runner     CommandRunner
 }
 
 // Result is the outcome of building registry credentials.
@@ -111,7 +115,7 @@ func Build(ctx context.Context, images []string, secretAuths map[string]DockerAu
 	}
 
 	if opts.EnableECR {
-		env, err := awsRoleEnv(ctx, runner, opts.AWSRoleARN)
+		env, err := awsRoleEnv(ctx, runner, opts.AWSProfile, opts.AWSRoleARN)
 		if err != nil {
 			warnings = append(warnings, "AWS role assumption unavailable: "+cliError("aws", err))
 		}
@@ -263,6 +267,15 @@ type envCommandRunner interface {
 	RunWithEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, []byte, error)
 }
 
+func runWithEnv(ctx context.Context, runner CommandRunner, env []string, name string, args ...string) ([]byte, error) {
+	if envRunner, ok := runner.(envCommandRunner); ok && len(env) > 0 {
+		stdout, _, err := envRunner.RunWithEnv(ctx, env, name, args...)
+		return stdout, err
+	}
+	stdout, _, err := runner.Run(ctx, name, args...)
+	return stdout, err
+}
+
 func runTokenWithEnv(ctx context.Context, runner CommandRunner, env []string, name string, args ...string) (string, error) {
 	var stdout []byte
 	var err error
@@ -293,11 +306,15 @@ type awsAssumeRoleResponse struct {
 	} `json:"Credentials"`
 }
 
-func awsRoleEnv(ctx context.Context, runner CommandRunner, roleARN string) ([]string, error) {
+// awsRoleEnv returns the environment for the aws CLI's ECR calls: the assumed
+// role's credentials when roleARN is set (assumed from the base profile), else
+// just the base profile.
+func awsRoleEnv(ctx context.Context, runner CommandRunner, profile, roleARN string) ([]string, error) {
+	base := awsconfig.CLIEnvironment(profile)
 	if roleARN == "" {
-		return nil, nil
+		return base, nil
 	}
-	stdout, _, err := runner.Run(ctx, "aws", "sts", "assume-role", "--role-arn", roleARN, "--role-session-name", "vdr-ecr-auth")
+	stdout, err := runWithEnv(ctx, runner, base, "aws", "sts", "assume-role", "--role-arn", roleARN, "--role-session-name", "vdr-ecr-auth")
 	if err != nil {
 		return nil, err
 	}

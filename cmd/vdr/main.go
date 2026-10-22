@@ -212,6 +212,7 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if buildErr != nil {
 			return buildErr
@@ -324,6 +325,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
@@ -398,6 +400,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
@@ -416,7 +419,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 }
 
 func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
-	client, err := ecs.NewAWSClient(ctx, ecs.ClientOptions{})
+	client, err := ecs.NewAWSClient(ctx, ecs.ClientOptions{Profile: cfg.AWSProfile, RoleARN: cfg.AWSRoleARN})
 	if err != nil {
 		return err
 	}
@@ -475,6 +478,7 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
@@ -545,6 +549,7 @@ func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
@@ -575,6 +580,7 @@ func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
