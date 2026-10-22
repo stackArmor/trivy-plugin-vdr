@@ -56,7 +56,7 @@ func TestLoadFedRAMPConfigFromPlainYAML(t *testing.T) {
 	if _, present := data["exposure.yaml"]; present {
 		t.Fatal("exposure.yaml belongs to the exposure config, not the scoring defaults")
 	}
-	if len(exposure.ProxyLabelPrefixes) != 2 || exposure.ProxyLabelPrefixes[1] != "caddy" {
+	if strings.Join(exposure.ProxyLabelPrefixes, ",") != DefaultProxyLabelPrefix+",traefik.http.routers.,caddy" {
 		t.Fatalf("proxy prefixes = %v", exposure.ProxyLabelPrefixes)
 	}
 	if len(exposure.Rules) != 2 || !exposure.Rules[0].InternetReachable || exposure.Rules[0].Image != "traefik" {

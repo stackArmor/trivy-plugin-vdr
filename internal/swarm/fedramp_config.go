@@ -15,8 +15,9 @@ import (
 // deployed into the swarm, never mounted into a service.
 const FedRAMPConfigName = "vdr-fedramp"
 
-// DefaultProxyLabelPrefix marks a service as routed by Traefik.
-const DefaultProxyLabelPrefix = "traefik.http.routers."
+// DefaultProxyLabelPrefix marks a service as routed by Traefik: any traefik.*
+// label, including traefik.enable and TCP/UDP routers.
+const DefaultProxyLabelPrefix = "traefik."
 
 // exposureKey is the vdr-fedramp key holding the exposure declarations. Every
 // other key is cluster scoring data with the same meaning as the Kubernetes
@@ -98,8 +99,11 @@ func ParseFedRAMPConfig(raw []byte) (map[string]string, ExposureConfig, error) {
 		if err := yaml.Unmarshal([]byte(doc), &declared); err != nil {
 			return nil, exposure, fmt.Errorf("parse %s config (%s): %w", FedRAMPConfigName, exposureKey, err)
 		}
-		if len(declared.ProxyLabelPrefixes) > 0 {
-			exposure.ProxyLabelPrefixes = declared.ProxyLabelPrefixes
+		// Configured prefixes extend the Traefik default; they never drop it.
+		for _, prefix := range declared.ProxyLabelPrefixes {
+			if prefix = strings.TrimSpace(prefix); prefix != "" && !containsString(exposure.ProxyLabelPrefixes, prefix) {
+				exposure.ProxyLabelPrefixes = append(exposure.ProxyLabelPrefixes, prefix)
+			}
 		}
 		for i, rule := range declared.Rules {
 			if rule.InternetReachable == nil {
@@ -144,4 +148,13 @@ func configContent(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decode %s config data: %w", inspected[0].Spec.Name, err)
 	}
 	return decoded, nil
+}
+
+func containsString(values []string, value string) bool {
+	for _, existing := range values {
+		if existing == value {
+			return true
+		}
+	}
+	return false
 }

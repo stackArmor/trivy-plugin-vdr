@@ -33,7 +33,7 @@ const (
 //  2. the first matching exposure.yaml rule,
 //
 // declare it (basis "attested"). Without a declaration, a service that
-// publishes ports, carries proxy route labels, or runs on the host network is
+// publishes ports, carries proxy labels, or runs on the host network is
 // left unassessed with that evidence; one with none of those, whose networks
 // are all known, is an observed negative. Exposures are keyed by ContainerRef.
 func AnalyzeExposure(contextName string, services []Service, cfg ExposureConfig) (map[model.ResourceRef]model.Exposure, []string) {
@@ -141,15 +141,15 @@ func exposureSignals(service Service, proxyPrefixes []string) []string {
 		}
 		signals = append(signals, fmt.Sprintf("publishes %d/%s (%s) to container port %d", port.PublishedPort, protocol, mode, port.TargetPort))
 	}
-	keys := make([]string, 0, len(service.Labels))
-	for key := range service.Labels {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if hasAnyPrefix(key, proxyPrefixes) && strings.HasSuffix(key, ".rule") {
-			signals = append(signals, fmt.Sprintf("proxy route %s: %s", key, service.Labels[key]))
+	// Any label under a proxy prefix means the proxy may route to the service,
+	// with or without an explicit rule (Traefik's defaultRule, TCP routers).
+	keys := proxyLabels(service, proxyPrefixes)
+	for i, key := range keys {
+		if i == maxProxyLabelEvidence {
+			signals = append(signals, fmt.Sprintf("and %d more proxy labels", len(keys)-i))
+			break
 		}
+		signals = append(signals, fmt.Sprintf("proxy label %s=%s", key, service.Labels[key]))
 	}
 	if service.HostNetwork {
 		signals = append(signals, "attached to the host network: listens directly on node interfaces")
@@ -157,18 +157,26 @@ func exposureSignals(service Service, proxyPrefixes []string) []string {
 	return signals
 }
 
-func hasProxyRoute(service Service, proxyPrefixes []string) bool {
+const maxProxyLabelEvidence = 10
+
+func proxyLabels(service Service, proxyPrefixes []string) []string {
+	var keys []string
 	for key := range service.Labels {
-		if hasAnyPrefix(key, proxyPrefixes) && strings.HasSuffix(key, ".rule") {
-			return true
+		if hasAnyPrefix(key, proxyPrefixes) {
+			keys = append(keys, key)
 		}
 	}
-	return false
+	sort.Strings(keys)
+	return keys
+}
+
+func hasProxyRoute(service Service, proxyPrefixes []string) bool {
+	return len(proxyLabels(service, proxyPrefixes)) > 0
 }
 
 func hasAnyPrefix(value string, prefixes []string) bool {
 	for _, prefix := range prefixes {
-		if prefix != "" && strings.HasPrefix(value, prefix) {
+		if prefix != "" && (strings.HasPrefix(value, prefix) || value == strings.TrimSuffix(prefix, ".")) {
 			return true
 		}
 	}

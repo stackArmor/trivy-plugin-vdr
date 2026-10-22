@@ -254,8 +254,9 @@ without one it is ignored and the service stays unassessed. Without a
 declaration:
 
 - a service that publishes ports (ingress routing mesh or host mode), carries
-  proxy route labels (`traefik.http.routers.*.rule` by default; set
-  `proxyLabelPrefixes` for other proxies), or runs on the host network is
+  any edge-proxy label (every `traefik.*` label by default, including
+  `traefik.enable` and TCP/UDP routers; `proxyLabelPrefixes` adds prefixes for
+  other proxies such as `caddy`), or runs on the host network is
   `unassessed`, with that evidence, and is named in a run warning;
 - any other service is an observed negative (`assessed`, `observed`).
 

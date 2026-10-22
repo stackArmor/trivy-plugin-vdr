@@ -159,3 +159,43 @@ func TestHostModePortIsEvidence(t *testing.T) {
 		t.Fatalf("node-exporter = %+v", got)
 	}
 }
+
+func TestAnyProxyLabelIsExposureEvidence(t *testing.T) {
+	services := []Service{
+		// Routed by Traefik's defaultRule: enabled, no explicit rule.
+		{Name: "app_default", Stack: "app", Image: "a:1", NetworksResolved: true, Labels: map[string]string{
+			"traefik.enable": "true", "traefik.http.services.x.loadbalancer.server.port": "8080",
+		}},
+		// A TCP router.
+		{Name: "app_tcp", Stack: "app", Image: "b:1", NetworksResolved: true, Labels: map[string]string{
+			"traefik.tcp.routers.db.rule": "HostSNI(`db.example.com`)",
+		}},
+		// A Caddy-routed service, with Caddy configured as an extra proxy.
+		{Name: "app_caddy", Stack: "app", Image: "c:1", NetworksResolved: true, Labels: map[string]string{
+			"caddy": "app.example.com", "caddy.reverse_proxy": "{{upstreams 80}}",
+		}},
+	}
+	data, exposureConfig, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  proxyLabelPrefixes:\n    - caddy\n"))
+	if err != nil || len(data) != 0 {
+		t.Fatal(err)
+	}
+	exposures, warnings := AnalyzeExposure(testContext, services, exposureConfig)
+	for _, service := range services {
+		if got := exposureFor(t, exposures, service); got.AssessmentStatus != "unassessed" {
+			t.Fatalf("%s = %+v, want unassessed: a proxy label must never become an observed negative", service.Name, got)
+		}
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "app_default") || !strings.Contains(warnings[0], "app_caddy") {
+		t.Fatalf("warnings = %v", warnings)
+	}
+}
+
+func TestConfiguredProxyPrefixesExtendTheDefault(t *testing.T) {
+	_, exposureConfig, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  proxyLabelPrefixes:\n    - caddy\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(exposureConfig.ProxyLabelPrefixes, ",") != DefaultProxyLabelPrefix+",caddy" {
+		t.Fatalf("prefixes = %v, want the Traefik default kept", exposureConfig.ProxyLabelPrefixes)
+	}
+}
