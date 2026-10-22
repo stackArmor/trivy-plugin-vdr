@@ -9,7 +9,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -355,5 +357,48 @@ func TestRunSwarmReachabilityOnlyWritesInventory(t *testing.T) {
 		if resource.Resource.Provider != "docker-swarm" {
 			t.Fatalf("resource provider = %q", resource.Resource.Provider)
 		}
+	}
+}
+
+func TestRunSwarmAppliesFedRAMPConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "vdr-fedramp.yaml")
+	if err := os.WriteFile(configPath, []byte("class: D\nscoring.yaml: |\n  imageRules:\n    - match: traefik\n      securityImpactProfile: CR:M/IR:H/AR:H\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]string{
+		"swarm",
+		"--services-file", "../../internal/swarm/testdata/services.json",
+		"--swarm-config", configPath,
+		"--context-name", "swarm/test",
+		"--reachability-only",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	var output bytes.Buffer
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runSwarm returned error: %v", err)
+	}
+	var report model.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	if report.Class != "D" {
+		t.Fatalf("class = %q, want D from the swarm config", report.Class)
+	}
+}
+
+func TestRunSwarmRejectsInvalidFedRAMPConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "vdr-fedramp.yaml")
+	if err := os.WriteFile(configPath, []byte("scoring.yaml: |\n  imageRules:\n    - match: traefik\n      securityImpactProfile: nope\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]string{"swarm", "--services-file", "../../internal/swarm/testdata/services.json", "--swarm-config", configPath, "--context-name", "swarm/test", "--reachability-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "imageRules") {
+		t.Fatalf("err = %v, want an imageRules validation error", err)
 	}
 }

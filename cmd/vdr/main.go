@@ -504,6 +504,21 @@ func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 	}
 	inventory := swarm.BuildInventory(cfg.ContextName, services)
 	logger.Info("inventory: %d Swarm services, %d unique images", len(inventory.Resources), len(inventory.Images))
+	if cfg.SwarmConfigFile != "" {
+		data, _, err := swarm.LoadFedRAMPConfig(cfg.SwarmConfigFile)
+		if err != nil {
+			return err
+		}
+		if len(data) == 0 {
+			logger.Warn("swarm config %s is empty or the %s config does not exist; using built-in defaults (Class B, single-agency)", cfg.SwarmConfigFile, swarm.FedRAMPConfigName)
+		}
+		// An explicitly supplied config fails the run instead of silently
+		// falling back to defaults, as --sip-config-map does.
+		if err := scoring.Default().ApplyClusterDefaults(data); err != nil {
+			return fmt.Errorf("%s: %w", cfg.SwarmConfigFile, err)
+		}
+		inventory.ClusterDefaults = data
+	}
 
 	var warnings []string
 	exposures := map[model.ResourceRef]model.Exposure{}

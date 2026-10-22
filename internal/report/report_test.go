@@ -10,6 +10,7 @@ import (
 
 	"github.com/stackArmor/trivy-plugin-vdr/internal/chaincatalog"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 )
 
 func TestBuildFindingViewKeepsAffectedResourcesAndSummary(t *testing.T) {
@@ -970,4 +971,25 @@ func sampleContainerRef() model.ResourceRef {
 
 func fixedTime() time.Time {
 	return time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+}
+
+func TestImageRulesUseTheResourcesOwnImage(t *testing.T) {
+	sc := scoring.Default()
+	sc.ImageRules = []scoring.ImageRule{{Match: "pi", SecurityImpactProfile: "CR:L/IR:L/AR:L"}}
+	resource := model.ResourceRef{Provider: "docker-swarm", Kind: "Service", Namespace: "app", Name: "app_worker"}
+	ref := resource
+	ref.ContainerName = "app_worker"
+	ref.ContainerType = "container"
+	inventory := &model.Inventory{Resources: []model.ResourceInventory{{
+		Resource: resource,
+		Images:   []model.ContainerImage{{Name: "app_worker", ContainerType: "container", ImageRef: "registry.example.com/pi:1.2"}},
+	}}}
+
+	// A deduplicated finding can carry another image as its survivor; the
+	// rule must match the image this resource actually runs.
+	finding := model.Finding{ImageRef: "registry.example.com/other:9", CVSSVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}
+	pain, _ := scoreAsset(sc, workloadLabelIndex(inventory), nil, ref, finding, false)
+	if pain.SecurityImpactProfileSource != "imageRule" || pain.CR != "L" {
+		t.Fatalf("pain = %+v, want the pi imageRule", pain)
+	}
 }
