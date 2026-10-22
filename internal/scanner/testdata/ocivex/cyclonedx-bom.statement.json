@@ -1,0 +1,17 @@
+{
+  "_type": "https://in-toto.io/Statement/v0.1",
+  "predicateType": "https://cyclonedx.org/bom",
+  "predicate": {
+    "bomFormat": "CycloneDX",
+    "specVersion": "1.7",
+    "vulnerabilities": [
+      {
+        "id": "CVE-2026-0005",
+        "analysis": {
+          "state": "in_triage",
+          "detail": "Under investigation."
+        }
+      }
+    ]
+  }
+}

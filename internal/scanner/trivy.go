@@ -50,12 +50,17 @@ type TrivyRunner struct {
 	// RegistryAuths provides normalized host-scoped credentials. Each image scan
 	// receives only the credentials matching that image's registry.
 	RegistryAuths map[string]registry.DockerAuth
-	// OCIVEXIncluded enables --vex oci for every scanned image.
+	// OCIVEXIncluded enables OCI CycloneDX VEX attestation lookup for every
+	// scanned image.
 	OCIVEXIncluded bool
-	// VEXOCIRegistries enables --vex oci for images whose registry/repository
-	// matches one of these allowlist entries. Host-only entries match the registry
-	// host; host/path entries match that repository prefix.
+	// VEXOCIRegistries enables OCI CycloneDX VEX attestation lookup for images
+	// whose registry/repository matches one of these allowlist entries. Host-only
+	// entries match the registry host; host/path entries match that repository
+	// prefix.
 	VEXOCIRegistries []string
+	// OCIVEXFetcher reads an opted-in image's VEX attestations. Nil uses the
+	// registry client with RegistryAuths.
+	OCIVEXFetcher OCIVEXFetcher
 	// SkipDBUpdate passes --skip-db-update to each scan. Set this only after the
 	// vulnerability DB has been downloaded once via EnsureVulnDB so scans reuse
 	// it instead of each re-checking for an update.
@@ -156,18 +161,16 @@ func (r TrivyRunner) ScanImageWithOptions(ctx context.Context, image string, tim
 	}
 
 	findings, err := r.scanOnce(ctx, cacheDir, image, timeout, options)
-	if err != nil && r.useOCIVEX(image) && looksLikeOCIVEXRetrievalFailure(err) {
-		if r.Logger != nil {
-			r.Logger.Warn("OCI VEX lookup failed for %s: %s; retrying vulnerability scan without OCI VEX", image, summarizeOCIVEXRetrievalFailure(err))
-		}
-		retry := r
-		retry.OCIVEXIncluded = false
-		retry.VEXOCIRegistries = nil
-		findings, err = retry.scanOnce(ctx, cacheDir, image, timeout, options)
+	if err != nil && r.healOnce != nil && looksLikeCacheCorruption(err) {
+		findings, err = r.healAndRescan(ctx, cacheDir, image, timeout, options)
 	}
-	if err == nil || r.healOnce == nil || !looksLikeCacheCorruption(err) {
-		return findings, err
+	if err == nil && r.useOCIVEX(image) {
+		r.applyOCIVEX(ctx, image, timeout, findings)
 	}
+	return findings, err
+}
+
+func (r TrivyRunner) healAndRescan(ctx context.Context, cacheDir, image string, timeout time.Duration, options ScanImageOptions) ([]model.Finding, error) {
 	// One-shot cache self-heal: a corrupted database fails every scan until
 	// cleared. Repair it once (shared across workers) and retry.
 	r.healOnce.Do(func() {
@@ -195,9 +198,6 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 		args = append(args, "--skip-db-update", "--skip-java-db-update")
 	}
 	args = append(args, "--image-src", imageSrc, "--skip-version-check", "--format", "json", "--scanners", "vuln")
-	if r.useOCIVEX(image) {
-		args = append(args, "--vex", "oci", "--show-suppressed")
-	}
 	seenDirs := make(map[string]bool)
 	for _, dir := range options.SkipDirs {
 		if dir == "" {
@@ -225,6 +225,9 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 	return findings, nil
 }
 
+// useOCIVEX reports whether image opted into OCI CycloneDX VEX lookup. VEX is
+// read by applyOCIVEX rather than Trivy's --vex oci, so opted-in images are
+// scanned with the same Trivy arguments as every other image.
 func (r TrivyRunner) useOCIVEX(image string) bool {
 	if r.OCIVEXIncluded {
 		return true
@@ -258,39 +261,6 @@ func (r TrivyRunner) useOCIVEX(image string) bool {
 		}
 	}
 	return false
-}
-
-func looksLikeOCIVEXRetrievalFailure(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "vex oci") &&
-		(strings.Contains(msg, "failed to retrieve vex attestation") ||
-			strings.Contains(msg, "fetching attestations") ||
-			strings.Contains(msg, "blob_unknown") ||
-			strings.Contains(msg, "unknown blob"))
-}
-
-// summarizeOCIVEXRetrievalFailure keeps a recoverable VEX failure from replaying
-// Trivy's entire stderr stream. That stream can contain successful scanner
-// progress, unrelated vulnerability-database warnings, and a final FATAL line
-// even though VDR immediately retries the image scan without OCI VEX.
-func summarizeOCIVEXRetrievalFailure(err error) string {
-	if err == nil {
-		return "attestation lookup failed"
-	}
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "401 unauthorized"), strings.Contains(msg, `"statuscode":401`):
-		return "registry returned 401 Unauthorized"
-	case strings.Contains(msg, "403 forbidden"), strings.Contains(msg, `"statuscode":403`):
-		return "registry returned 403 Forbidden"
-	case strings.Contains(msg, "blob_unknown"), strings.Contains(msg, "unknown blob"):
-		return "attestation artifact is unavailable"
-	default:
-		return "attestation lookup failed"
-	}
 }
 
 // workerCachePool hands out isolated Trivy cache directories so concurrent scans

@@ -32,6 +32,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scanner"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/swarm"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/updatecheck"
 )
 
 // errCompletedWithFailures signals that the run finished and wrote its report,
@@ -61,6 +62,9 @@ func run(args []string) error {
 		return err
 	}
 	logger := log.New(log.LevelFromFlags(cfg.Quiet, cfg.Debug))
+	if !cfg.SkipUpdateCheck {
+		defer logAvailableUpdate(logger, updatecheck.Start(context.Background(), updatecheck.DefaultURL, buildinfo.PluginVersion, logger.Debug))
+	}
 	switch cfg.Source {
 	case config.SourceK8s:
 		return runK8s(context.Background(), cfg, logger, os.Stdout)
@@ -837,6 +841,16 @@ func baseScoringConfig(cfg config.Config) (*scoring.Config, error) {
 		return nil, fmt.Errorf("load scoring config: %w", err)
 	}
 	return loaded, nil
+}
+
+// logAvailableUpdate reports a newer plugin release once the run finishes, so
+// the notice is the last line an operator sees rather than lost mid-scan.
+func logAvailableUpdate(logger *log.Logger, wait func() (updatecheck.Result, bool)) {
+	result, ok := wait()
+	if !ok || !result.UpdateAvailable() {
+		return
+	}
+	logger.Warn("trivy-plugin-vdr %s is available (running %s); upgrade with 'trivy plugin upgrade vdr'. Release notes: %s", result.Latest, result.Current, result.URL)
 }
 
 func logIncompatibleClusterConfig(logger *log.Logger, err error) {

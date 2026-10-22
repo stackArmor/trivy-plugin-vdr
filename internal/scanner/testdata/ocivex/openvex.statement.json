@@ -1,0 +1,14 @@
+{
+  "_type": "https://in-toto.io/Statement/v0.1",
+  "predicateType": "https://openvex.dev/ns/v0.2.0",
+  "predicate": {
+    "@context": "https://openvex.dev/ns/v0.2.0",
+    "statements": [
+      {
+        "vulnerability": {"name": "CVE-2026-33186"},
+        "status": "not_affected",
+        "justification": "vulnerable_code_not_in_execute_path"
+      }
+    ]
+  }
+}

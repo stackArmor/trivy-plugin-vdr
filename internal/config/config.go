@@ -105,6 +105,7 @@ type Config struct {
 	SwarmSSMManagerTag string
 	Quiet              bool
 	Debug              bool
+	SkipUpdateCheck    bool
 }
 
 type namespaceList []string
@@ -258,6 +259,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.SwarmServicesFile, "services-file", cfg.SwarmServicesFile, "docker service inspect output (JSON array, or {services, networks}) for source swarm")
 	fs.StringVar(&cfg.SwarmSSMManagerTag, "ssm-manager-tag", cfg.SwarmSSMManagerTag, "collect swarm services over SSM from the running EC2 manager with this tag (key=value, e.g. swarm-node-type=manager); needs --region")
 	fs.StringVar(&cfg.SwarmConfigFile, "swarm-config", cfg.SwarmConfigFile, "vdr-fedramp Swarm config: docker config inspect output or the plain YAML file")
+	fs.BoolVar(&cfg.SkipUpdateCheck, "skip-update-check", cfg.SkipUpdateCheck, "skip the check for a newer plugin release (also VDR_NO_UPDATE_CHECK=1)")
 	fs.Var(&valuesFiles, "values", "Helm values file for the application chart; may be repeated, rightmost file wins")
 	fs.StringVar(&cfg.ReleaseName, "release-name", cfg.ReleaseName, "Helm release name used to render the application chart")
 	fs.StringVar(&cfg.ChartVersion, "chart-version", cfg.ChartVersion, "version constraint for a remote Helm chart")
@@ -694,7 +696,8 @@ func complianceFlagAllowed(name string) bool {
 		"timeout", "t",
 		"min-severity",
 		"quiet", "q",
-		"debug":
+		"debug",
+		"skip-update-check":
 		return true
 	default:
 		return false

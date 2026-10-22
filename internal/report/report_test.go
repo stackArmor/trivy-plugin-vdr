@@ -596,7 +596,7 @@ func TestBuildSeparatesSuppressedFindingsWithWouldHaveBeenPain(t *testing.T) {
 		Source:          "vex",
 		Status:          "not_affected",
 		Justification:   "vulnerable_code_not_in_execute_path",
-		StatementSource: "VEX attestation in OCI registry",
+		StatementSource: "VEX document",
 	}
 	exposures := map[model.ResourceRef]model.Exposure{sampleContainerRef(): {InternetAccessible: true, Provider: "gke", RouteKind: "Ingress", RouteName: "web"}}
 
@@ -623,6 +623,132 @@ func TestBuildSeparatesSuppressedFindingsWithWouldHaveBeenPain(t *testing.T) {
 	}
 	if gotSuppressed.WouldHaveBeenPain.Tier == "" || gotSuppressed.WouldHaveBeenRemediation.Deadline == "" {
 		t.Fatalf("would-have-been values incomplete: %#v/%#v", gotSuppressed.WouldHaveBeenPain, gotSuppressed.WouldHaveBeenRemediation)
+	}
+}
+
+func sampleOCIVEX() *model.VEXAnalysis {
+	return &model.VEXAnalysis{
+		Source:            "oci-cyclonedx-vex",
+		Format:            "cyclonedx",
+		State:             "not_affected",
+		Justification:     "code_not_reachable",
+		Detail:            "Ingress TLS terminates at Envoy; the backend never registers a gRPC server.",
+		Responses:         []string{"will_not_fix"},
+		StatementSource:   "oci://registry.example.com/web@sha256:1111",
+		AttestationDigest: "sha256:2222",
+	}
+}
+
+func TestBuildKeepsOCIVEXAnnotatedFindingsActiveWithPain(t *testing.T) {
+	inv := sampleInventory()
+	annotated := sampleFinding("CVE-2026-33186", "HIGH", 0.7)
+	annotated.VEX = sampleOCIVEX()
+	exposures := map[model.ResourceRef]model.Exposure{sampleContainerRef(): {InternetAccessible: true, Provider: "gke", RouteKind: "Ingress", RouteName: "web"}}
+
+	for _, view := range []string{ViewFindings, ViewResources} {
+		t.Run(view, func(t *testing.T) {
+			got := Build(inv, []model.Finding{annotated}, exposures, Options{GeneratedAt: fixedTime(), View: view, Dedupe: true})
+			if len(got.SuppressedFindings) != 0 {
+				t.Fatalf("SuppressedFindings = %#v, want OCI VEX findings to stay active", got.SuppressedFindings)
+			}
+			if got.Summary.Findings != 1 {
+				t.Fatalf("Summary.Findings = %d, want the VEX-annotated finding counted", got.Summary.Findings)
+			}
+			findings := got.Findings
+			if view == ViewResources {
+				if len(got.Resources) != 1 {
+					t.Fatalf("Resources = %#v, want one resource", got.Resources)
+				}
+				findings = got.Resources[0].Findings
+			}
+			if len(findings) != 1 {
+				t.Fatalf("findings = %#v, want one finding", findings)
+			}
+			finding := findings[0]
+			if finding.Suppressed || finding.Suppression != nil || finding.WouldHaveBeenPain != nil {
+				t.Fatalf("finding = %#v, want no suppression for OCI VEX", finding)
+			}
+			if !reflect.DeepEqual(finding.VEX, sampleOCIVEX()) {
+				t.Fatalf("VEX = %#v, want %#v", finding.VEX, sampleOCIVEX())
+			}
+			if finding.Pain == nil || finding.Remediation == nil {
+				t.Fatalf("Pain/Remediation = %#v/%#v, want scored values", finding.Pain, finding.Remediation)
+			}
+			if len(finding.Affected) != 1 || finding.Affected[0].Pain == nil || finding.Affected[0].Remediation == nil {
+				t.Fatalf("Affected = %#v, want per-asset pain and remediation intact", finding.Affected)
+			}
+
+			var buf bytes.Buffer
+			if err := RenderJSON(&buf, got); err != nil {
+				t.Fatalf("RenderJSON returned error: %v", err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			var raw map[string]any
+			if view == ViewResources {
+				raw = decoded["resources"].([]any)[0].(map[string]any)["findings"].([]any)[0].(map[string]any)
+			} else {
+				raw = decoded["findings"].([]any)[0].(map[string]any)
+			}
+			wantVEX := map[string]any{
+				"source":            "oci-cyclonedx-vex",
+				"format":            "cyclonedx",
+				"state":             "not_affected",
+				"justification":     "code_not_reachable",
+				"detail":            "Ingress TLS terminates at Envoy; the backend never registers a gRPC server.",
+				"responses":         []any{"will_not_fix"},
+				"statementSource":   "oci://registry.example.com/web@sha256:1111",
+				"attestationDigest": "sha256:2222",
+			}
+			if !reflect.DeepEqual(raw["vex"], wantVEX) {
+				t.Fatalf("JSON vex = %#v, want %#v", raw["vex"], wantVEX)
+			}
+			affected := raw["affected"].([]any)[0].(map[string]any)
+			if affected["pain"] == nil || affected["remediation"] == nil {
+				t.Fatalf("JSON affected = %#v, want pain and remediation", affected)
+			}
+			if _, ok := decoded["suppressedFindings"]; ok {
+				t.Fatalf("JSON has suppressedFindings: %s", buf.String())
+			}
+		})
+	}
+}
+
+func TestBuildDedupeKeepsOCIVEXScopedToItsImage(t *testing.T) {
+	webRef := sampleContainerRef()
+	apiRef := model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api", ContainerName: "app", ContainerType: "container"}
+	inv := sampleInventory()
+	inv.Resources = append(inv.Resources, model.ResourceInventory{
+		Resource: model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api"},
+		Images:   []model.ContainerImage{{Name: "app", ContainerType: "container", ImageRef: "example/api:v1"}},
+	})
+	inv.Images = append(inv.Images, model.ImageInventory{ImageRef: "example/api:v1", Resources: []model.ResourceRef{apiRef}})
+
+	web := sampleFinding("CVE-2026-33186", "HIGH", 0.7)
+	web.VEX = sampleOCIVEX()
+	api := sampleFinding("CVE-2026-33186", "HIGH", 0.7)
+	api.ImageRef = "example/api:v1"
+	api.AffectedResources = []model.ResourceRef{apiRef}
+
+	got := Build(inv, []model.Finding{web, api}, nil, Options{GeneratedAt: fixedTime(), View: ViewFindings, Dedupe: true})
+	if len(got.Findings) != 2 {
+		t.Fatalf("Findings = %#v, want the VEX-annotated image kept apart from the un-annotated one", got.Findings)
+	}
+	for _, finding := range got.Findings {
+		switch finding.ImageRef {
+		case "example/web:v1":
+			if finding.VEX == nil || len(finding.AffectedResources) != 1 || finding.AffectedResources[0] != webRef {
+				t.Fatalf("web finding = %#v, want its own VEX statement and resource", finding)
+			}
+		case "example/api:v1":
+			if finding.VEX != nil {
+				t.Fatalf("api finding VEX = %#v, want none", finding.VEX)
+			}
+		default:
+			t.Fatalf("unexpected finding image %q", finding.ImageRef)
+		}
 	}
 }
 

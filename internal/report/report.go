@@ -1026,6 +1026,11 @@ func cloneFinding(finding model.Finding) model.Finding {
 		value := *finding.Suppression
 		clone.Suppression = &value
 	}
+	if finding.VEX != nil {
+		value := *finding.VEX
+		value.Responses = append([]string(nil), finding.VEX.Responses...)
+		clone.VEX = &value
+	}
 	if finding.WouldHaveBeenPain != nil {
 		value := *finding.WouldHaveBeenPain
 		clone.WouldHaveBeenPain = &value
