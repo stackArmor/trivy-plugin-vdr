@@ -144,7 +144,8 @@ func sourceExamples(source string) string {
 	case SourceSwarm:
 		return `  vdr swarm --services-file services.json --context-name swarm/prod
   vdr swarm --services-file services.json --swarm-config vdr-fedramp.json --context-name swarm/prod --output tcs-vdr.json
-  vdr swarm --services-file services.json --context-name swarm/prod --reachability-only`
+  vdr swarm --services-file services.json --context-name swarm/prod --reachability-only
+  vdr swarm --ssm-manager-tag swarm-node-type=manager --region us-gov-west-1 --aws-role-arn ROLE_ARN --context-name swarm/prod`
 	default:
 		return ""
 	}
@@ -205,7 +206,7 @@ func sourceHelpSections(source string) []helpSection {
 	case SourceSwarm:
 		sections = append(sections, helpSection{
 			title: "Swarm source",
-			flags: []string{"services-file", "swarm-config", "context-name"},
+			flags: []string{"services-file", "ssm-manager-tag", "region", "swarm-config", "context-name"},
 		})
 	case SourceHelm:
 		sections = append(sections,
@@ -338,6 +339,7 @@ func helpValueName(name string) string {
 	valueNames := map[string]string{
 		"api-versions":                    "VERSION",
 		"services-file":                   "FILE",
+		"ssm-manager-tag":                 "KEY=VALUE",
 		"swarm-config":                    "FILE",
 		"aws-role-arn":                    "ARN",
 		"aws-profile":                     "PROFILE",

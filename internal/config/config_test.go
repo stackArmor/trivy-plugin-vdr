@@ -1200,3 +1200,25 @@ func TestParseAWSProfile(t *testing.T) {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
+
+func TestParseSwarmSSMMode(t *testing.T) {
+	cfg, err := Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--region", "us-gov-west-1", "--context-name", "swarm/prod", "--aws-role-arn", "arn:aws-us-gov:iam::111111111111:role/threatalert-dockerswarm-scan-role"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.SwarmSSMManagerTag != "swarm-node-type=manager" || len(cfg.Regions) != 1 {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if _, err := Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "--region") {
+		t.Fatalf("missing region err = %v", err)
+	}
+	if _, err := Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--region", "us-gov-west-1", "--services-file", "s.json", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "either --services-file or --ssm-manager-tag") {
+		t.Fatalf("both sources err = %v", err)
+	}
+	if _, err := Parse([]string{"swarm", "--ssm-manager-tag", "manager", "--region", "us-gov-west-1", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("bad tag err = %v", err)
+	}
+	if _, err := Parse([]string{"k8s", "--ssm-manager-tag", "swarm-node-type=manager"}); err == nil || !strings.Contains(err.Error(), "only valid for source swarm") {
+		t.Fatalf("k8s err = %v", err)
+	}
+}

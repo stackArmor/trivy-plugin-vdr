@@ -259,6 +259,23 @@ declaration:
   `unassessed`, with that evidence, and is named in a run warning;
 - any other service is an observed negative (`assessed`, `observed`).
 
+**Collecting over SSM.** For swarms on EC2, the plugin can collect the
+inventory itself with SSM Run Command instead of `--services-file`:
+
+```sh
+trivy vdr swarm --ssm-manager-tag swarm-node-type=manager --region us-gov-west-1 \
+  --aws-role-arn arn:aws-us-gov:iam::<account>:role/threatalert-dockerswarm-scan-role \
+  --context-name swarm/prod --output tcs-vdr.json
+```
+
+It picks the first running instance with the tag, runs `docker service
+inspect`, `docker network ls` and `docker config inspect vdr-fedramp` there, and
+reads the output back in chunks, because SSM truncates command output at 24,000
+characters. It needs `ec2:DescribeInstances`, `ssm:SendCommand` (on the manager
+and the `AWS-RunShellScript` document) and `ssm:GetCommandInvocation`; no S3
+bucket. `--swarm-config` still overrides the collected config. Locally, add
+`--aws-profile` to pick the base credentials the role is assumed from.
+
 `docker service inspect` names networks by ID, so host networking is only
 recognisable when the services file also carries the network list:
 `{"services": <inspect output>, "networks": <docker network ls --no-trunc --format '{{json .}}' as an array>}`.
@@ -392,7 +409,8 @@ Flags:
 - `--no-gcloud-auth` skips the `gcloud` token for GAR/GCR.
 - `--no-ecr-auth` skips the `aws` token for ECR.
 - `--gcp-impersonate-service-account <email>` uses an impersonated Google service account for Cloud Run metadata clients and adds `--impersonate-service-account` to GAR/GCR `gcloud` token fetches.
-- `--aws-role-arn <arn>` assumes the AWS role ARN with `aws sts assume-role` before fetching ECR tokens.
+- `--aws-role-arn <arn>` assumes the AWS role for every AWS call the plugin makes: ECS and EC2 APIs, SSM (swarm), and the `aws` CLI's ECR token fetch.
+- `--aws-profile <name>` selects the base credentials the role is assumed from (or used directly without a role). Without it the standard AWS chain applies: environment variables, `AWS_PROFILE`, web identity, container credentials (CodeBuild, ECS), then EC2 instance metadata.
 
 This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run and standalone image scans, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
 

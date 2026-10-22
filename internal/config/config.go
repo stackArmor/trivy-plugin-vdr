@@ -100,8 +100,11 @@ type Config struct {
 	SwarmServicesFile string
 	// SwarmConfigFile is the vdr-fedramp Swarm config (docker config inspect output or plain YAML).
 	SwarmConfigFile string
-	Quiet           bool
-	Debug           bool
+	// SwarmSSMManagerTag (key=value) collects the swarm inventory over SSM Run
+	// Command from a running EC2 manager node instead of --services-file.
+	SwarmSSMManagerTag string
+	Quiet              bool
+	Debug              bool
 }
 
 type namespaceList []string
@@ -253,6 +256,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.Quiet, "q", cfg.Quiet, "alias for --quiet")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
 	fs.StringVar(&cfg.SwarmServicesFile, "services-file", cfg.SwarmServicesFile, "docker service inspect output (JSON array, or {services, networks}) for source swarm")
+	fs.StringVar(&cfg.SwarmSSMManagerTag, "ssm-manager-tag", cfg.SwarmSSMManagerTag, "collect swarm services over SSM from the running EC2 manager with this tag (key=value, e.g. swarm-node-type=manager); needs --region")
 	fs.StringVar(&cfg.SwarmConfigFile, "swarm-config", cfg.SwarmConfigFile, "vdr-fedramp Swarm config: docker config inspect output or the plain YAML file")
 	fs.Var(&valuesFiles, "values", "Helm values file for the application chart; may be repeated, rightmost file wins")
 	fs.StringVar(&cfg.ReleaseName, "release-name", cfg.ReleaseName, "Helm release name used to render the application chart")
@@ -347,7 +351,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			k8sSpecificFlag = f.Name
 		case "include-functions":
 			cloudRunSpecificFlag = f.Name
-		case "services-file", "swarm-config":
+		case "services-file", "swarm-config", "ssm-manager-tag":
 			swarmSpecificFlag = f.Name
 		}
 		if source == SourceK8sCompliance && !complianceFlagAllowed(f.Name) && complianceUnsupportedFlag == "" {
@@ -484,8 +488,25 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		if projectSet || strings.TrimSpace(cfg.Project) != "" {
 			return Config{}, errors.New("--project is only valid for source cloudrun")
 		}
-		if strings.TrimSpace(cfg.SwarmServicesFile) == "" {
-			return Config{}, errors.New("--services-file is required for source swarm")
+		servicesFile := strings.TrimSpace(cfg.SwarmServicesFile) != ""
+		ssmTag := strings.TrimSpace(cfg.SwarmSSMManagerTag) != ""
+		switch {
+		case servicesFile && ssmTag:
+			return Config{}, errors.New("use either --services-file or --ssm-manager-tag for source swarm, not both")
+		case !servicesFile && !ssmTag:
+			return Config{}, errors.New("--services-file is required for source swarm (or --ssm-manager-tag to collect over SSM)")
+		case ssmTag:
+			key, value, ok := strings.Cut(cfg.SwarmSSMManagerTag, "=")
+			if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+				return Config{}, fmt.Errorf("--ssm-manager-tag %q must be key=value", cfg.SwarmSSMManagerTag)
+			}
+			if len(cfg.Regions) != 1 {
+				return Config{}, errors.New("--ssm-manager-tag needs exactly one --region")
+			}
+		default:
+			if regionSet || len(cfg.Regions) > 0 {
+				return Config{}, errors.New("--region is only valid for source swarm with --ssm-manager-tag")
+			}
 		}
 		if strings.TrimSpace(cfg.ContextName) == "" {
 			return Config{}, errors.New("--context-name is required for source swarm; it names the cluster in the report")

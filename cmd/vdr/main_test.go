@@ -20,6 +20,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/swarm"
 )
 
 func TestRunK8sPassesPullSecretAuthsToRegistryBuild(t *testing.T) {
@@ -431,5 +432,39 @@ func TestRunSwarmReportsExposure(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(report.Warnings, "\n"), "app_web") {
 		t.Fatalf("warnings = %v, want the undeclared app_web named", report.Warnings)
+	}
+}
+
+func TestRunSwarmCollectsOverSSM(t *testing.T) {
+	services, err := os.ReadFile("../../internal/swarm/testdata/services.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotTag, gotRegion, gotProfile, gotRole string
+	original := collectSwarmViaSSM
+	collectSwarmViaSSM = func(_ context.Context, cfg config.Config) (swarm.Collected, error) {
+		gotTag, gotRegion, gotProfile, gotRole = cfg.SwarmSSMManagerTag, cfg.Regions[0], cfg.AWSProfile, cfg.AWSRoleARN
+		return swarm.Collected{InstanceID: "i-1", Services: services, FedRAMPConfig: []byte("class: C\n")}, nil
+	}
+	t.Cleanup(func() { collectSwarmViaSSM = original })
+
+	cfg, err := config.Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--region", "us-gov-west-1",
+		"--aws-profile", "p", "--aws-role-arn", "arn:aws-us-gov:iam::111111111111:role/r", "--context-name", "swarm/test", "--reachability-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runSwarm: %v", err)
+	}
+	if gotTag != "swarm-node-type=manager" || gotRegion != "us-gov-west-1" || gotProfile != "p" || gotRole != "arn:aws-us-gov:iam::111111111111:role/r" {
+		t.Fatalf("collector got tag=%q region=%q profile=%q role=%q", gotTag, gotRegion, gotProfile, gotRole)
+	}
+	var report model.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Resources) != 6 || report.Class != "C" {
+		t.Fatalf("resources=%d class=%q, want the collected inventory and config", len(report.Resources), report.Class)
 	}
 }

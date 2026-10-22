@@ -46,11 +46,17 @@ type ExposureRule struct {
 // scoring.Config.ApplyClusterDefaults, and the exposure declarations. An empty
 // inspect result means the config does not exist, which is not an error.
 func LoadFedRAMPConfig(path string) (map[string]string, ExposureConfig, error) {
-	exposure := ExposureConfig{ProxyLabelPrefixes: []string{DefaultProxyLabelPrefix}}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, exposure, fmt.Errorf("read %s config: %w", FedRAMPConfigName, err)
+		return nil, ExposureConfig{ProxyLabelPrefixes: []string{DefaultProxyLabelPrefix}}, fmt.Errorf("read %s config: %w", FedRAMPConfigName, err)
 	}
+	return ParseFedRAMPConfig(raw)
+}
+
+// ParseFedRAMPConfig is LoadFedRAMPConfig for content already in memory, such
+// as the output collected over SSM.
+func ParseFedRAMPConfig(raw []byte) (map[string]string, ExposureConfig, error) {
+	exposure := ExposureConfig{ProxyLabelPrefixes: []string{DefaultProxyLabelPrefix}}
 	content, err := configContent(raw)
 	if err != nil {
 		return nil, exposure, err

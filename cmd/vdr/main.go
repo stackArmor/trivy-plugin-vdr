@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -8,6 +9,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/awsconfig"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/buildinfo"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudrun"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
@@ -496,31 +500,69 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, exposures)
 }
 
-func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
-	file, err := os.Open(cfg.SwarmServicesFile)
+// collectSwarmViaSSM reads the swarm inventory and vdr-fedramp config from a
+// manager node over SSM Run Command. A variable so tests can replace it.
+var collectSwarmViaSSM = func(ctx context.Context, cfg config.Config) (swarm.Collected, error) {
+	key, value, err := swarm.ParseManagerTag(cfg.SwarmSSMManagerTag)
 	if err != nil {
-		return fmt.Errorf("open swarm services file: %w", err)
+		return swarm.Collected{}, err
 	}
-	services, err := swarm.ParseServices(file)
-	file.Close()
+	awsCfg, err := awsconfig.Load(ctx, cfg.Regions[0], cfg.AWSProfile, cfg.AWSRoleARN)
 	if err != nil {
-		return fmt.Errorf("%s: %w", cfg.SwarmServicesFile, err)
+		return swarm.Collected{}, err
+	}
+	return swarm.CollectViaSSM(ctx, ssm.NewFromConfig(awsCfg), ec2.NewFromConfig(awsCfg), swarm.SSMOptions{
+		ManagerTagKey:   key,
+		ManagerTagValue: value,
+	})
+}
+
+func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+	var servicesRaw, configRaw []byte
+	servicesSource, configSource := cfg.SwarmServicesFile, cfg.SwarmConfigFile
+	if cfg.SwarmSSMManagerTag != "" {
+		logger.Info("collecting Swarm inventory over SSM from the running instance tagged %s in %s", cfg.SwarmSSMManagerTag, cfg.Regions[0])
+		collected, err := collectSwarmViaSSM(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		servicesRaw = collected.Services
+		servicesSource = "SSM " + collected.InstanceID
+		if configSource == "" {
+			configRaw, configSource = collected.FedRAMPConfig, "SSM "+collected.InstanceID
+		}
+	} else {
+		var err error
+		if servicesRaw, err = os.ReadFile(cfg.SwarmServicesFile); err != nil {
+			return fmt.Errorf("read swarm services file: %w", err)
+		}
+	}
+	if cfg.SwarmConfigFile != "" {
+		var err error
+		if configRaw, err = os.ReadFile(cfg.SwarmConfigFile); err != nil {
+			return fmt.Errorf("read swarm config: %w", err)
+		}
+	}
+
+	services, err := swarm.ParseServices(bytes.NewReader(servicesRaw))
+	if err != nil {
+		return fmt.Errorf("%s: %w", servicesSource, err)
 	}
 	inventory := swarm.BuildInventory(cfg.ContextName, services)
 	logger.Info("inventory: %d Swarm services, %d unique images", len(inventory.Resources), len(inventory.Images))
 	exposureConfig := swarm.ExposureConfig{ProxyLabelPrefixes: []string{swarm.DefaultProxyLabelPrefix}}
-	if cfg.SwarmConfigFile != "" {
-		data, loadedExposure, err := swarm.LoadFedRAMPConfig(cfg.SwarmConfigFile)
+	if configRaw != nil {
+		data, loadedExposure, err := swarm.ParseFedRAMPConfig(configRaw)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %w", configSource, err)
 		}
 		if len(data) == 0 {
-			logger.Warn("swarm config %s is empty or the %s config does not exist; using built-in defaults (Class B, single-agency)", cfg.SwarmConfigFile, swarm.FedRAMPConfigName)
+			logger.Warn("swarm config from %s is empty or the %s config does not exist; using built-in defaults (Class B, single-agency)", configSource, swarm.FedRAMPConfigName)
 		}
-		// An explicitly supplied config fails the run instead of silently
-		// falling back to defaults, as --sip-config-map does.
+		// A supplied config fails the run instead of silently falling back
+		// to defaults, as --sip-config-map does.
 		if err := scoring.Default().ApplyClusterDefaults(data); err != nil {
-			return fmt.Errorf("%s: %w", cfg.SwarmConfigFile, err)
+			return fmt.Errorf("%s: %w", configSource, err)
 		}
 		inventory.ClusterDefaults = data
 		exposureConfig = loadedExposure
