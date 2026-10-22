@@ -135,6 +135,7 @@ func ParseServices(r io.Reader) ([]Service, error) {
 				PublishMode:   mode,
 			})
 		}
+		service.NetworksResolved = true
 		for _, network := range item.Spec.TaskTemplate.Networks {
 			if hostNetworks[network.Target] {
 				service.HostNetwork = true
@@ -142,6 +143,8 @@ func ParseServices(r io.Reader) ([]Service, error) {
 			name := network.Target
 			if resolved := networkNames[network.Target]; resolved != "" {
 				name = resolved
+			} else if network.Target != "host" {
+				service.NetworksResolved = false
 			}
 			service.Networks = append(service.Networks, name)
 		}
@@ -204,7 +207,8 @@ func BuildInventory(contextName string, services []Service) *model.Inventory {
 }
 
 // ContainerRef is the container-level reference a service's findings and
-// exposure are keyed by.
+// exposure are keyed by: the service resource plus its container fields, the
+// same form the report derives from the inventory, so the keys line up.
 func ContainerRef(contextName string, service Service) model.ResourceRef {
 	return model.ResourceRef{
 		APIVersion:    "swarm.docker.com/v1",
@@ -215,8 +219,8 @@ func ContainerRef(contextName string, service Service) model.ResourceRef {
 		UID:           service.ID,
 		ContainerName: service.Name,
 		ContainerType: "container",
-		CanonicalID:   serviceCanonicalID(contextName, service.Name) + "/container/" + url.PathEscape(service.Name),
-		DisplayID:     serviceCanonicalID(contextName, service.Name) + "/container/" + url.PathEscape(service.Name),
+		CanonicalID:   serviceCanonicalID(contextName, service.Name),
+		DisplayID:     serviceCanonicalID(contextName, service.Name),
 	}
 }
 

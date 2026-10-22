@@ -402,3 +402,34 @@ func TestRunSwarmRejectsInvalidFedRAMPConfig(t *testing.T) {
 		t.Fatalf("err = %v, want an imageRules validation error", err)
 	}
 }
+
+func TestRunSwarmReportsExposure(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "vdr-fedramp.yaml")
+	if err := os.WriteFile(configPath, []byte("exposure.yaml: |\n  rules:\n    - image: traefik\n      internetReachable: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]string{"swarm", "--services-file", "../../internal/swarm/testdata/services.json", "--swarm-config", configPath, "--context-name", "swarm/test", "--reachability-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runSwarm returned error: %v", err)
+	}
+	var report model.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, resource := range report.Resources {
+		if resource.Exposure != nil {
+			statuses[resource.Resource.Name] = resource.Exposure.AssessmentBasis + "/" + resource.Exposure.AssessmentStatus
+		}
+	}
+	if statuses["edge_traefik"] != "attested/assessed" || statuses["app_web"] != "/unassessed" {
+		t.Fatalf("exposure statuses = %v", statuses)
+	}
+	if !strings.Contains(strings.Join(report.Warnings, "\n"), "app_web") {
+		t.Fatalf("warnings = %v, want the undeclared app_web named", report.Warnings)
+	}
+}

@@ -166,7 +166,7 @@ func TestBuildInventoryRefs(t *testing.T) {
 		t.Fatalf("shared image = %+v, want two resources", shared)
 	}
 	ref := shared.Resources[0]
-	if ref.ContainerName != ref.Name || ref.ContainerType != "container" || ref.CanonicalID != "docker-swarm://swarm%2Ftest/service/"+ref.Name+"/container/"+ref.Name {
+	if ref.ContainerName != ref.Name || ref.ContainerType != "container" || ref.CanonicalID != "docker-swarm://swarm%2Ftest/service/"+ref.Name {
 		t.Fatalf("container ref = %+v", ref)
 	}
 	if shared.NormalizedImage != "123456789012.dkr.ecr.us-east-1.amazonaws.com/web" {

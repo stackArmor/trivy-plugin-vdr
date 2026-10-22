@@ -28,6 +28,10 @@ type Service struct {
 	Ports       []PublishedPort
 	Networks    []string // network names when known, otherwise IDs
 	HostNetwork bool
+	// NetworksResolved is true when every attached network's identity is
+	// known, so HostNetwork is authoritative. A bare inspect array leaves
+	// network IDs unresolved.
+	NetworksResolved bool
 }
 
 // PublishedPort is one entry of a service's endpoint ports.

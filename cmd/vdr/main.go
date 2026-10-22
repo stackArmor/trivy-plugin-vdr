@@ -504,8 +504,9 @@ func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 	}
 	inventory := swarm.BuildInventory(cfg.ContextName, services)
 	logger.Info("inventory: %d Swarm services, %d unique images", len(inventory.Resources), len(inventory.Images))
+	exposureConfig := swarm.ExposureConfig{ProxyLabelPrefixes: []string{swarm.DefaultProxyLabelPrefix}}
 	if cfg.SwarmConfigFile != "" {
-		data, _, err := swarm.LoadFedRAMPConfig(cfg.SwarmConfigFile)
+		data, loadedExposure, err := swarm.LoadFedRAMPConfig(cfg.SwarmConfigFile)
 		if err != nil {
 			return err
 		}
@@ -518,10 +519,19 @@ func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 			return fmt.Errorf("%s: %w", cfg.SwarmConfigFile, err)
 		}
 		inventory.ClusterDefaults = data
+		exposureConfig = loadedExposure
 	}
 
 	var warnings []string
 	exposures := map[model.ResourceRef]model.Exposure{}
+	if !cfg.SkipExposure {
+		var exposureWarnings []string
+		exposures, exposureWarnings = swarm.AnalyzeExposure(cfg.ContextName, services, exposureConfig)
+		for _, w := range exposureWarnings {
+			warnings = append(warnings, w)
+			logger.Warn("%s", w)
+		}
+	}
 	if cfg.ReachabilityOnly {
 		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
 		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures, nil)
