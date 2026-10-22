@@ -39,7 +39,7 @@ Usage:
   vdr <source> [flags]
   vdr image [flags] IMAGE...
   vdr helm [flags] CHART
-  vdr swarm --services-file SERVICES.json --context-name NAME [flags]
+  vdr swarm --region REGION --context-name NAME [flags]
   vdr enrich-report --input REPORT.json [--output ENRICHED.json]
 
 Sources:
@@ -49,7 +49,7 @@ Sources:
   ecs       Scan active AWS ECS task definitions
   image     Scan one or more container image references
   helm      Render and scan a Helm chart without a live cluster
-  swarm     Scan Docker Swarm services from docker service inspect output
+  swarm     Scan Docker Swarm services, collected from the manager node over SSM
 
 Post-processing:
   enrich-report  Add embedded CAPEC/ATT&CK taxonomy evidence to a VDR JSON report
@@ -89,7 +89,7 @@ func sourceDescription(source string) string {
 	case SourceHelm:
 		return "Render a Helm chart, inventory its workloads, and scan their images without a live cluster."
 	case SourceSwarm:
-		return "Inventory and scan Docker Swarm services from docker service inspect output; metadata comes from the vdr-fedramp Swarm config and service labels."
+		return "Inventory and scan Docker Swarm services, collected over SSM from the EC2 manager node (or from --services-file); metadata comes from the vdr-fedramp Swarm config and service labels."
 	default:
 		return ""
 	}
@@ -108,7 +108,7 @@ func sourceUsage(source string) string {
 	case SourceHelm:
 		return "vdr helm [flags] CHART"
 	case SourceSwarm:
-		return "vdr swarm --services-file SERVICES.json --context-name NAME [flags]"
+		return "vdr swarm --region REGION --context-name NAME [flags]"
 	default:
 		return "vdr k8s [flags]"
 	}
@@ -142,10 +142,10 @@ func sourceExamples(source string) string {
   vdr helm bitnami/nginx --chart-version 19.0.0 --namespace prod
   vdr helm ./charts/app --ingress-chart ./charts/edge --ingress-values values/edge.yaml`
 	case SourceSwarm:
-		return `  vdr swarm --services-file services.json --context-name swarm/prod
-  vdr swarm --services-file services.json --swarm-config vdr-fedramp.json --context-name swarm/prod --output tcs-vdr.json
-  vdr swarm --services-file services.json --context-name swarm/prod --reachability-only
-  vdr swarm --ssm-manager-tag swarm-node-type=manager --region us-gov-west-1 --aws-role-arn ROLE_ARN --context-name swarm/prod`
+		return `  vdr swarm --region us-gov-west-1 --context-name swarm/prod --output tcs-vdr.json --html-output vdr.html
+  vdr swarm --region us-gov-west-1 --aws-role-arn ROLE_ARN --context-name swarm/prod --reachability-only
+  vdr swarm --region us-gov-west-1 --ssm-manager-tag role=swarm-manager --context-name swarm/prod
+  vdr swarm --services-file services.json --context-name swarm/prod`
 	default:
 		return ""
 	}
@@ -164,7 +164,7 @@ func sourceHelpNote(source string) string {
 	case SourceCloudRun, SourceImage:
 		return "Credentials are loaded automatically from the local Docker config and supported cloud CLIs."
 	case SourceSwarm:
-		return "Collect SERVICES.json on a manager node with: docker service inspect $(docker service ls -q). Credentials are loaded from the local Docker config and supported cloud CLIs."
+		return "The inventory and the vdr-fedramp config are read from the first running EC2 instance tagged swarm-node-type=manager (override with --ssm-manager-tag). Offline: collect SERVICES.json on a manager with docker service inspect $(docker service ls -q) and pass --services-file."
 	default:
 		return ""
 	}
@@ -206,7 +206,7 @@ func sourceHelpSections(source string) []helpSection {
 	case SourceSwarm:
 		sections = append(sections, helpSection{
 			title: "Swarm source",
-			flags: []string{"services-file", "ssm-manager-tag", "region", "swarm-config", "context-name"},
+			flags: []string{"region", "context-name", "ssm-manager-tag", "swarm-config", "services-file"},
 		})
 	case SourceHelm:
 		sections = append(sections,

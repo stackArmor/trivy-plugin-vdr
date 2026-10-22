@@ -1142,8 +1142,8 @@ func TestParseSourceHelpOnlyShowsRelevantFlags(t *testing.T) {
 }
 
 func TestParseSwarmRequiresServicesFileAndContextName(t *testing.T) {
-	if _, err := Parse([]string{"swarm", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "--services-file is required for source swarm") {
-		t.Fatalf("missing services file err = %v", err)
+	if _, err := Parse([]string{"swarm", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "--region is required for source swarm") {
+		t.Fatalf("collecting from the cluster without a region: err = %v", err)
 	}
 	if _, err := Parse([]string{"swarm", "--services-file", "services.json"}); err == nil || !strings.Contains(err.Error(), "--context-name is required for source swarm") {
 		t.Fatalf("missing context name err = %v", err)
@@ -1220,5 +1220,23 @@ func TestParseSwarmSSMMode(t *testing.T) {
 	}
 	if _, err := Parse([]string{"k8s", "--ssm-manager-tag", "swarm-node-type=manager"}); err == nil || !strings.Contains(err.Error(), "only valid for source swarm") {
 		t.Fatalf("k8s err = %v", err)
+	}
+}
+
+func TestParseSwarmDefaultsToClusterCollection(t *testing.T) {
+	cfg, err := Parse([]string{"swarm", "--region", "us-gov-west-1", "--context-name", "swarm/prod"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.SwarmSSMManagerTag != DefaultSwarmManagerTag || DefaultSwarmManagerTag != "swarm-node-type=manager" {
+		t.Fatalf("manager tag = %q, want the default %q", cfg.SwarmSSMManagerTag, "swarm-node-type=manager")
+	}
+	cfg, err = Parse([]string{"swarm", "--region", "us-gov-west-1", "--ssm-manager-tag", "role=swarm-manager", "--context-name", "swarm/prod"})
+	if err != nil || cfg.SwarmSSMManagerTag != "role=swarm-manager" {
+		t.Fatalf("explicit tag: cfg=%+v err=%v", cfg, err)
+	}
+	cfg, err = Parse([]string{"swarm", "--services-file", "s.json", "--context-name", "swarm/prod"})
+	if err != nil || cfg.SwarmSSMManagerTag != "" {
+		t.Fatalf("a services file must not collect over SSM: cfg=%+v err=%v", cfg, err)
 	}
 }
