@@ -1,0 +1,115 @@
+# Example trivy-plugin-vdr config for a Docker Swarm cluster.
+#
+# This file is deployed into the swarm as a Docker config object named
+# `vdr-fedramp`. It is NOT mounted into any service: the scanner reads it from
+# a manager node with `docker config inspect vdr-fedramp`. See README.md in this
+# directory for deploy and update steps. Swarm configs cannot be edited, so an
+# update means deleting and recreating the config under the same name.
+#
+# The keys match the Kubernetes vdr-fedramp ConfigMap (class, multiAgency,
+# securityRequirementsCeiling, scoring.yaml), plus exposure.yaml, because Swarm
+# has no ingress objects from which internet reachability can be discovered.
+
+# --- cluster-wide scalars ---
+class: "B"            # your FedRAMP Certification Class: A, B, C or D
+multiAgency: "true"   # "true" if this swarm serves more than one agency
+# Optional system-and-agency ceiling; omit to leave profile scoring unchanged.
+# securityRequirementsCeiling: cr-m_ir-m_ar-l
+
+# --- security impact profiles ---
+# Resolution order: service label vdr.fedramp.io/security-impact-profile >
+# nameRules > imageRules > kindRules > namespaceRules > defaults > H/H/H failsafe.
+#
+# Profiles here are decision traces, <disclosure>.<trustedChange>.<dependency>,
+# using the governed reason codes in policy/vdr-policy.yaml. Each segment sets
+# one of CR, IR and AR; the resulting values are shown in the comments. Direct
+# vectors (CR:H/IR:M/AR:L) and named archetypes are also accepted.
+scoring.yaml: |
+  # imageRules match the image repository basename: registry, tag and digest are
+  # ignored, so 123456789012.dkr.ecr.us-east-1.amazonaws.com/auth:2.4@sha256:...
+  # matches "auth". Globs are allowed. First match wins, so keep specific entries
+  # above the globs that would otherwise cover them.
+  imageRules:
+    # Identity and administration
+    - match: admin-api          # H/H/H: tenant administration, broad blast radius
+      securityImpactProfile: privileged-access.identity-control.shared-critical-path
+    - match: auth               # H/H/M: authentication, token signing
+      securityImpactProfile: root-secrets.identity-control.shared-degradation
+    - match: rbac               # H/H/M: role-based access control
+      securityImpactProfile: privileged-access.identity-control.shared-degradation
+    - match: tenant-api         # H/H/H: tenant boundary and isolation
+      securityImpactProfile: privileged-access.security-enforcement.shared-critical-path
+    - match: audit-api          # H/H/M: audit trail
+      securityImpactProfile: restricted-evidence.authoritative-record.operations-support
+
+    # Edge and gateways
+    - match: traefik            # M/H/H: public TLS edge
+      securityImpactProfile: service-content.security-enforcement.shared-critical-path
+    - match: api-gateway        # M/H/H: front door for external clients
+      securityImpactProfile: service-content.security-enforcement.shared-critical-path
+    - match: mobile-api         # M/H/M: backend-for-frontend
+      securityImpactProfile: service-content.security-enforcement.bounded-service
+
+    # Customer data
+    - match: document-api       # H/H/H: customer documents, system of record
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: document-convert   # H/M/M: transient document processing
+      securityImpactProfile: federal-records.scoped-write.bounded-service
+    - match: object-storage     # H/H/H: stored customer files
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+
+    # Platform plumbing
+    - match: event-bus          # M/H/H: cross-service event backbone
+      securityImpactProfile: service-content.authoritative-record.shared-critical-path
+    - match: workflow-worker    # M/H/M: workflow execution state
+      securityImpactProfile: service-content.authoritative-record.bounded-service
+    - match: feature-flags      # L/H/M: flags change runtime behavior
+      securityImpactProfile: routing-metadata.config-control.bounded-service
+    - match: notify             # L/M/L: outbound notifications
+      securityImpactProfile: opaque-transit.bounded-processing.deferrable-work
+    - match: metrics-collector  # M/M/L: device and service telemetry
+      securityImpactProfile: ops-metadata.bounded-processing.deferrable-work
+    - match: healthcheck        # L/L/L: health endpoint only
+      securityImpactProfile: public-content.advisory-output.deferrable-work
+
+    # Frontends: the CDN container first, then a glob for the app bundles it serves.
+    - match: web-cdn            # M/H/M: serves application JavaScript to every browser
+      securityImpactProfile: service-content.release-control.bounded-service
+    - match: web-ui-*           # M/M/L: stateless frontend bundles
+      securityImpactProfile: service-content.bounded-processing.deferrable-work
+
+  # nameRules override imageRules for individual services when one image backs
+  # several services with different roles. namespace is the stack name
+  # (com.docker.stack.namespace); match is the full service name.
+  nameRules:
+    - namespace: app
+      match: app_document-api-reindex
+      securityImpactProfile: federal-records.bounded-processing.deferrable-work
+
+# --- internet reachability ---
+# Swarm has no ingress objects to discover, so reachability is declared here or
+# on the service itself with these labels (a label wins over these rules):
+#   vdr.fedramp.io/internet-reachable: "true" | "false"
+#   vdr.fedramp.io/internet-reachable-justification: "<why>"   # required for "false"
+#
+# For services matched by no rule and no label:
+#   - publishes ports or carries proxy route labels -> unassessed, with a warning
+#   - no published ports, no proxy routes, not on the host network
+#     -> observed not internet reachable
+# A "false" without a justification is ignored and reported as unassessed.
+exposure.yaml: |
+  # Label prefixes that mark a service as routed by an edge proxy.
+  proxyLabelPrefixes:
+    - traefik.http.routers.
+  # stack, name and image are globs; an omitted field matches anything.
+  rules:
+    - image: traefik            # binds 80/443 on the public edge
+      internetReachable: true
+    - image: api-gateway        # routed by traefik from the internet
+      internetReachable: true
+    - stack: app
+      image: web-ui-*
+      internetReachable: true
+    - image: metrics-collector
+      internetReachable: false
+      justification: "Publishes 9100/tcp in host mode on the private subnet only; no proxy route."
