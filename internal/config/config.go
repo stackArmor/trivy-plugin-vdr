@@ -95,6 +95,7 @@ type Config struct {
 	VEXOCIRegistries             []string
 	Quiet                        bool
 	Debug                        bool
+	SkipUpdateCheck              bool
 }
 
 type namespaceList []string
@@ -244,6 +245,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "suppress progress logging (warnings and errors only)")
 	fs.BoolVar(&cfg.Quiet, "q", cfg.Quiet, "alias for --quiet")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
+	fs.BoolVar(&cfg.SkipUpdateCheck, "skip-update-check", cfg.SkipUpdateCheck, "skip the check for a newer plugin release (also VDR_NO_UPDATE_CHECK=1)")
 	fs.Var(&valuesFiles, "values", "Helm values file for the application chart; may be repeated, rightmost file wins")
 	fs.StringVar(&cfg.ReleaseName, "release-name", cfg.ReleaseName, "Helm release name used to render the application chart")
 	fs.StringVar(&cfg.ChartVersion, "chart-version", cfg.ChartVersion, "version constraint for a remote Helm chart")
@@ -635,7 +637,8 @@ func complianceFlagAllowed(name string) bool {
 		"timeout", "t",
 		"min-severity",
 		"quiet", "q",
-		"debug":
+		"debug",
+		"skip-update-check":
 		return true
 	default:
 		return false

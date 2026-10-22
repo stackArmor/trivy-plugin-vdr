@@ -373,6 +373,11 @@ type Finding struct {
 	// not been dispositioned as suppressed.
 	WouldHaveBeenPain        *Pain        `json:"wouldHaveBeenPain,omitempty"`
 	WouldHaveBeenRemediation *Remediation `json:"wouldHaveBeenRemediation,omitempty"`
+	// VEX carries a registry-attached CycloneDX VEX statement for this finding's
+	// image. It is an unreviewed upstream claim, not a disposition: the finding
+	// stays active with its full PAIN and remediation so a downstream reviewer
+	// can accept or reject the statement.
+	VEX *VEXAnalysis `json:"vex,omitempty"`
 }
 
 // CVSSInfo is the versioned CVSS evidence Trivy reports for one source. Scores
@@ -400,6 +405,23 @@ type Suppression struct {
 	Justification   string `json:"justification,omitempty"`
 	ImpactStatement string `json:"impactStatement,omitempty"`
 	StatementSource string `json:"statementSource,omitempty"`
+}
+
+// VEXAnalysis is one CycloneDX VEX analysis (analysis.state, justification,
+// detail, response[]) read from an OCI attestation, emitted verbatim.
+type VEXAnalysis struct {
+	Source        string   `json:"source,omitempty"`
+	Format        string   `json:"format,omitempty"`
+	State         string   `json:"state,omitempty"`
+	Justification string   `json:"justification,omitempty"`
+	Detail        string   `json:"detail,omitempty"`
+	Responses     []string `json:"responses,omitempty"`
+	// StatementSource identifies the image the statement is attached to, as
+	// oci://<registry>/<repository>@sha256:<image digest>.
+	StatementSource string `json:"statementSource,omitempty"`
+	// AttestationDigest is the digest of the OCI manifest that carried the
+	// attestation (a referrer manifest or the cosign .att tag manifest).
+	AttestationDigest string `json:"attestationDigest,omitempty"`
 }
 
 type EPSS struct {
