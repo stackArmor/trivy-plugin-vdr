@@ -1,8 +1,8 @@
 # Docker Swarm config example
 
-> **Status:** the `swarm` source is in development. This example documents the
-> config contract it reads; `imageRules` and `exposure.yaml` take effect once
-> the source ships.
+> Requires a trivy-plugin-vdr release that includes the `swarm` source. See
+> [Docker Swarm scanning](../../README.md#docker-swarm-scanning) for the scan
+> command.
 
 For a Docker Swarm cluster, `trivy-plugin-vdr` reads its cluster-wide FedRAMP
 metadata, security impact profiles and internet-reachability declarations from

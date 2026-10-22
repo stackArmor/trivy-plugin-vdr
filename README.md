@@ -46,6 +46,7 @@ trivy vdr k8s --refresh-enrichment
 trivy vdr k8s --include-chain-taxonomy --output vdr-k8s-capec.json
 trivy vdr k8s --skip-registry-auth
 trivy vdr k8s --no-gcloud-auth --no-ecr-auth
+trivy vdr swarm --services-file services.json --swarm-config vdr-fedramp.json --context-name swarm/prod
 trivy vdr k8s --oci-vex-included
 trivy vdr k8s -O
 trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
@@ -202,6 +203,66 @@ If the rendered chart contains `fedramp-vdr-trivy/vdr-fedramp`, it is consumed a
 For a live Kubernetes scan, `--sip-config-map <file>` supplies a local `v1/ConfigMap` manifest and takes precedence over the in-cluster `fedramp-vdr-trivy/vdr-fedramp` ConfigMap. The local data drives both PAIN/SIP scoring and the custom Ingress/Gateway reachability class lists.
 
 Useful rendering flags include `--kube-version`, repeatable `--api-versions`, and `--include-crds`. The Helm source does not contact a Kubernetes API and requires no Kubernetes RBAC. Remote chart downloads and image scans still require their respective network access and credentials.
+
+## Docker Swarm scanning
+
+`trivy vdr swarm` scans the services of a Docker Swarm cluster. Swarm has no
+API the plugin connects to directly, so it reads the cluster's own objects,
+collected on a manager node:
+
+```sh
+# On a manager node
+docker service inspect $(docker service ls -q) > services.json
+docker config inspect vdr-fedramp > vdr-fedramp.json 2>/dev/null || echo '[]' > vdr-fedramp.json
+
+# Anywhere with registry access
+trivy vdr swarm --services-file services.json --swarm-config vdr-fedramp.json \
+  --context-name swarm/prod --output tcs-vdr.json
+```
+
+Each service is one resource: kind `Service`, provider `docker-swarm`, its
+stack (`com.docker.stack.namespace`, or `swarm` when deployed without a stack)
+as the namespace, and its single container named after the service.
+`--context-name` is required and names the cluster in the report.
+
+**Metadata** comes from a Swarm config object named `vdr-fedramp`, deployed
+into the swarm but never mounted into a service, and from per-service labels.
+It uses the same keys as the Kubernetes ConfigMap (`class`, `multiAgency`,
+`securityRequirementsCeiling`, `scoring.yaml`) plus `exposure.yaml`. Swarm
+configs cannot be edited, so update it by removing and recreating it under the
+same name. See [`examples/swarm`](examples/swarm) for a starter file and the
+deploy and update steps. An explicitly supplied `--swarm-config` that does not
+validate fails the run; an empty one (`[]`) falls back to the built-in defaults
+with a warning.
+
+`scoring.yaml` may use `imageRules`, which match the image repository basename
+(registry, tag and digest ignored) and suit estates classified by image. Rule
+precedence is: service label > `nameRules` (stack and service name) >
+`imageRules` > `kindRules` > `namespaceRules` > defaults > H/H/H failsafe.
+`imageRules` work for every source.
+
+**Internet reachability.** Swarm has no ingress objects to discover routes from,
+so reachability is declared, in this order:
+
+1. the service label `vdr.fedramp.io/internet-reachable: "true" | "false"`;
+2. the first matching `exposure.yaml` rule (`stack`, `name` and `image` globs).
+
+Declarations are reported with `assessmentBasis: "attested"`. A `false`
+declaration needs a justification (`vdr.fedramp.io/internet-reachable-justification`
+or the rule's `justification`), carried as a `justification: ` evidence item;
+without one it is ignored and the service stays unassessed. Without a
+declaration:
+
+- a service that publishes ports (ingress routing mesh or host mode), carries
+  proxy route labels (`traefik.http.routers.*.rule` by default; set
+  `proxyLabelPrefixes` for other proxies), or runs on the host network is
+  `unassessed`, with that evidence, and is named in a run warning;
+- any other service is an observed negative (`assessed`, `observed`).
+
+`docker service inspect` names networks by ID, so host networking is only
+recognisable when the services file also carries the network list:
+`{"services": <inspect output>, "networks": <docker network ls --no-trunc --format '{{json .}}' as an array>}`.
+Without it, no service is reported as an observed negative.
 
 ## Required permissions
 
