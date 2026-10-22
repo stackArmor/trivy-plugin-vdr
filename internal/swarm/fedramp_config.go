@@ -131,7 +131,9 @@ func configContent(raw []byte) ([]byte, error) {
 			Data string `json:"Data"`
 		} `json:"Spec"`
 	}
-	if err := json.Unmarshal(trimmed, &inspected); err != nil {
+	// Decode only the first array: output collected from a failed inspect can
+	// carry more than one.
+	if err := json.NewDecoder(bytes.NewReader(trimmed)).Decode(&inspected); err != nil {
 		return nil, fmt.Errorf("parse docker config inspect output: %w", err)
 	}
 	if len(inspected) == 0 {

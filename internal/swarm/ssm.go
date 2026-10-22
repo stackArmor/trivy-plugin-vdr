@@ -110,7 +110,9 @@ func CollectViaSSM(ctx context.Context, client SSMClient, ec2Client EC2Client, o
 	if err != nil {
 		return Collected{}, fmt.Errorf("collect swarm services from %s: %w", instanceID, err)
 	}
-	config, err := runner.fetch(ctx, fmt.Sprintf("docker config inspect %s 2>/dev/null || printf '[]'", opts.ConfigName))
+	// For a missing config docker prints "[]" and exits non-zero; || true
+	// keeps that output without adding to it.
+	config, err := runner.fetch(ctx, fmt.Sprintf("docker config inspect %s 2>/dev/null || true", opts.ConfigName))
 	if err != nil {
 		return Collected{}, fmt.Errorf("collect %s config from %s: %w", opts.ConfigName, instanceID, err)
 	}

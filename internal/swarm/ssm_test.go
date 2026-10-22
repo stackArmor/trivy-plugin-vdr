@@ -67,6 +67,9 @@ func (f *fakeSSM) run(t *testing.T, script string) (string, string) {
 	}
 	switch {
 	case strings.Contains(script, "mktemp"):
+		if strings.Contains(script, "docker config inspect") && strings.Contains(script, "printf '[]'") {
+			t.Fatalf("the config script must not print a second [] after docker's own:\n%s", script)
+		}
 		payload := f.configJSON
 		if strings.Contains(script, "docker service ls") {
 			payload = f.servicesJSON
@@ -199,13 +202,11 @@ func TestCollectViaSSMReassemblesChunkedOutput(t *testing.T) {
 }
 
 func TestCollectViaSSMMissingConfigIsEmptyInspect(t *testing.T) {
-	client, _ := newFakeSSM(t, "[]", "[]")
+	// A missing config makes docker print "[]" on stdout and exit non-zero.
+	client, _ := newFakeSSM(t, "[]", "[]\n")
 	collected, err := CollectViaSSM(context.Background(), client, &fakeEC2{ids: []string{"i-1"}}, testSSMOptions())
 	if err != nil {
 		t.Fatalf("CollectViaSSM: %v", err)
-	}
-	if strings.TrimSpace(string(collected.FedRAMPConfig)) != "[]" {
-		t.Fatalf("config = %q, want the empty inspect result", collected.FedRAMPConfig)
 	}
 	data, _, err := ParseFedRAMPConfig(collected.FedRAMPConfig)
 	if err != nil || len(data) != 0 {

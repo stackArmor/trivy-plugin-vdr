@@ -126,3 +126,17 @@ func TestExampleConfigParses(t *testing.T) {
 		t.Fatalf("example exposure rules = %d, want 4", len(exposure.Rules))
 	}
 }
+
+func TestParseFedRAMPConfigMissingConfigOutputs(t *testing.T) {
+	// docker config inspect prints "[]" and exits 1 for a missing config; the
+	// collector may also see nothing at all, or that output twice.
+	for _, raw := range []string{"", "\n", "[]\n", "[]\n[]", "[]\n[]\n"} {
+		data, exposure, err := ParseFedRAMPConfig([]byte(raw))
+		if err != nil {
+			t.Fatalf("ParseFedRAMPConfig(%q): %v", raw, err)
+		}
+		if len(data) != 0 || len(exposure.Rules) != 0 {
+			t.Fatalf("ParseFedRAMPConfig(%q) = %v %+v, want no config", raw, data, exposure)
+		}
+	}
+}
