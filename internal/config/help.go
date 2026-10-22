@@ -39,6 +39,7 @@ Usage:
   vdr <source> [flags]
   vdr image [flags] IMAGE...
   vdr helm [flags] CHART
+  vdr swarm --services-file SERVICES.json --context-name NAME [flags]
   vdr enrich-report --input REPORT.json [--output ENRICHED.json]
 
 Sources:
@@ -48,6 +49,7 @@ Sources:
   ecs       Scan active AWS ECS task definitions
   image     Scan one or more container image references
   helm      Render and scan a Helm chart without a live cluster
+  swarm     Scan Docker Swarm services from docker service inspect output
 
 Post-processing:
   enrich-report  Add embedded CAPEC/ATT&CK taxonomy evidence to a VDR JSON report
@@ -86,6 +88,8 @@ func sourceDescription(source string) string {
 		return "Scan one or more container image references directly."
 	case SourceHelm:
 		return "Render a Helm chart, inventory its workloads, and scan their images without a live cluster."
+	case SourceSwarm:
+		return "Inventory and scan Docker Swarm services from docker service inspect output; metadata comes from the vdr-fedramp Swarm config and service labels."
 	default:
 		return ""
 	}
@@ -103,6 +107,8 @@ func sourceUsage(source string) string {
 		return "vdr image [flags] IMAGE..."
 	case SourceHelm:
 		return "vdr helm [flags] CHART"
+	case SourceSwarm:
+		return "vdr swarm --services-file SERVICES.json --context-name NAME [flags]"
 	default:
 		return "vdr k8s [flags]"
 	}
@@ -135,6 +141,10 @@ func sourceExamples(source string) string {
 		return `  vdr helm ./charts/app -f values/base.yaml -f values/prod.yaml --format json
   vdr helm bitnami/nginx --chart-version 19.0.0 --namespace prod
   vdr helm ./charts/app --ingress-chart ./charts/edge --ingress-values values/edge.yaml`
+	case SourceSwarm:
+		return `  vdr swarm --services-file services.json --context-name swarm/prod
+  vdr swarm --services-file services.json --swarm-config vdr-fedramp.json --context-name swarm/prod --output tcs-vdr.json
+  vdr swarm --services-file services.json --context-name swarm/prod --reachability-only`
 	default:
 		return ""
 	}
@@ -152,6 +162,8 @@ func sourceHelpNote(source string) string {
 		return "Credentials are loaded automatically from ECS repository credentials, the local Docker config, and supported cloud CLIs."
 	case SourceCloudRun, SourceImage:
 		return "Credentials are loaded automatically from the local Docker config and supported cloud CLIs."
+	case SourceSwarm:
+		return "Collect SERVICES.json on a manager node with: docker service inspect $(docker service ls -q). Credentials are loaded from the local Docker config and supported cloud CLIs."
 	default:
 		return ""
 	}
@@ -189,6 +201,11 @@ func sourceHelpSections(source string) []helpSection {
 		sections = append(sections, helpSection{
 			title: "ECS source",
 			flags: []string{"region"},
+		})
+	case SourceSwarm:
+		sections = append(sections, helpSection{
+			title: "Swarm source",
+			flags: []string{"services-file", "swarm-config", "context-name"},
 		})
 	case SourceHelm:
 		sections = append(sections,
@@ -320,6 +337,8 @@ func helpAlias(source, name string) string {
 func helpValueName(name string) string {
 	valueNames := map[string]string{
 		"api-versions":                    "VERSION",
+		"services-file":                   "FILE",
+		"swarm-config":                    "FILE",
 		"aws-role-arn":                    "ARN",
 		"cache-cleanup":                   "POLICY",
 		"cache-dir":                       "DIR",

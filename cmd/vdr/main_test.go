@@ -326,3 +326,34 @@ func TestEnrichmentContextErrorAppendsWarning(t *testing.T) {
 		t.Errorf("warnings = %v, want ['Enrichment: incomplete (context canceled)']", warnings)
 	}
 }
+
+func TestRunSwarmReachabilityOnlyWritesInventory(t *testing.T) {
+	cfg, err := config.Parse([]string{
+		"swarm",
+		"--services-file", "../../internal/swarm/testdata/services.json",
+		"--context-name", "swarm/test",
+		"--reachability-only",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	var output bytes.Buffer
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runSwarm returned error: %v", err)
+	}
+	var report model.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v\n%s", err, output.String())
+	}
+	if report.ContextName != "swarm/test" {
+		t.Fatalf("contextName = %q", report.ContextName)
+	}
+	if len(report.Resources) != 6 {
+		t.Fatalf("resources = %d, want 6", len(report.Resources))
+	}
+	for _, resource := range report.Resources {
+		if resource.Resource.Provider != "docker-swarm" {
+			t.Fatalf("resource provider = %q", resource.Resource.Provider)
+		}
+	}
+}

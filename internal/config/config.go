@@ -21,6 +21,7 @@ const (
 	SourceECS           = "ecs"
 	SourceImage         = "image"
 	SourceHelm          = "helm"
+	SourceSwarm         = "swarm"
 
 	FormatJSON      = "json"
 	FormatTable     = "table"
@@ -93,8 +94,12 @@ type Config struct {
 	AWSRoleARN                   string
 	OCIVEXIncluded               bool
 	VEXOCIRegistries             []string
-	Quiet                        bool
-	Debug                        bool
+	// SwarmServicesFile is `docker service inspect` output for source swarm.
+	SwarmServicesFile string
+	// SwarmConfigFile is the vdr-fedramp Swarm config (docker config inspect output or plain YAML).
+	SwarmConfigFile string
+	Quiet           bool
+	Debug           bool
 }
 
 type namespaceList []string
@@ -244,6 +249,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "suppress progress logging (warnings and errors only)")
 	fs.BoolVar(&cfg.Quiet, "q", cfg.Quiet, "alias for --quiet")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
+	fs.StringVar(&cfg.SwarmServicesFile, "services-file", cfg.SwarmServicesFile, "docker service inspect output (JSON array, or {services, networks}) for source swarm")
+	fs.StringVar(&cfg.SwarmConfigFile, "swarm-config", cfg.SwarmConfigFile, "vdr-fedramp Swarm config: docker config inspect output or the plain YAML file")
 	fs.Var(&valuesFiles, "values", "Helm values file for the application chart; may be repeated, rightmost file wins")
 	fs.StringVar(&cfg.ReleaseName, "release-name", cfg.ReleaseName, "Helm release name used to render the application chart")
 	fs.StringVar(&cfg.ChartVersion, "chart-version", cfg.ChartVersion, "version constraint for a remote Helm chart")
@@ -266,10 +273,10 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	source := fs.Arg(0)
 	cfg.Source = source
 	if source == "" {
-		return Config{}, errors.New("source is required; expected one of: k8s, k8s-compliance, cloudrun, ecs, image, helm")
+		return Config{}, errors.New("source is required; expected one of: k8s, k8s-compliance, cloudrun, ecs, image, helm, swarm")
 	}
-	if source != SourceK8s && source != SourceK8sCompliance && source != SourceCloudRun && source != SourceECS && source != SourceImage && source != SourceHelm {
-		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, k8s-compliance, cloudrun, ecs, image, helm", source)
+	if source != SourceK8s && source != SourceK8sCompliance && source != SourceCloudRun && source != SourceECS && source != SourceImage && source != SourceHelm && source != SourceSwarm {
+		return Config{}, fmt.Errorf("unknown source %q; expected one of: k8s, k8s-compliance, cloudrun, ecs, image, helm, swarm", source)
 	}
 	helpSource = source
 
@@ -308,6 +315,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	helmSpecificFlag := ""
 	k8sSpecificFlag := ""
 	cloudRunSpecificFlag := ""
+	swarmSpecificFlag := ""
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "all-namespaces":
@@ -336,6 +344,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			k8sSpecificFlag = f.Name
 		case "include-functions":
 			cloudRunSpecificFlag = f.Name
+		case "services-file", "swarm-config":
+			swarmSpecificFlag = f.Name
 		}
 		if source == SourceK8sCompliance && !complianceFlagAllowed(f.Name) && complianceUnsupportedFlag == "" {
 			complianceUnsupportedFlag = f.Name
@@ -454,6 +464,31 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		if len(cfg.Regions) == 0 {
 			return Config{}, errors.New("--region is required for source ecs")
 		}
+	}
+	if cfg.Source == SourceSwarm {
+		if namespaceSet {
+			return Config{}, errors.New("--namespace is only valid for source k8s")
+		}
+		if excludeNamespaceSet {
+			return Config{}, errors.New("--exclude-namespace is only valid for sources k8s and k8s-compliance")
+		}
+		if allNamespacesSet {
+			return Config{}, errors.New("--all-namespaces is only valid for source k8s")
+		}
+		if includeZeroDaemonSetsSet {
+			return Config{}, errors.New("--include-zero-daemonsets is only valid for source k8s")
+		}
+		if projectSet || strings.TrimSpace(cfg.Project) != "" {
+			return Config{}, errors.New("--project is only valid for source cloudrun")
+		}
+		if strings.TrimSpace(cfg.SwarmServicesFile) == "" {
+			return Config{}, errors.New("--services-file is required for source swarm")
+		}
+		if strings.TrimSpace(cfg.ContextName) == "" {
+			return Config{}, errors.New("--context-name is required for source swarm; it names the cluster in the report")
+		}
+	} else if swarmSpecificFlag != "" {
+		return Config{}, fmt.Errorf("--%s is only valid for source swarm", swarmSpecificFlag)
 	}
 	if cfg.Source == SourceImage {
 		if namespaceSet {

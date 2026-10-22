@@ -27,6 +27,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/report"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scanner"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/swarm"
 )
 
 // errCompletedWithFailures signals that the run finished and wrote its report,
@@ -69,6 +70,8 @@ func run(args []string) error {
 		return runImage(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceHelm:
 		return runHelm(context.Background(), cfg, logger, os.Stdout)
+	case config.SourceSwarm:
+		return runSwarm(context.Background(), cfg, logger, os.Stdout)
 	default:
 		return fmt.Errorf("source %q is not implemented yet", cfg.Source)
 	}
@@ -468,6 +471,51 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			logger.Warn("registry auth: %s", w)
 		}
 		res, err := registry.Build(ctx, inventoryImageRefs(inventory), secretAuths, registry.Options{
+			EnableGcloud:                 !cfg.NoGcloudAuth,
+			EnableECR:                    !cfg.NoECRAuth,
+			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
+			AWSRoleARN:                   cfg.AWSRoleARN,
+		}, logger)
+		if err != nil {
+			return err
+		}
+		defer res.Cleanup()
+		dockerConfigDir = res.Dir
+		registryAuths = res.Credentials
+		for _, w := range res.Warnings {
+			warnings = append(warnings, "registry auth: "+w)
+			logger.Warn("registry auth: %s", w)
+		}
+		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
+	}
+
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, exposures)
+}
+
+func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+	file, err := os.Open(cfg.SwarmServicesFile)
+	if err != nil {
+		return fmt.Errorf("open swarm services file: %w", err)
+	}
+	services, err := swarm.ParseServices(file)
+	file.Close()
+	if err != nil {
+		return fmt.Errorf("%s: %w", cfg.SwarmServicesFile, err)
+	}
+	inventory := swarm.BuildInventory(cfg.ContextName, services)
+	logger.Info("inventory: %d Swarm services, %d unique images", len(inventory.Resources), len(inventory.Images))
+
+	var warnings []string
+	exposures := map[model.ResourceRef]model.Exposure{}
+	if cfg.ReachabilityOnly {
+		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures, nil)
+	}
+
+	var dockerConfigDir string
+	var registryAuths map[string]registry.DockerAuth
+	if !cfg.SkipRegistryAuth {
+		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
 			EnableGcloud:                 !cfg.NoGcloudAuth,
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
