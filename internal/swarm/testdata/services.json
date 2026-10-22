@@ -1,0 +1,95 @@
+[
+  {
+    "ID": "svc0000000000000000000001",
+    "Spec": {
+      "Name": "edge_traefik",
+      "Labels": {"com.docker.stack.namespace": "edge"},
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "traefik:v3.1@sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+        "Networks": [{"Target": "net0000000000000000000public"}]
+      },
+      "Mode": {"Replicated": {"Replicas": 2}},
+      "EndpointSpec": {"Mode": "vip", "Ports": [
+        {"Protocol": "tcp", "TargetPort": 443, "PublishedPort": 443, "PublishMode": "ingress"},
+        {"Protocol": "tcp", "TargetPort": 80, "PublishedPort": 80, "PublishMode": "ingress"}
+      ]}
+    },
+    "Endpoint": {"Spec": {"Mode": "vip"}, "Ports": [
+      {"Protocol": "tcp", "TargetPort": 443, "PublishedPort": 443, "PublishMode": "ingress"},
+      {"Protocol": "tcp", "TargetPort": 80, "PublishedPort": 80, "PublishMode": "ingress"}
+    ]}
+  },
+  {
+    "ID": "svc0000000000000000000002",
+    "Spec": {
+      "Name": "app_web",
+      "Labels": {
+        "com.docker.stack.namespace": "app",
+        "traefik.enable": "true",
+        "traefik.http.routers.web.rule": "Host(`app.example.com`)",
+        "vdr.fedramp.io/security-impact-profile": "service-content.bounded-processing.deferrable-work"
+      },
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/web:2.4@sha256:2222222222222222222222222222222222222222222222222222222222222222"},
+        "Networks": [{"Target": "net0000000000000000000public"}]
+      },
+      "Mode": {"Replicated": {"Replicas": 3}}
+    },
+    "Endpoint": {"Spec": {"Mode": "vip"}}
+  },
+  {
+    "ID": "svc0000000000000000000003",
+    "Spec": {
+      "Name": "ops_web",
+      "Labels": {"com.docker.stack.namespace": "ops"},
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "registry.example.com:5000/ops/web:1.0"},
+        "Networks": [{"Target": "net000000000000000000private"}]
+      },
+      "Mode": {"Replicated": {"Replicas": 1}}
+    },
+    "Endpoint": {"Spec": {"Mode": "vip"}}
+  },
+  {
+    "ID": "svc0000000000000000000004",
+    "Spec": {
+      "Name": "app_worker",
+      "Labels": {"com.docker.stack.namespace": "app"},
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/web:2.4@sha256:2222222222222222222222222222222222222222222222222222222222222222"},
+        "Networks": [{"Target": "net000000000000000000private"}]
+      },
+      "Mode": {"Global": {}}
+    },
+    "Endpoint": {"Spec": {"Mode": "vip"}}
+  },
+  {
+    "ID": "svc0000000000000000000005",
+    "Spec": {
+      "Name": "mon_node-exporter",
+      "Labels": {"com.docker.stack.namespace": "mon"},
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "prom/node-exporter:v1.8.2"}
+      },
+      "Mode": {"Global": {}},
+      "EndpointSpec": {"Mode": "dnsrr", "Ports": [
+        {"Protocol": "tcp", "TargetPort": 9100, "PublishedPort": 9100, "PublishMode": "host"}
+      ]}
+    },
+    "Endpoint": {"Spec": {"Mode": "dnsrr"}, "Ports": [
+      {"Protocol": "tcp", "TargetPort": 9100, "PublishedPort": 9100, "PublishMode": "host"}
+    ]}
+  },
+  {
+    "ID": "svc0000000000000000000006",
+    "Spec": {
+      "Name": "netprobe",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "busybox:1.36"},
+        "Networks": [{"Target": "hostnet00000000000000000id"}]
+      },
+      "Mode": {"Replicated": {"Replicas": 1}}
+    },
+    "Endpoint": {"Spec": {}}
+  }
+]
