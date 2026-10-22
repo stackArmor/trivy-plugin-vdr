@@ -23,6 +23,10 @@ const (
 	SourceHelm          = "helm"
 	SourceSwarm         = "swarm"
 
+	// DefaultSwarmManagerTag is the EC2 tag the ATOM swarm scanner uses to find
+	// a manager node.
+	DefaultSwarmManagerTag = "swarm-node-type=manager"
+
 	FormatJSON      = "json"
 	FormatTable     = "table"
 	FormatCycloneDX = "cyclonedx"
@@ -256,8 +260,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "suppress progress logging (warnings and errors only)")
 	fs.BoolVar(&cfg.Quiet, "q", cfg.Quiet, "alias for --quiet")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
-	fs.StringVar(&cfg.SwarmServicesFile, "services-file", cfg.SwarmServicesFile, "docker service inspect output (JSON array, or {services, networks}) for source swarm")
-	fs.StringVar(&cfg.SwarmSSMManagerTag, "ssm-manager-tag", cfg.SwarmSSMManagerTag, "collect swarm services over SSM from the running EC2 manager with this tag (key=value, e.g. swarm-node-type=manager); needs --region")
+	fs.StringVar(&cfg.SwarmServicesFile, "services-file", cfg.SwarmServicesFile, "offline alternative to collecting from the cluster: docker service inspect output (JSON array, or {services, networks})")
+	fs.StringVar(&cfg.SwarmSSMManagerTag, "ssm-manager-tag", cfg.SwarmSSMManagerTag, "EC2 tag (key=value) of the swarm manager node the inventory is collected from over SSM (default swarm-node-type=manager)")
 	fs.StringVar(&cfg.SwarmConfigFile, "swarm-config", cfg.SwarmConfigFile, "vdr-fedramp Swarm config: docker config inspect output or the plain YAML file")
 	fs.BoolVar(&cfg.SkipUpdateCheck, "skip-update-check", cfg.SkipUpdateCheck, "skip the check for a newer plugin release (also VDR_NO_UPDATE_CHECK=1)")
 	fs.Var(&valuesFiles, "values", "Helm values file for the application chart; may be repeated, rightmost file wins")
@@ -325,6 +329,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	k8sSpecificFlag := ""
 	cloudRunSpecificFlag := ""
 	swarmSpecificFlag := ""
+	ssmTagSet := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "all-namespaces":
@@ -355,6 +360,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			cloudRunSpecificFlag = f.Name
 		case "services-file", "swarm-config", "ssm-manager-tag":
 			swarmSpecificFlag = f.Name
+			if f.Name == "ssm-manager-tag" {
+				ssmTagSet = true
+			}
 		}
 		if source == SourceK8sCompliance && !complianceFlagAllowed(f.Name) && complianceUnsupportedFlag == "" {
 			complianceUnsupportedFlag = f.Name
@@ -490,24 +498,26 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		if projectSet || strings.TrimSpace(cfg.Project) != "" {
 			return Config{}, errors.New("--project is only valid for source cloudrun")
 		}
-		servicesFile := strings.TrimSpace(cfg.SwarmServicesFile) != ""
-		ssmTag := strings.TrimSpace(cfg.SwarmSSMManagerTag) != ""
-		switch {
-		case servicesFile && ssmTag:
-			return Config{}, errors.New("use either --services-file or --ssm-manager-tag for source swarm, not both")
-		case !servicesFile && !ssmTag:
-			return Config{}, errors.New("--services-file is required for source swarm (or --ssm-manager-tag to collect over SSM)")
-		case ssmTag:
+		// By default the inventory is collected from the cluster over SSM;
+		// --services-file is the offline alternative.
+		if strings.TrimSpace(cfg.SwarmServicesFile) != "" {
+			if ssmTagSet {
+				return Config{}, errors.New("use either --services-file or --ssm-manager-tag for source swarm, not both")
+			}
+			if regionSet || len(cfg.Regions) > 0 {
+				return Config{}, errors.New("--region is only valid for source swarm when collecting from the cluster (without --services-file)")
+			}
+			cfg.SwarmSSMManagerTag = ""
+		} else {
+			if strings.TrimSpace(cfg.SwarmSSMManagerTag) == "" {
+				cfg.SwarmSSMManagerTag = DefaultSwarmManagerTag
+			}
 			key, value, ok := strings.Cut(cfg.SwarmSSMManagerTag, "=")
 			if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
 				return Config{}, fmt.Errorf("--ssm-manager-tag %q must be key=value", cfg.SwarmSSMManagerTag)
 			}
 			if len(cfg.Regions) != 1 {
-				return Config{}, errors.New("--ssm-manager-tag needs exactly one --region")
-			}
-		default:
-			if regionSet || len(cfg.Regions) > 0 {
-				return Config{}, errors.New("--region is only valid for source swarm with --ssm-manager-tag")
+				return Config{}, errors.New("--region is required for source swarm: exactly one, the AWS region of the swarm's manager node (or pass --services-file)")
 			}
 		}
 		if strings.TrimSpace(cfg.ContextName) == "" {

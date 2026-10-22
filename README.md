@@ -46,7 +46,7 @@ trivy vdr k8s --refresh-enrichment
 trivy vdr k8s --include-chain-taxonomy --output vdr-k8s-capec.json
 trivy vdr k8s --skip-registry-auth
 trivy vdr k8s --no-gcloud-auth --no-ecr-auth
-trivy vdr swarm --services-file services.json --swarm-config vdr-fedramp.json --context-name swarm/prod
+trivy vdr swarm --region us-gov-west-1 --context-name swarm/prod
 trivy vdr k8s --oci-vex-included
 trivy vdr k8s -O
 trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
@@ -206,14 +206,32 @@ Useful rendering flags include `--kube-version`, repeatable `--api-versions`, an
 
 ## Docker Swarm scanning
 
-`trivy vdr swarm` scans the services of a Docker Swarm cluster. Swarm has no
-API the plugin connects to directly, so it reads the cluster's own objects,
-collected on a manager node:
+`trivy vdr swarm` scans the services of a Docker Swarm cluster on EC2. It
+reads the cluster's own objects from a manager node over SSM Run Command:
+
+```sh
+trivy vdr swarm --region us-gov-west-1 --context-name swarm/prod \
+  --output tcs-vdr.json --html-output vdr.html
+```
+
+It picks the first running EC2 instance tagged `swarm-node-type=manager` (the
+tag the ATOM swarm scanner uses; override with `--ssm-manager-tag key=value`),
+runs `docker service inspect`, `docker network ls` and `docker config inspect
+vdr-fedramp` there, and reads the output back in chunks, because SSM truncates
+command output at 24,000 characters. It needs `ec2:DescribeInstances`,
+`ssm:SendCommand` (on the manager and the `AWS-RunShellScript` document),
+`ssm:GetCommandInvocation`, and ECR pull access for ECR images; no S3 bucket.
+Credentials come from the standard AWS chain; add `--aws-profile` and/or
+`--aws-role-arn` to pick them. `--swarm-config` overrides the collected
+`vdr-fedramp` config.
+
+**Offline alternative.** For a swarm the plugin cannot reach over SSM, collect
+the objects on a manager node and pass them as files instead of `--region`:
 
 ```sh
 # On a manager node
 docker service inspect $(docker service ls -q) > services.json
-docker config inspect vdr-fedramp > vdr-fedramp.json 2>/dev/null || echo '[]' > vdr-fedramp.json
+docker config inspect vdr-fedramp > vdr-fedramp.json 2>/dev/null || true
 
 # Anywhere with registry access
 trivy vdr swarm --services-file services.json --swarm-config vdr-fedramp.json \
@@ -260,25 +278,9 @@ declaration:
   `unassessed`, with that evidence, and is named in a run warning;
 - any other service is an observed negative (`assessed`, `observed`).
 
-**Collecting over SSM.** For swarms on EC2, the plugin can collect the
-inventory itself with SSM Run Command instead of `--services-file`:
-
-```sh
-trivy vdr swarm --ssm-manager-tag swarm-node-type=manager --region us-gov-west-1 \
-  --aws-role-arn arn:aws-us-gov:iam::<account>:role/threatalert-dockerswarm-scan-role \
-  --context-name swarm/prod --output tcs-vdr.json
-```
-
-It picks the first running instance with the tag, runs `docker service
-inspect`, `docker network ls` and `docker config inspect vdr-fedramp` there, and
-reads the output back in chunks, because SSM truncates command output at 24,000
-characters. It needs `ec2:DescribeInstances`, `ssm:SendCommand` (on the manager
-and the `AWS-RunShellScript` document) and `ssm:GetCommandInvocation`; no S3
-bucket. `--swarm-config` still overrides the collected config. Locally, add
-`--aws-profile` to pick the base credentials the role is assumed from.
-
 `docker service inspect` names networks by ID, so host networking is only
-recognisable when the services file also carries the network list:
+recognisable with the network list. Collection over SSM always includes it; a
+services file must carry it too:
 `{"services": <inspect output>, "networks": <docker network ls --no-trunc --format '{{json .}}' as an array>}`.
 Without it, no service is reported as an observed negative.
 
