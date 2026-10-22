@@ -545,9 +545,11 @@ type Exposure struct {
 	InternetAccessible bool `json:"internetAccessible"`
 	// AssessmentStatus is additive; legacy producers omit it.
 	AssessmentStatus string `json:"assessmentStatus,omitempty"`
-	// AssessmentBasis distinguishes live-cluster observations from static Helm
-	// deployment intent. Helm scans set this to "declared" because rendered
-	// manifests do not contain load-balancer provisioning or runtime status.
+	// AssessmentBasis distinguishes live-cluster observations ("observed") from
+	// static Helm deployment intent ("declared": rendered manifests do not
+	// contain load-balancer provisioning or runtime status) and operator
+	// declarations ("attested": Swarm services, which have no ingress objects).
+	// An attested negative carries a "justification: " evidence item.
 	AssessmentBasis string            `json:"assessmentBasis,omitempty"`
 	Provider        string            `json:"provider,omitempty"`
 	RouteKind       string            `json:"routeKind,omitempty"`

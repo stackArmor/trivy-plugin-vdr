@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -784,5 +785,71 @@ func TestScoreCloudFunctionStaticallySetsN2NLEV(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestImageRepositoryBasename(t *testing.T) {
+	cases := map[string]string{
+		"123456789012.dkr.ecr.us-gov-west-1.amazonaws.com/pi:1.2@sha256:" + strings.Repeat("a", 64): "pi",
+		"traefik:v3.1":                          "traefik",
+		"registry.example.com:5000/ops/web:1.0": "web",
+		"org/team/pi":                           "pi",
+		"busybox":                               "busybox",
+		"ghcr.io/acme/api@sha256:" + strings.Repeat("b", 64): "api",
+		"": "",
+	}
+	for in, want := range cases {
+		if got := ImageRepositoryBasename(in); got != want {
+			t.Errorf("ImageRepositoryBasename(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestImageRulesPrecedence(t *testing.T) {
+	cfg := Default()
+	cfg.NameRules = []NameRule{{Namespace: "app", Match: "app_special", SecurityImpactProfile: "cr-l_ir-l_ar-l"}}
+	cfg.ImageRules = []ImageRule{
+		{Match: "pi", SecurityImpactProfile: "federal-records.authoritative-record.mission-essential"},
+		{Match: "coreui-*", SecurityImpactProfile: "CR:M/IR:M/AR:L"},
+	}
+	cfg.KindRules = []KindRule{{Kind: "Service", SecurityImpactProfile: "internal-tooling"}}
+
+	r := cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "app", WorkloadName: "app_pi", WorkloadKind: "Service", ImageRepository: "pi"})
+	if r.SecurityImpactProfileSource != "imageRule" || r.CR != "H" || r.IR != "H" || r.AR != "H" {
+		t.Errorf("imageRule should beat kindRule: source=%s CR/IR/AR=%s/%s/%s", r.SecurityImpactProfileSource, r.CR, r.IR, r.AR)
+	}
+
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "app", WorkloadName: "app_special", WorkloadKind: "Service", ImageRepository: "pi"})
+	if r.SecurityImpactProfileSource != "nameRule" {
+		t.Errorf("nameRule should beat imageRule: source=%s", r.SecurityImpactProfileSource)
+	}
+
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "app", WorkloadName: "app_admin-ui", WorkloadKind: "Service", ImageRepository: "coreui-admin"})
+	if r.SecurityImpactProfileSource != "imageRule" || r.AR != "L" {
+		t.Errorf("imageRule glob failed: source=%s AR=%s", r.SecurityImpactProfileSource, r.AR)
+	}
+
+	r = cfg.Score(Input{CVSSVector: vecCIAHigh, Namespace: "app", WorkloadName: "app_other", WorkloadKind: "Deployment", ImageRepository: "unknown"})
+	if r.SecurityImpactProfileSource != "default" || r.SecurityImpactProfile != "unclassified" {
+		t.Errorf("unmatched image should fall through to the default: source=%s profile=%s", r.SecurityImpactProfileSource, r.SecurityImpactProfile)
+	}
+}
+
+func TestImageRulesLoadFromClusterDefaults(t *testing.T) {
+	cfg := Default()
+	err := cfg.ApplyClusterDefaults(map[string]string{"scoring.yaml": "imageRules:\n  - match: auth\n    securityImpactProfile: root-secrets.identity-control.shared-degradation\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ImageRules) != 1 || cfg.ImageRules[0].Match != "auth" {
+		t.Fatalf("imageRules = %+v", cfg.ImageRules)
+	}
+}
+
+func TestImageRuleValidation(t *testing.T) {
+	cfg := Default()
+	err := cfg.ApplyClusterDefaults(map[string]string{"scoring.yaml": "imageRules:\n  - match: auth\n    securityImpactProfile: not-a-profile\n"})
+	if err == nil || !strings.Contains(err.Error(), "imageRules") {
+		t.Fatalf("err = %v, want an imageRules validation error", err)
 	}
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"path/filepath"
@@ -1137,5 +1138,87 @@ func TestParseSourceHelpOnlyShowsRelevantFlags(t *testing.T) {
 		if strings.Contains(help, unwanted) {
 			t.Fatalf("k8s help unexpectedly contains %q:\n%s", unwanted, help)
 		}
+	}
+}
+
+func TestParseSwarmRequiresServicesFileAndContextName(t *testing.T) {
+	if _, err := Parse([]string{"swarm", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "--services-file is required for source swarm") {
+		t.Fatalf("missing services file err = %v", err)
+	}
+	if _, err := Parse([]string{"swarm", "--services-file", "services.json"}); err == nil || !strings.Contains(err.Error(), "--context-name is required for source swarm") {
+		t.Fatalf("missing context name err = %v", err)
+	}
+	cfg, err := Parse([]string{"swarm", "--services-file", "services.json", "--swarm-config", "vdr-fedramp.json", "--context-name", "swarm/prod"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Source != SourceSwarm || cfg.SwarmServicesFile != "services.json" || cfg.SwarmConfigFile != "vdr-fedramp.json" || cfg.ContextName != "swarm/prod" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestSwarmFlagsRejectedForOtherSources(t *testing.T) {
+	for _, flagName := range []string{"--services-file", "--swarm-config"} {
+		_, err := Parse([]string{"k8s", flagName, "x.json"})
+		if err == nil || !strings.Contains(err.Error(), "only valid for source swarm") {
+			t.Fatalf("%s with k8s: err = %v", flagName, err)
+		}
+	}
+}
+
+func TestParseSwarmRejectsKubernetesAndCloudFlags(t *testing.T) {
+	base := []string{"swarm", "--services-file", "s.json", "--context-name", "swarm/prod"}
+	for _, extra := range [][]string{{"--namespace", "a"}, {"--all-namespaces"}, {"--project", "p"}} {
+		if _, err := Parse(append(append([]string{}, base...), extra...)); err == nil {
+			t.Fatalf("%v should be rejected for swarm", extra)
+		}
+	}
+	if _, err := Parse(append(append([]string{}, base...), "--reachability-only")); err != nil {
+		t.Fatalf("--reachability-only should be allowed for swarm: %v", err)
+	}
+}
+
+func TestSwarmHelpListsFlags(t *testing.T) {
+	var out bytes.Buffer
+	_, err := ParseWithOutput([]string{"swarm", "--help"}, &out)
+	if err == nil {
+		t.Fatal("expected flag.ErrHelp")
+	}
+	for _, want := range []string{"--services-file", "--swarm-config", "--context-name"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("swarm help missing %s:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestParseAWSProfile(t *testing.T) {
+	cfg, err := Parse([]string{"ecs", "--region", "us-gov-west-1", "--aws-profile", "customer-prod", "--aws-role-arn", "arn:aws-us-gov:iam::111111111111:role/r"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.AWSProfile != "customer-prod" || cfg.AWSRoleARN != "arn:aws-us-gov:iam::111111111111:role/r" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestParseSwarmSSMMode(t *testing.T) {
+	cfg, err := Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--region", "us-gov-west-1", "--context-name", "swarm/prod", "--aws-role-arn", "arn:aws-us-gov:iam::111111111111:role/threatalert-dockerswarm-scan-role"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.SwarmSSMManagerTag != "swarm-node-type=manager" || len(cfg.Regions) != 1 {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if _, err := Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "--region") {
+		t.Fatalf("missing region err = %v", err)
+	}
+	if _, err := Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--region", "us-gov-west-1", "--services-file", "s.json", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "either --services-file or --ssm-manager-tag") {
+		t.Fatalf("both sources err = %v", err)
+	}
+	if _, err := Parse([]string{"swarm", "--ssm-manager-tag", "manager", "--region", "us-gov-west-1", "--context-name", "swarm/prod"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("bad tag err = %v", err)
+	}
+	if _, err := Parse([]string{"k8s", "--ssm-manager-tag", "swarm-node-type=manager"}); err == nil || !strings.Contains(err.Error(), "only valid for source swarm") {
+		t.Fatalf("k8s err = %v", err)
 	}
 }

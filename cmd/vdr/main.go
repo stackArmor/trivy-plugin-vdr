@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -8,6 +9,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/awsconfig"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/buildinfo"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudrun"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
@@ -27,6 +31,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/report"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scanner"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/swarm"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/updatecheck"
 )
 
@@ -73,6 +78,8 @@ func run(args []string) error {
 		return runImage(context.Background(), cfg, logger, os.Stdout)
 	case config.SourceHelm:
 		return runHelm(context.Background(), cfg, logger, os.Stdout)
+	case config.SourceSwarm:
+		return runSwarm(context.Background(), cfg, logger, os.Stdout)
 	default:
 		return fmt.Errorf("source %q is not implemented yet", cfg.Source)
 	}
@@ -213,6 +220,7 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if buildErr != nil {
 			return buildErr
@@ -325,6 +333,7 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
@@ -399,6 +408,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
@@ -417,7 +427,7 @@ func runCloudRun(ctx context.Context, cfg config.Config, logger *log.Logger, std
 }
 
 func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
-	client, err := ecs.NewAWSClient(ctx, ecs.ClientOptions{})
+	client, err := ecs.NewAWSClient(ctx, ecs.ClientOptions{Profile: cfg.AWSProfile, RoleARN: cfg.AWSRoleARN})
 	if err != nil {
 		return err
 	}
@@ -476,6 +486,122 @@ func runECS(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
+		}, logger)
+		if err != nil {
+			return err
+		}
+		defer res.Cleanup()
+		dockerConfigDir = res.Dir
+		registryAuths = res.Credentials
+		for _, w := range res.Warnings {
+			warnings = append(warnings, "registry auth: "+w)
+			logger.Warn("registry auth: %s", w)
+		}
+		logger.Info("registry auth: configured credentials for %d registries", res.Registries)
+	}
+
+	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, exposures)
+}
+
+// collectSwarmViaSSM reads the swarm inventory and vdr-fedramp config from a
+// manager node over SSM Run Command. A variable so tests can replace it.
+var collectSwarmViaSSM = func(ctx context.Context, cfg config.Config) (swarm.Collected, error) {
+	key, value, err := swarm.ParseManagerTag(cfg.SwarmSSMManagerTag)
+	if err != nil {
+		return swarm.Collected{}, err
+	}
+	awsCfg, err := awsconfig.Load(ctx, cfg.Regions[0], cfg.AWSProfile, cfg.AWSRoleARN)
+	if err != nil {
+		return swarm.Collected{}, err
+	}
+	return swarm.CollectViaSSM(ctx, ssm.NewFromConfig(awsCfg), ec2.NewFromConfig(awsCfg), swarm.SSMOptions{
+		ManagerTagKey:   key,
+		ManagerTagValue: value,
+	})
+}
+
+func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
+	var servicesRaw, configRaw []byte
+	servicesSource, configSource := cfg.SwarmServicesFile, cfg.SwarmConfigFile
+	if cfg.SwarmSSMManagerTag != "" {
+		logger.Info("collecting Swarm inventory over SSM from the running instance tagged %s in %s", cfg.SwarmSSMManagerTag, cfg.Regions[0])
+		collected, err := collectSwarmViaSSM(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		servicesRaw = collected.Services
+		servicesSource = "SSM " + collected.InstanceID
+		if configSource == "" {
+			configRaw, configSource = collected.FedRAMPConfig, "SSM "+collected.InstanceID
+		}
+	} else {
+		var err error
+		if servicesRaw, err = os.ReadFile(cfg.SwarmServicesFile); err != nil {
+			return fmt.Errorf("read swarm services file: %w", err)
+		}
+	}
+	if cfg.SwarmConfigFile != "" {
+		var err error
+		if configRaw, err = os.ReadFile(cfg.SwarmConfigFile); err != nil {
+			return fmt.Errorf("read swarm config: %w", err)
+		}
+	}
+
+	services, err := swarm.ParseServices(bytes.NewReader(servicesRaw))
+	if err != nil {
+		return fmt.Errorf("%s: %w", servicesSource, err)
+	}
+	inventory := swarm.BuildInventory(cfg.ContextName, services)
+	logger.Info("inventory: %d Swarm services, %d unique images", len(inventory.Resources), len(inventory.Images))
+	exposureConfig := swarm.ExposureConfig{ProxyLabelPrefixes: []string{swarm.DefaultProxyLabelPrefix}}
+	if configRaw != nil {
+		data, loadedExposure, err := swarm.ParseFedRAMPConfig(configRaw)
+		if err != nil {
+			return fmt.Errorf("%s: %w", configSource, err)
+		}
+		if len(data) == 0 {
+			logger.Warn("swarm config from %s is empty or the %s config does not exist; using built-in defaults (Class B, single-agency)", configSource, swarm.FedRAMPConfigName)
+		}
+		// A supplied config fails the run instead of silently falling back
+		// to defaults, as --sip-config-map does.
+		// Validate against the same rubric the report applies it to, so a
+		// config that passes here cannot fail (and silently fall back) there.
+		base, err := baseScoringConfig(cfg)
+		if err != nil {
+			return err
+		}
+		if err := base.ApplyClusterDefaults(data); err != nil {
+			return fmt.Errorf("%s: %w", configSource, err)
+		}
+		inventory.ClusterDefaults = data
+		exposureConfig = loadedExposure
+	}
+
+	var warnings []string
+	exposures := map[model.ResourceRef]model.Exposure{}
+	if !cfg.SkipExposure {
+		var exposureWarnings []string
+		exposures, exposureWarnings = swarm.AnalyzeExposure(cfg.ContextName, services, exposureConfig)
+		for _, w := range exposureWarnings {
+			warnings = append(warnings, w)
+			logger.Warn("%s", w)
+		}
+	}
+	if cfg.ReachabilityOnly {
+		logger.Info("reachability-only mode: skipping registry authentication and Trivy image scans")
+		return reportInventory(ctx, cfg, logger, stdout, inventory, nil, warnings, exposures, nil)
+	}
+
+	var dockerConfigDir string
+	var registryAuths map[string]registry.DockerAuth
+	if !cfg.SkipRegistryAuth {
+		res, err := registry.Build(ctx, inventoryImageRefs(inventory), nil, registry.Options{
+			EnableGcloud:                 !cfg.NoGcloudAuth,
+			EnableECR:                    !cfg.NoECRAuth,
+			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
+			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
@@ -506,6 +632,7 @@ func runImage(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 			EnableECR:                    !cfg.NoECRAuth,
 			GCPImpersonateServiceAccount: cfg.GCPImpersonateServiceAccount,
 			AWSRoleARN:                   cfg.AWSRoleARN,
+			AWSProfile:                   cfg.AWSProfile,
 		}, logger)
 		if err != nil {
 			return err
@@ -622,13 +749,11 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 	if cfg.Dedupe {
 		logger.Info("duplicate findings are merged by default since v2.0.0; pass --no-dedupe for the previous behavior")
 	}
-	scoringConfig := scoring.Default()
+	scoringConfig, err := baseScoringConfig(cfg)
+	if err != nil {
+		return err
+	}
 	if cfg.ScoringConfig != "" {
-		loaded, scErr := scoring.Load(cfg.ScoringConfig)
-		if scErr != nil {
-			return fmt.Errorf("load scoring config: %w", scErr)
-		}
-		scoringConfig = loaded
 		logger.Info("loaded PAIN scoring config from %s", cfg.ScoringConfig)
 	}
 	// Effective cluster-wide FedRAMP defaults (from the in-cluster ConfigMap or
@@ -704,6 +829,19 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 }
 
 const vdrConfigMapAIHelpURL = "https://github.com/stackArmor/vdr-agent-skills"
+
+// baseScoringConfig is the rubric cluster defaults are applied over: the
+// --scoring-config file, else the built-in default.
+func baseScoringConfig(cfg config.Config) (*scoring.Config, error) {
+	if cfg.ScoringConfig == "" {
+		return scoring.Default(), nil
+	}
+	loaded, err := scoring.Load(cfg.ScoringConfig)
+	if err != nil {
+		return nil, fmt.Errorf("load scoring config: %w", err)
+	}
+	return loaded, nil
+}
 
 // logAvailableUpdate reports a newer plugin release once the run finishes, so
 // the notice is the last line an operator sees rather than lost mid-scan.

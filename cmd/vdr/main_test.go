@@ -9,7 +9,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/swarm"
 )
 
 func TestRunK8sPassesPullSecretAuthsToRegistryBuild(t *testing.T) {
@@ -324,5 +327,164 @@ func TestEnrichmentContextErrorAppendsWarning(t *testing.T) {
 	warnings = append(warnings, fmt.Sprintf("Enrichment: incomplete (%v)", err))
 	if len(warnings) != 1 || warnings[0] != "Enrichment: incomplete (context canceled)" {
 		t.Errorf("warnings = %v, want ['Enrichment: incomplete (context canceled)']", warnings)
+	}
+}
+
+func TestRunSwarmReachabilityOnlyWritesInventory(t *testing.T) {
+	cfg, err := config.Parse([]string{
+		"swarm",
+		"--services-file", "../../internal/swarm/testdata/services.json",
+		"--context-name", "swarm/test",
+		"--reachability-only",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	var output bytes.Buffer
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runSwarm returned error: %v", err)
+	}
+	var report model.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v\n%s", err, output.String())
+	}
+	if report.ContextName != "swarm/test" {
+		t.Fatalf("contextName = %q", report.ContextName)
+	}
+	if len(report.Resources) != 6 {
+		t.Fatalf("resources = %d, want 6", len(report.Resources))
+	}
+	for _, resource := range report.Resources {
+		if resource.Resource.Provider != "docker-swarm" {
+			t.Fatalf("resource provider = %q", resource.Resource.Provider)
+		}
+	}
+}
+
+func TestRunSwarmAppliesFedRAMPConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "vdr-fedramp.yaml")
+	if err := os.WriteFile(configPath, []byte("class: D\nscoring.yaml: |\n  imageRules:\n    - match: traefik\n      securityImpactProfile: CR:M/IR:H/AR:H\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]string{
+		"swarm",
+		"--services-file", "../../internal/swarm/testdata/services.json",
+		"--swarm-config", configPath,
+		"--context-name", "swarm/test",
+		"--reachability-only",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	var output bytes.Buffer
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runSwarm returned error: %v", err)
+	}
+	var report model.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	if report.Class != "D" {
+		t.Fatalf("class = %q, want D from the swarm config", report.Class)
+	}
+}
+
+func TestRunSwarmRejectsInvalidFedRAMPConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "vdr-fedramp.yaml")
+	if err := os.WriteFile(configPath, []byte("scoring.yaml: |\n  imageRules:\n    - match: traefik\n      securityImpactProfile: nope\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]string{"swarm", "--services-file", "../../internal/swarm/testdata/services.json", "--swarm-config", configPath, "--context-name", "swarm/test", "--reachability-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "imageRules") {
+		t.Fatalf("err = %v, want an imageRules validation error", err)
+	}
+}
+
+func TestRunSwarmReportsExposure(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "vdr-fedramp.yaml")
+	if err := os.WriteFile(configPath, []byte("exposure.yaml: |\n  rules:\n    - image: traefik\n      internetReachable: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]string{"swarm", "--services-file", "../../internal/swarm/testdata/services.json", "--swarm-config", configPath, "--context-name", "swarm/test", "--reachability-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runSwarm returned error: %v", err)
+	}
+	var report model.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, resource := range report.Resources {
+		if resource.Exposure != nil {
+			statuses[resource.Resource.Name] = resource.Exposure.AssessmentBasis + "/" + resource.Exposure.AssessmentStatus
+		}
+	}
+	if statuses["edge_traefik"] != "attested/assessed" || statuses["app_web"] != "/unassessed" {
+		t.Fatalf("exposure statuses = %v", statuses)
+	}
+	if !strings.Contains(strings.Join(report.Warnings, "\n"), "app_web") {
+		t.Fatalf("warnings = %v, want the undeclared app_web named", report.Warnings)
+	}
+}
+
+func TestRunSwarmCollectsOverSSM(t *testing.T) {
+	services, err := os.ReadFile("../../internal/swarm/testdata/services.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotTag, gotRegion, gotProfile, gotRole string
+	original := collectSwarmViaSSM
+	collectSwarmViaSSM = func(_ context.Context, cfg config.Config) (swarm.Collected, error) {
+		gotTag, gotRegion, gotProfile, gotRole = cfg.SwarmSSMManagerTag, cfg.Regions[0], cfg.AWSProfile, cfg.AWSRoleARN
+		return swarm.Collected{InstanceID: "i-1", Services: services, FedRAMPConfig: []byte("class: C\n")}, nil
+	}
+	t.Cleanup(func() { collectSwarmViaSSM = original })
+
+	cfg, err := config.Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--region", "us-gov-west-1",
+		"--aws-profile", "p", "--aws-role-arn", "arn:aws-us-gov:iam::111111111111:role/r", "--context-name", "swarm/test", "--reachability-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output); err != nil {
+		t.Fatalf("runSwarm: %v", err)
+	}
+	if gotTag != "swarm-node-type=manager" || gotRegion != "us-gov-west-1" || gotProfile != "p" || gotRole != "arn:aws-us-gov:iam::111111111111:role/r" {
+		t.Fatalf("collector got tag=%q region=%q profile=%q role=%q", gotTag, gotRegion, gotProfile, gotRole)
+	}
+	var report model.Report
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Resources) != 6 || report.Class != "C" {
+		t.Fatalf("resources=%d class=%q, want the collected inventory and config", len(report.Resources), report.Class)
+	}
+}
+
+func TestRunSwarmValidatesConfigAgainstScoringConfig(t *testing.T) {
+	dir := t.TempDir()
+	scoringPath := filepath.Join(dir, "scoring.yaml")
+	if err := os.WriteFile(scoringPath, []byte("archetypes:\n  edge-gateway:\n    lens: control\n    cr: M\n    ir: H\n    ar: H\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "vdr-fedramp.yaml")
+	if err := os.WriteFile(configPath, []byte("scoring.yaml: |\n  imageRules:\n    - match: traefik\n      securityImpactProfile: edge-gateway\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]string{"swarm", "--services-file", "../../internal/swarm/testdata/services.json", "--swarm-config", configPath,
+		"--scoring-config", scoringPath, "--context-name", "swarm/test", "--reachability-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), io.Discard); err != nil {
+		t.Fatalf("a swarm config referencing an archetype from --scoring-config must validate: %v", err)
 	}
 }

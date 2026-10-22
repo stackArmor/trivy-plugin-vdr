@@ -196,8 +196,34 @@ func workloadLabelIndex(inventory *model.Inventory) map[string]map[string]string
 	}
 	for _, r := range inventory.Resources {
 		index[workloadLabelKey(r.Resource)] = r.Labels
+		for _, image := range r.Images {
+			ref := r.Resource
+			ref.ContainerName = image.Name
+			ref.ContainerType = image.ContainerType
+			index[containerImageKey(ref)] = map[string]string{containerImageField: image.ImageRef}
+		}
 	}
 	return index
+}
+
+// containerImageKey indexes the image a container runs in the same map as the
+// workload labels. The "image" prefix cannot collide with a workload key, which
+// always starts with the provider.
+func containerImageKey(ref model.ResourceRef) string {
+	return strings.Join([]string{"image", ref.Provider, ref.Project, ref.Region, ref.Namespace, ref.Kind, ref.Name, ref.ContainerType, ref.ContainerName}, "\x00")
+}
+
+const containerImageField = "imageRef"
+
+// assetImageRepository returns the repository basename of the image this
+// resource's container runs, falling back to the finding's image. A
+// deduplicated finding may name another image as its survivor, so the
+// inventory's own image wins.
+func assetImageRepository(idx map[string]map[string]string, ref model.ResourceRef, finding model.Finding) string {
+	if image := idx[containerImageKey(ref)][containerImageField]; image != "" {
+		return scoring.ImageRepositoryBasename(image)
+	}
+	return scoring.ImageRepositoryBasename(finding.ImageRef)
 }
 
 func workloadLabelKey(ref model.ResourceRef) string {
@@ -213,6 +239,7 @@ func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, 
 		Namespace:         ref.Namespace,
 		WorkloadName:      ref.Name,
 		WorkloadKind:      ref.Kind,
+		ImageRepository:   assetImageRepository(idx, ref, finding),
 		Labels:            idx[workloadLabelKey(ref)],
 		NamespaceLabels:   namespaceLabelsForRef(nsLabels, ref),
 		TechnicalImpact:   technicalImpactOf(finding.Vulnrichment),

@@ -63,6 +63,16 @@ type NameRule struct {
 	SecurityImpactProfile string `json:"securityImpactProfile" yaml:"securityImpactProfile"`
 }
 
+// ImageRule assigns a security-impact profile to workloads whose image
+// repository basename (registry, tag and digest stripped) matches a glob. It
+// suits estates whose classification is keyed by image rather than workload
+// name, such as one image backing several Swarm services. Evaluated after name
+// rules and before kind rules.
+type ImageRule struct {
+	Match                 string `json:"match" yaml:"match"`
+	SecurityImpactProfile string `json:"securityImpactProfile" yaml:"securityImpactProfile"`
+}
+
 // KindRule assigns a security-impact profile to workloads whose kind matches a glob (e.g.
 // "Job", "Pod"), optionally scoped to namespace and name globs. Evaluated after
 // name rules and before namespace rules, so a specific name rule or label can
@@ -110,6 +120,7 @@ type Config struct {
 	WordThresholds WordThresholds       `json:"wordThresholds" yaml:"wordThresholds"`
 	NamespaceRules []NamespaceRule      `json:"namespaceRules" yaml:"namespaceRules"`
 	NameRules      []NameRule           `json:"nameRules" yaml:"nameRules"`
+	ImageRules     []ImageRule          `json:"imageRules" yaml:"imageRules"`
 	KindRules      []KindRule           `json:"kindRules" yaml:"kindRules"`
 	// MultiAgencyNamespaces are namespace globs whose workloads are treated as
 	// multi-agency unless a more specific label says otherwise.
@@ -147,6 +158,7 @@ type Input struct {
 	Namespace       string
 	WorkloadName    string
 	WorkloadKind    string            // Kubernetes kind (Job, Deployment, ...); used by kindRules
+	ImageRepository string            // image repository basename; used by imageRules
 	Labels          map[string]string // workload labels
 	NamespaceLabels map[string]string // labels on the namespace object
 
@@ -442,6 +454,18 @@ func (c *Config) validate() error {
 			}
 		}
 	}
+	for i, r := range c.ImageRules {
+		if strings.TrimSpace(r.Match) == "" {
+			return fmt.Errorf("imageRules[%d] must set match", i)
+		}
+		profile := strings.TrimSpace(r.SecurityImpactProfile)
+		if profile == "" {
+			return fmt.Errorf("imageRules[%d] must set securityImpactProfile", i)
+		}
+		if _, ok := c.lookupArchetype(profile); !ok {
+			return fmt.Errorf("imageRules[%d] references unknown securityImpactProfile %q", i, profile)
+		}
+	}
 	for i, r := range c.KindRules {
 		if r.Kind == "" {
 			return fmt.Errorf("kindRules[%d] must set kind", i)
@@ -499,7 +523,7 @@ func (c *Config) DefaultSecurityImpactProfile() string {
 
 // Score computes the PAIN and FedRAMP remediation deadline for a finding-on-asset.
 func (c *Config) Score(in Input) Result {
-	profile, source, found := c.resolveClassification(in.Namespace, in.WorkloadName, in.WorkloadKind, in.Labels, in.NamespaceLabels)
+	profile, source, found := c.resolveClassification(in.Namespace, in.WorkloadName, in.WorkloadKind, in.ImageRepository, in.Labels, in.NamespaceLabels)
 
 	var a Archetype
 	forceMulti := false
@@ -589,8 +613,8 @@ func (c *Config) Score(in Input) Result {
 // resolveClassification prefers the independently dimensional security-impact
 // profile path, then the default/fail-safe path. The returned bool is false
 // only for the fail-safe path (no usable signal).
-func (c *Config) resolveClassification(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
-	if profile, source, found := c.resolveSecurityImpactProfileSignal(namespace, name, kind, labels, nsLabels); found || source == "label-unknown" {
+func (c *Config) resolveClassification(namespace, name, kind, image string, labels, nsLabels map[string]string) (string, string, bool) {
+	if profile, source, found := c.resolveSecurityImpactProfileSignal(namespace, name, kind, image, labels, nsLabels); found || source == "label-unknown" {
 		return profile, source, found
 	}
 	if profile := c.defaultSecurityImpactProfile(); profile != "" {
@@ -601,7 +625,7 @@ func (c *Config) resolveClassification(namespace, name, kind string, labels, nsL
 	return "", "failsafe", false
 }
 
-func (c *Config) resolveSecurityImpactProfileSignal(namespace, name, kind string, labels, nsLabels map[string]string) (string, string, bool) {
+func (c *Config) resolveSecurityImpactProfileSignal(namespace, name, kind, image string, labels, nsLabels map[string]string) (string, string, bool) {
 	if v, ok := labels[c.LabelKeys.SecurityImpactProfile]; ok {
 		v = strings.TrimSpace(v)
 		if _, known := c.lookupArchetype(v); known {
@@ -626,6 +650,16 @@ func (c *Config) resolveSecurityImpactProfileSignal(namespace, name, kind string
 			profile := strings.TrimSpace(r.SecurityImpactProfile)
 			if _, known := c.lookupArchetype(profile); known {
 				return profile, "nameRule", true
+			}
+		}
+	}
+	if image != "" {
+		for _, r := range c.ImageRules {
+			if ok, _ := path.Match(r.Match, image); ok {
+				profile := strings.TrimSpace(r.SecurityImpactProfile)
+				if _, known := c.lookupArchetype(profile); known {
+					return profile, "imageRule", true
+				}
 			}
 		}
 	}
@@ -1024,4 +1058,21 @@ func Rank(tier string) int {
 	default:
 		return 0
 	}
+}
+
+// ImageRepositoryBasename returns the last path element of an image
+// repository, without registry, tag or digest:
+// "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/pi:1.2@sha256:..." -> "pi".
+func ImageRepositoryBasename(image string) string {
+	image = strings.TrimSpace(image)
+	if before, _, ok := strings.Cut(image, "@"); ok {
+		image = before
+	}
+	if slash := strings.LastIndex(image, "/"); slash >= 0 {
+		image = image[slash+1:]
+	}
+	if colon := strings.Index(image, ":"); colon >= 0 {
+		image = image[:colon]
+	}
+	return image
 }

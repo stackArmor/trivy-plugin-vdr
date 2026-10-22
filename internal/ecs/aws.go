@@ -5,15 +5,21 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsecs "github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+
+	"github.com/stackArmor/trivy-plugin-vdr/internal/awsconfig"
 )
 
-type ClientOptions struct{}
+// ClientOptions selects the AWS credentials for every ECS, EC2, ELB and
+// Secrets Manager call. Both are optional; see internal/awsconfig.
+type ClientOptions struct {
+	Profile string
+	RoleARN string
+}
 
 type AWSClient struct {
 	options ClientOptions
@@ -124,9 +130,9 @@ func (c *AWSClient) config(ctx context.Context, region string) (aws.Config, erro
 	if cfg, ok := c.cfgs[region]; ok {
 		return cfg, nil
 	}
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	cfg, err := awsconfig.Load(ctx, region, c.options.Profile, c.options.RoleARN)
 	if err != nil {
-		return aws.Config{}, fmt.Errorf("load AWS config for %s: %w", region, err)
+		return aws.Config{}, err
 	}
 	c.cfgs[region] = cfg
 	return cfg, nil

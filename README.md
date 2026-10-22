@@ -46,6 +46,7 @@ trivy vdr k8s --refresh-enrichment
 trivy vdr k8s --include-chain-taxonomy --output vdr-k8s-capec.json
 trivy vdr k8s --skip-registry-auth
 trivy vdr k8s --no-gcloud-auth --no-ecr-auth
+trivy vdr swarm --services-file services.json --swarm-config vdr-fedramp.json --context-name swarm/prod
 trivy vdr k8s --oci-vex-included
 trivy vdr k8s -O
 trivy vdr k8s --vex-oci-registries registry.example.com,ghcr.io/acme
@@ -203,6 +204,84 @@ For a live Kubernetes scan, `--sip-config-map <file>` supplies a local `v1/Confi
 
 Useful rendering flags include `--kube-version`, repeatable `--api-versions`, and `--include-crds`. The Helm source does not contact a Kubernetes API and requires no Kubernetes RBAC. Remote chart downloads and image scans still require their respective network access and credentials.
 
+## Docker Swarm scanning
+
+`trivy vdr swarm` scans the services of a Docker Swarm cluster. Swarm has no
+API the plugin connects to directly, so it reads the cluster's own objects,
+collected on a manager node:
+
+```sh
+# On a manager node
+docker service inspect $(docker service ls -q) > services.json
+docker config inspect vdr-fedramp > vdr-fedramp.json 2>/dev/null || echo '[]' > vdr-fedramp.json
+
+# Anywhere with registry access
+trivy vdr swarm --services-file services.json --swarm-config vdr-fedramp.json \
+  --context-name swarm/prod --output tcs-vdr.json
+```
+
+Each service is one resource: kind `Service`, provider `docker-swarm`, its
+stack (`com.docker.stack.namespace`, or `swarm` when deployed without a stack)
+as the namespace, and its single container named after the service.
+`--context-name` is required and names the cluster in the report.
+
+**Metadata** comes from a Swarm config object named `vdr-fedramp`, deployed
+into the swarm but never mounted into a service, and from per-service labels.
+It uses the same keys as the Kubernetes ConfigMap (`class`, `multiAgency`,
+`securityRequirementsCeiling`, `scoring.yaml`) plus `exposure.yaml`. Swarm
+configs cannot be edited, so update it by removing and recreating it under the
+same name. See [`examples/swarm`](examples/swarm) for a starter file and the
+deploy and update steps. An explicitly supplied `--swarm-config` that does not
+validate fails the run; an empty one (`[]`) falls back to the built-in defaults
+with a warning.
+
+`scoring.yaml` may use `imageRules`, which match the image repository basename
+(registry, tag and digest ignored) and suit estates classified by image. Rule
+precedence is: service label > `nameRules` (stack and service name) >
+`imageRules` > `kindRules` > `namespaceRules` > defaults > H/H/H failsafe.
+`imageRules` work for every source.
+
+**Internet reachability.** Swarm has no ingress objects to discover routes from,
+so reachability is declared, in this order:
+
+1. the service label `vdr.fedramp.io/internet-reachable: "true" | "false"`;
+2. the first matching `exposure.yaml` rule (`stack`, `name` and `image` globs).
+
+Declarations are reported with `assessmentBasis: "attested"`. A `false`
+declaration needs a justification (`vdr.fedramp.io/internet-reachable-justification`
+or the rule's `justification`), carried as a `justification: ` evidence item;
+without one it is ignored and the service stays unassessed. Without a
+declaration:
+
+- a service that publishes ports (ingress routing mesh or host mode), carries
+  any edge-proxy label (every `traefik.*` label by default, including
+  `traefik.enable` and TCP/UDP routers; `proxyLabelPrefixes` adds prefixes for
+  other proxies such as `caddy`), or runs on the host network is
+  `unassessed`, with that evidence, and is named in a run warning;
+- any other service is an observed negative (`assessed`, `observed`).
+
+**Collecting over SSM.** For swarms on EC2, the plugin can collect the
+inventory itself with SSM Run Command instead of `--services-file`:
+
+```sh
+trivy vdr swarm --ssm-manager-tag swarm-node-type=manager --region us-gov-west-1 \
+  --aws-role-arn arn:aws-us-gov:iam::<account>:role/threatalert-dockerswarm-scan-role \
+  --context-name swarm/prod --output tcs-vdr.json
+```
+
+It picks the first running instance with the tag, runs `docker service
+inspect`, `docker network ls` and `docker config inspect vdr-fedramp` there, and
+reads the output back in chunks, because SSM truncates command output at 24,000
+characters. It needs `ec2:DescribeInstances`, `ssm:SendCommand` (on the manager
+and the `AWS-RunShellScript` document) and `ssm:GetCommandInvocation`; no S3
+bucket. `--swarm-config` still overrides the collected config. Locally, add
+`--aws-profile` to pick the base credentials the role is assumed from.
+
+`docker service inspect` names networks by ID, so host networking is only
+recognisable when the services file also carries the network list:
+`{"services": <inspect output>, "networks": <docker network ls --no-trunc --format '{{json .}}' as an array>}`.
+Without it, no service is reported as an observed negative.
+
 ## Required permissions
 
 `vdr` uses read-only access. Registry authentication and exposure analysis add optional reads; when those optional reads are denied, the run records warnings and continues where possible.
@@ -331,7 +410,8 @@ Flags:
 - `--no-gcloud-auth` skips the `gcloud` token for GAR/GCR.
 - `--no-ecr-auth` skips the `aws` token for ECR.
 - `--gcp-impersonate-service-account <email>` uses an impersonated Google service account for Cloud Run metadata clients and adds `--impersonate-service-account` to GAR/GCR `gcloud` token fetches.
-- `--aws-role-arn <arn>` assumes the AWS role ARN with `aws sts assume-role` before fetching ECR tokens.
+- `--aws-role-arn <arn>` assumes the AWS role for every AWS call the plugin makes: ECS and EC2 APIs, SSM (swarm), and the `aws` CLI's ECR token fetch.
+- `--aws-profile <name>` selects the base credentials the role is assumed from (or used directly without a role). Without it the standard AWS chain applies: environment variables, `AWS_PROFILE`, web identity, container credentials (CodeBuild, ECS), then EC2 instance metadata.
 
 This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run and standalone image scans, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
 
