@@ -468,3 +468,23 @@ func TestRunSwarmCollectsOverSSM(t *testing.T) {
 		t.Fatalf("resources=%d class=%q, want the collected inventory and config", len(report.Resources), report.Class)
 	}
 }
+
+func TestRunSwarmValidatesConfigAgainstScoringConfig(t *testing.T) {
+	dir := t.TempDir()
+	scoringPath := filepath.Join(dir, "scoring.yaml")
+	if err := os.WriteFile(scoringPath, []byte("archetypes:\n  edge-gateway:\n    lens: control\n    cr: M\n    ir: H\n    ar: H\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "vdr-fedramp.yaml")
+	if err := os.WriteFile(configPath, []byte("scoring.yaml: |\n  imageRules:\n    - match: traefik\n      securityImpactProfile: edge-gateway\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]string{"swarm", "--services-file", "../../internal/swarm/testdata/services.json", "--swarm-config", configPath,
+		"--scoring-config", scoringPath, "--context-name", "swarm/test", "--reachability-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), io.Discard); err != nil {
+		t.Fatalf("a swarm config referencing an archetype from --scoring-config must validate: %v", err)
+	}
+}

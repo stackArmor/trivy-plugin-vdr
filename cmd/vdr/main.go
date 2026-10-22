@@ -561,7 +561,13 @@ func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 		}
 		// A supplied config fails the run instead of silently falling back
 		// to defaults, as --sip-config-map does.
-		if err := scoring.Default().ApplyClusterDefaults(data); err != nil {
+		// Validate against the same rubric the report applies it to, so a
+		// config that passes here cannot fail (and silently fall back) there.
+		base, err := baseScoringConfig(cfg)
+		if err != nil {
+			return err
+		}
+		if err := base.ApplyClusterDefaults(data); err != nil {
 			return fmt.Errorf("%s: %w", configSource, err)
 		}
 		inventory.ClusterDefaults = data
@@ -739,13 +745,11 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 	if cfg.Dedupe {
 		logger.Info("duplicate findings are merged by default since v2.0.0; pass --no-dedupe for the previous behavior")
 	}
-	scoringConfig := scoring.Default()
+	scoringConfig, err := baseScoringConfig(cfg)
+	if err != nil {
+		return err
+	}
 	if cfg.ScoringConfig != "" {
-		loaded, scErr := scoring.Load(cfg.ScoringConfig)
-		if scErr != nil {
-			return fmt.Errorf("load scoring config: %w", scErr)
-		}
-		scoringConfig = loaded
 		logger.Info("loaded PAIN scoring config from %s", cfg.ScoringConfig)
 	}
 	// Effective cluster-wide FedRAMP defaults (from the in-cluster ConfigMap or
@@ -821,6 +825,19 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 }
 
 const vdrConfigMapAIHelpURL = "https://github.com/stackArmor/vdr-agent-skills"
+
+// baseScoringConfig is the rubric cluster defaults are applied over: the
+// --scoring-config file, else the built-in default.
+func baseScoringConfig(cfg config.Config) (*scoring.Config, error) {
+	if cfg.ScoringConfig == "" {
+		return scoring.Default(), nil
+	}
+	loaded, err := scoring.Load(cfg.ScoringConfig)
+	if err != nil {
+		return nil, fmt.Errorf("load scoring config: %w", err)
+	}
+	return loaded, nil
+}
 
 func logIncompatibleClusterConfig(logger *log.Logger, err error) {
 	logger.Error(
