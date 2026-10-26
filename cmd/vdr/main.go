@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/awsconfig"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/buildinfo"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudpolicy"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudrun"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/ecs"
@@ -778,6 +779,14 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 		logger.Info("applied configured security requirements ceiling %s", scoringConfig.SecurityRequirementsCeiling)
 	}
 
+	if cfg.CloudConfig != "" {
+		if exposures == nil {
+			exposures = map[model.ResourceRef]model.Exposure{}
+		}
+		if err := cloudpolicy.Apply(cfg.CloudConfig, inventory, scoringConfig, exposures); err != nil {
+			return fmt.Errorf("apply cloud config: %w", err)
+		}
+	}
 	// The CycloneDX VEX output is asset-centric: it emits one vulnerability per
 	// (CVE, affected asset) and attaches each asset's WorkloadPosture. The
 	// resources view is what carries per-asset findings and posture, so build the

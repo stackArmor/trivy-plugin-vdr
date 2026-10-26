@@ -196,12 +196,12 @@ func sourceHelpSections(source string) []helpSection {
 	case SourceCloudRun:
 		sections = append(sections, helpSection{
 			title: "Cloud Run source",
-			flags: []string{"project", "region", "include-functions"},
+			flags: []string{"project", "region", "include-functions", "cloud-config"},
 		})
 	case SourceECS:
 		sections = append(sections, helpSection{
 			title: "ECS source",
-			flags: []string{"region"},
+			flags: []string{"region", "cloud-config"},
 		})
 	case SourceSwarm:
 		sections = append(sections, helpSection{

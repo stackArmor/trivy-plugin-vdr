@@ -318,5 +318,17 @@ func copyStringMap(values map[string]string) map[string]string {
 	for key, value := range values {
 		copied[key] = value
 	}
+	for _, suffix := range []string{"security-impact-profile", "multi-agency", "class"} {
+		canonical := "vdr.fedramp.io/" + suffix
+		encoded := "vdr_fedramp_io_" + strings.ReplaceAll(suffix, "-", "_")
+		if _, exists := copied[canonical]; !exists {
+			if value, ok := copied[encoded]; ok {
+				if suffix == "security-impact-profile" {
+					value = strings.ReplaceAll(value, "__", ".")
+				}
+				copied[canonical] = value
+			}
+		}
+	}
 	return copied
 }
