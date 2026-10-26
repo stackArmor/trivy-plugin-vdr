@@ -689,6 +689,7 @@ type Report struct {
 	ReportSchemaVersion string                `json:"reportSchemaVersion"`
 	GeneratedAt         time.Time             `json:"generatedAt"`
 	ScannerVersion      string                `json:"scannerVersion"`
+	ScannerMetadata     *ScannerMetadata      `json:"scannerMetadata,omitempty"`
 	PluginVersion       string                `json:"pluginVersion"`
 	ChainCatalog        *ChainCatalogMetadata `json:"chainCatalog,omitempty"`
 	// ContextName is the Kubernetes context (kubectx) the inventory was collected
@@ -727,6 +728,26 @@ type Report struct {
 	Assets             []AssetFacts `json:"assets,omitempty"`
 	Warnings           []string     `json:"warnings,omitempty"`
 	ClassificationOnly bool         `json:"-"`
+}
+
+// ScannerMetadata identifies the Trivy databases and check bundle available in
+// the scanner cache when the report was generated.
+type ScannerMetadata struct {
+	VulnerabilityDB *ScannerDatabaseMetadata `json:"vulnerabilityDB,omitempty"`
+	JavaDB          *ScannerDatabaseMetadata `json:"javaDB,omitempty"`
+	CheckBundle     *ScannerBundleMetadata   `json:"checkBundle,omitempty"`
+}
+
+type ScannerDatabaseMetadata struct {
+	Version      int    `json:"version,omitempty"`
+	UpdatedAt    string `json:"updatedAt,omitempty"`
+	NextUpdate   string `json:"nextUpdate,omitempty"`
+	DownloadedAt string `json:"downloadedAt,omitempty"`
+}
+
+type ScannerBundleMetadata struct {
+	Digest       string `json:"digest,omitempty"`
+	DownloadedAt string `json:"downloadedAt,omitempty"`
 }
 
 // AssetFacts is the per-workload projection of a ResourceReport: everything that

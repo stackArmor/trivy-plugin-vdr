@@ -117,19 +117,23 @@ func runK8sCompliance(ctx context.Context, cfg config.Config, logger *log.Logger
 		logger.Warn("%s", warning)
 	}
 
-	scannerVersion, versionErr := (scanner.TrivyRunner{}).Version(ctx)
+	scannerVersion, scannerMetadata, versionErr := (scanner.TrivyRunner{CacheDir: cfg.CacheDir}).VersionMetadata(ctx)
+	var scannerMetadataPtr *model.ScannerMetadata
 	if versionErr != nil {
 		scannerVersion = "unknown"
 		logger.Warn("could not determine Trivy version: %v", versionErr)
+	} else {
+		scannerMetadataPtr = &scannerMetadata
 	}
 	if clusterName == "" {
 		clusterName = contextName
 	}
 	complianceReport := k8scompliance.BuildReport(resources, k8scompliance.ReportOptions{
-		ScannerVersion: scannerVersion,
-		PluginVersion:  buildinfo.PluginVersion,
-		ClusterName:    clusterName,
-		Warnings:       warnings,
+		ScannerVersion:  scannerVersion,
+		ScannerMetadata: scannerMetadataPtr,
+		PluginVersion:   buildinfo.PluginVersion,
+		ClusterName:     clusterName,
+		Warnings:        warnings,
 	})
 	logger.Info("compliance scan: %d resources, %d failed checks", complianceReport.Summary.Resources, complianceReport.Summary.FailedChecks)
 	return writeK8sComplianceReport(stdout, cfg.Output, cfg.Format, complianceReport)
@@ -783,13 +787,17 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 	if cfg.Format == config.FormatCycloneDX {
 		primaryView = report.ViewResources
 	}
-	scannerVersion, versionErr := (scanner.TrivyRunner{}).Version(ctx)
+	scannerVersion, scannerMetadata, versionErr := (scanner.TrivyRunner{CacheDir: cfg.CacheDir}).VersionMetadata(ctx)
+	var scannerMetadataPtr *model.ScannerMetadata
 	if versionErr != nil {
 		scannerVersion = "unknown"
 		logger.Warn("could not determine Trivy version: %v", versionErr)
+	} else {
+		scannerMetadataPtr = &scannerMetadata
 	}
 	primary := report.Build(inventory, findings, exposures, report.Options{
 		ScannerVersion:       scannerVersion,
+		ScannerMetadata:      scannerMetadataPtr,
 		PluginVersion:        buildinfo.PluginVersion,
 		View:                 primaryView,
 		MinSeverity:          cfg.MinSeverity,
@@ -808,6 +816,7 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 	if cfg.HTMLOutput != "" {
 		htmlReport := report.Build(inventory, findings, exposures, report.Options{
 			ScannerVersion:       scannerVersion,
+			ScannerMetadata:      scannerMetadataPtr,
 			PluginVersion:        buildinfo.PluginVersion,
 			View:                 report.ViewResources,
 			MinSeverity:          cfg.MinSeverity,

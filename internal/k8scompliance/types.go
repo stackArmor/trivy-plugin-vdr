@@ -3,19 +3,22 @@ package k8scompliance
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
 const ReportSchemaVersion = "k8s-compliance/v1"
 
 type Report struct {
-	ReportSchemaVersion string           `json:"reportSchemaVersion"`
-	GeneratedAt         time.Time        `json:"generatedAt"`
-	ScannerVersion      string           `json:"scannerVersion"`
-	PluginVersion       string           `json:"pluginVersion"`
-	ClusterName         string           `json:"clusterName"`
-	Summary             Summary          `json:"summary"`
-	Resources           []ResourceReport `json:"resources"`
-	Warnings            []string         `json:"warnings,omitempty"`
+	ReportSchemaVersion string                 `json:"reportSchemaVersion"`
+	GeneratedAt         time.Time              `json:"generatedAt"`
+	ScannerVersion      string                 `json:"scannerVersion"`
+	ScannerMetadata     *model.ScannerMetadata `json:"scannerMetadata,omitempty"`
+	PluginVersion       string                 `json:"pluginVersion"`
+	ClusterName         string                 `json:"clusterName"`
+	Summary             Summary                `json:"summary"`
+	Resources           []ResourceReport       `json:"resources"`
+	Warnings            []string               `json:"warnings,omitempty"`
 }
 
 type Summary struct {

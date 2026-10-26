@@ -99,23 +99,60 @@ func (r TrivyRunner) commandRunner() CommandRunner {
 }
 
 // Version returns the version reported by the same Trivy binary used for image
-// scans. Database metadata in the command output is intentionally ignored.
+// scans.
 func (r TrivyRunner) Version(ctx context.Context) (string, error) {
-	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), "version", "--format", "json")
+	version, _, err := r.VersionMetadata(ctx)
+	return version, err
+}
+
+// VersionMetadata returns Trivy's version and the database/check-bundle
+// metadata from the same cache used for scans.
+func (r TrivyRunner) VersionMetadata(ctx context.Context) (string, model.ScannerMetadata, error) {
+	args := []string{"version", "--format", "json"}
+	if r.CacheDir != "" {
+		args = append(args, "--cache-dir", r.CacheDir)
+	}
+	stdout, stderr, err := r.commandRunner().Run(ctx, r.binary(), args...)
 	if err != nil {
-		return "", fmt.Errorf("trivy version failed: %w: %s", err, string(bytes.TrimSpace(stderr)))
+		return "", model.ScannerMetadata{}, fmt.Errorf("trivy version failed: %w: %s", err, string(bytes.TrimSpace(stderr)))
 	}
 	var result struct {
-		Version string `json:"Version"`
+		Version         string `json:"Version"`
+		VulnerabilityDB *struct {
+			Version      int    `json:"Version"`
+			UpdatedAt    string `json:"UpdatedAt"`
+			NextUpdate   string `json:"NextUpdate"`
+			DownloadedAt string `json:"DownloadedAt"`
+		} `json:"VulnerabilityDB"`
+		JavaDB *struct {
+			Version      int    `json:"Version"`
+			UpdatedAt    string `json:"UpdatedAt"`
+			NextUpdate   string `json:"NextUpdate"`
+			DownloadedAt string `json:"DownloadedAt"`
+		} `json:"JavaDB"`
+		CheckBundle *struct {
+			Digest       string `json:"Digest"`
+			DownloadedAt string `json:"DownloadedAt"`
+		} `json:"CheckBundle"`
 	}
 	if err := json.Unmarshal(stdout, &result); err != nil {
-		return "", fmt.Errorf("parse trivy version: %w", err)
+		return "", model.ScannerMetadata{}, fmt.Errorf("parse trivy version: %w", err)
 	}
 	result.Version = strings.TrimSpace(result.Version)
 	if result.Version == "" {
-		return "", errors.New("parse trivy version: response did not contain Version")
+		return "", model.ScannerMetadata{}, errors.New("parse trivy version: response did not contain Version")
 	}
-	return result.Version, nil
+	metadata := model.ScannerMetadata{}
+	if db := result.VulnerabilityDB; db != nil {
+		metadata.VulnerabilityDB = &model.ScannerDatabaseMetadata{Version: db.Version, UpdatedAt: db.UpdatedAt, NextUpdate: db.NextUpdate, DownloadedAt: db.DownloadedAt}
+	}
+	if db := result.JavaDB; db != nil {
+		metadata.JavaDB = &model.ScannerDatabaseMetadata{Version: db.Version, UpdatedAt: db.UpdatedAt, NextUpdate: db.NextUpdate, DownloadedAt: db.DownloadedAt}
+	}
+	if bundle := result.CheckBundle; bundle != nil {
+		metadata.CheckBundle = &model.ScannerBundleMetadata{Digest: bundle.Digest, DownloadedAt: bundle.DownloadedAt}
+	}
+	return result.Version, metadata, nil
 }
 
 // EnsureDatabases downloads/updates the Trivy vulnerability database and the

@@ -7,14 +7,17 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 )
 
 type ReportOptions struct {
-	ScannerVersion string
-	PluginVersion  string
-	ClusterName    string
-	Warnings       []string
-	GeneratedAt    time.Time
+	ScannerVersion  string
+	ScannerMetadata *model.ScannerMetadata
+	PluginVersion   string
+	ClusterName     string
+	Warnings        []string
+	GeneratedAt     time.Time
 }
 
 func BuildReport(resources []ResourceReport, options ReportOptions) Report {
@@ -26,6 +29,7 @@ func BuildReport(resources []ResourceReport, options ReportOptions) Report {
 		ReportSchemaVersion: ReportSchemaVersion,
 		GeneratedAt:         generatedAt,
 		ScannerVersion:      options.ScannerVersion,
+		ScannerMetadata:     options.ScannerMetadata,
 		PluginVersion:       options.PluginVersion,
 		ClusterName:         options.ClusterName,
 		Resources:           resources,

@@ -26,6 +26,7 @@ const (
 type Options struct {
 	GeneratedAt         time.Time
 	ScannerVersion      string
+	ScannerMetadata     *model.ScannerMetadata
 	PluginVersion       string
 	View                string
 	MinSeverity         string
@@ -122,6 +123,7 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		ReportSchemaVersion: ReportSchemaVersion,
 		GeneratedAt:         options.GeneratedAt,
 		ScannerVersion:      options.ScannerVersion,
+		ScannerMetadata:     options.ScannerMetadata,
 		PluginVersion:       options.PluginVersion,
 		ChainCatalog:        chainanalysis.CatalogMetadata(catalog),
 		ContextName:         contextName,

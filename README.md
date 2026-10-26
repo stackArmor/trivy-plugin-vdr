@@ -596,7 +596,7 @@ For live Kubernetes scans, successful cluster-wide exposure discovery now emits 
 
 Missing/null exposure still means unassessed, not false. Negatives are not synthesized for `--skip-exposure`, namespace-limited or excluded discovery, collection failures/RBAC warnings, declared Helm manifests, unresolved route declarations, or hostNetwork/hostPort workloads. Use `--all-namespaces` without namespace exclusions and resolve exposure-discovery warnings for complete observations. An absent optional CRD is not an error. Older JSON remains compatible; consumers must not infer a negative just from the plugin/schema version or presence of `assets[]`.
 
-The top-level JSON metadata includes `scannerVersion` for the Trivy binary used by the plugin and `pluginVersion` for the VDR plugin build.
+The top-level JSON metadata includes `scannerVersion` for the Trivy binary used by the plugin, `pluginVersion` for the VDR plugin build, and optional `scannerMetadata` describing the vulnerability database, Java database, and checks bundle present in Trivy's cache (including their version/digest and update/download times when Trivy reports them).
 
 ### Cloud account and region
 
