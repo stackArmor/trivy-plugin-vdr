@@ -1,0 +1,51 @@
+{
+  "policy": "apiVersion: vdr.fedramp.io/v1alpha1\nkind: CloudResourceScoringConfig\ndefaults:\n  class: \"D\"\n  multiAgency: \"false\"\n  securityImpactProfile: cr-h_ir-m_ar-l\nscopes:\n  - provider: aws\n    account: \"123456789012\"\n    nameRules:\n      - type: AWS::ECS::TaskDefinition\n        match: \"api:*\"\n        securityImpactProfile: cr-l_ir-m_ar-h\n    tagRules:\n      - matchTags: {shared: \"yes\"}\n        multiAgency: \"true\"\n  - provider: gcp\n    project: example-project\n    typeRules:\n      - type: run.googleapis.com/Job\n        securityImpactProfile: cr-l_ir-l_ar-m\n",
+  "cases": [
+    {
+      "name": "ecs-name-rule",
+      "provider": "aws",
+      "account": "123456789012",
+      "region": "us-east-1",
+      "kind": "TaskDefinition",
+      "resourceType": "container.task_definition",
+      "uid": "arn:aws:ecs:us-east-1:123456789012:task-definition/api:7",
+      "resourceName": "api:7",
+      "labels": {
+        "shared": "yes"
+      },
+      "profile": "cr-l_ir-m_ar-h",
+      "class": "D",
+      "multiAgency": true
+    },
+    {
+      "name": "gcp-job-type-rule",
+      "provider": "gcp",
+      "account": "example-project",
+      "region": "us-east4",
+      "kind": "Job",
+      "resourceType": "run.job",
+      "uid": "projects/example-project/locations/us-east4/jobs/batch",
+      "resourceName": "batch",
+      "labels": {},
+      "profile": "cr-l_ir-l_ar-m",
+      "class": "D",
+      "multiAgency": false
+    },
+    {
+      "name": "direct-tag-overrides-rule",
+      "provider": "aws",
+      "account": "123456789012",
+      "region": "us-east-1",
+      "kind": "TaskDefinition",
+      "resourceType": "container.task_definition",
+      "uid": "arn:aws:ecs:us-east-1:123456789012:task-definition/api:7",
+      "resourceName": "api:7",
+      "labels": {
+        "vdr.fedramp.io/security-impact-profile": "cr-m_ir-l_ar-h"
+      },
+      "profile": "cr-m_ir-l_ar-h",
+      "class": "D",
+      "multiAgency": false
+    }
+  ]
+}

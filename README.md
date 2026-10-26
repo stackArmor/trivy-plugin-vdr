@@ -765,3 +765,33 @@ scripts/local-test.sh --debug             # verbose progress logs
 ```
 
 The script runs the freshly built binary directly, so it picks up local changes on every run. Trivy must be installed; `gcloud`/`aws` are optional for registry auth.
+
+## Optional cloud assignment policy for standalone scans
+
+Use `--cloud-config ./vdr-cloud.yaml` with `ecs` or `cloudrun` for standalone local
+or CI/CD runs. stackArmor-managed TCS scans leave this flag unset: TSW links native
+resource identities to cloud inventory, applies the active cloud policy, and
+recalculates scores. ECS findings join by the full task-definition revision ARN;
+Cloud Run findings join by the full service/job resource name.
+
+The optional document is the same `vdr.fedramp.io/v1alpha1`
+`CloudResourceScoringConfig` used by TSW. It supplies assignments and an optional
+profile catalog; it does not change the canonical scoring algorithm or calibration.
+`--scoring-config` retains its existing rubric, label-key, and calibration settings.
+Provider/account/project scope must match exactly. Direct resource overrides win,
+then the first matching name/tag/network/type rule per attribute, then scope and
+global defaults. Class comes from direct labels or scope/global defaults. Policy
+SHA-256 and assignment sources are recorded under `cloudPolicy` in JSON.
+
+Standalone collectors do not carry TSW's complete network attachment graph. An
+applicable `networkRules` rule whose value is needed fails explicitly; it never
+falls through to a broader default. Use managed TSW policy evaluation for those
+rules. A malformed document, unmatched scope, or unresolved required assignment
+also fails. Reachability attestations remain explicit and scoped; a policy rule or scope
+declaring false requires a justification. GCP underscore label keys and `__` trace encoding are decoded
+for ordinary Cloud Run scans as well as standalone policy use.
+
+```sh
+trivy vdr cloudrun --project my-project --region us-east4 --cloud-config vdr-cloud.yaml --output tcs-vdr.json
+trivy vdr ecs --region us-east-1 --cloud-config vdr-cloud.yaml --output tcs-vdr.json
+```

@@ -153,14 +153,15 @@ type Config struct {
 
 // Input describes one finding-on-asset to be scored.
 type Input struct {
-	CVSSVector      string
-	Severity        string
-	Namespace       string
-	WorkloadName    string
-	WorkloadKind    string            // Kubernetes kind (Job, Deployment, ...); used by kindRules
-	ImageRepository string            // image repository basename; used by imageRules
-	Labels          map[string]string // workload labels
-	NamespaceLabels map[string]string // labels on the namespace object
+	ClassificationSources map[string]string
+	CVSSVector            string
+	Severity              string
+	Namespace             string
+	WorkloadName          string
+	WorkloadKind          string            // Kubernetes kind (Job, Deployment, ...); used by kindRules
+	ImageRepository       string            // image repository basename; used by imageRules
+	Labels                map[string]string // workload labels
+	NamespaceLabels       map[string]string // labels on the namespace object
 
 	// TechnicalImpact is the CISA Vulnrichment SSVC technical impact (total|partial).
 	// It acts as a floor on the CVSS impact shape: "total" raises each in-scope
@@ -525,6 +526,9 @@ func (c *Config) DefaultSecurityImpactProfile() string {
 func (c *Config) Score(in Input) Result {
 	profile, source, found := c.resolveClassification(in.Namespace, in.WorkloadName, in.WorkloadKind, in.ImageRepository, in.Labels, in.NamespaceLabels)
 
+	if found && in.ClassificationSources["securityImpactProfile"] != "" {
+		source = in.ClassificationSources["securityImpactProfile"]
+	}
 	var a Archetype
 	forceMulti := false
 	if found {
@@ -562,6 +566,9 @@ func (c *Config) Score(in Input) Result {
 	word := c.wordFromScalar(s)
 
 	multi, multiSource := c.resolveMultiAgency(in.Namespace, in.Labels, in.NamespaceLabels)
+	if in.ClassificationSources["multiAgency"] != "" {
+		multiSource = in.ClassificationSources["multiAgency"]
+	}
 	effectiveMulti := multi || forceMulti
 	if forceMulti && !multi {
 		multiSource = "failsafe"
@@ -570,6 +577,9 @@ func (c *Config) Score(in Input) Result {
 
 	// Remediation: FedRAMP VDR-TFR-PVR matrix[Class][PAIN][column].
 	class, classSource := c.resolveClass(in.Labels, in.NamespaceLabels)
+	if in.ClassificationSources["class"] != "" {
+		classSource = in.ClassificationSources["class"]
+	}
 	irv := in.InternetReachable && isNetworkAttackVector(in.CVSSVector)
 	lev := c.isLEV(in, irv)
 	column := remediationColumn(lev, irv)
@@ -1075,4 +1085,29 @@ func ImageRepositoryBasename(image string) string {
 		image = image[:colon]
 	}
 	return image
+}
+
+// ValidCloudProfile validates assignment transports without falling back to unclassified.
+func (c *Config) ValidCloudProfile(name string) bool {
+	_, ok := c.lookupArchetype(name)
+	return name != "" && ok
+}
+
+// AddCloudArchetype loads a cloud document's optional profile catalog without
+// changing thresholds, reason-code meanings, or the scoring algorithm.
+func (c *Config) AddCloudArchetype(name string, profile Archetype) error {
+	profile.CR = strings.ToUpper(profile.CR)
+	profile.IR = strings.ToUpper(profile.IR)
+	profile.AR = strings.ToUpper(profile.AR)
+	if name == "" || len(name) > 63 {
+		return fmt.Errorf("invalid cloud archetype name %q", name)
+	}
+	for _, value := range []string{profile.CR, profile.IR, profile.AR} {
+		if value != "L" && value != "M" && value != "H" {
+			return fmt.Errorf("cloud archetype %q must define independent L/M/H requirements", name)
+		}
+	}
+	profile.Lens = "cloud-policy"
+	c.Archetypes[name] = profile
+	return nil
 }

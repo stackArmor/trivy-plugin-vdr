@@ -136,6 +136,9 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 		Warnings:            warnings,
 		ClassificationOnly:  options.ClassificationOnly,
 	}
+	if inventory != nil {
+		report.CloudPolicy = inventory.CloudPolicy
+	}
 	if options.View == ViewResources {
 		report.Resources = resourceReports
 		return report
@@ -198,6 +201,7 @@ func workloadLabelIndex(inventory *model.Inventory) map[string]map[string]string
 	}
 	for _, r := range inventory.Resources {
 		index[workloadLabelKey(r.Resource)] = r.Labels
+		index["policy\x00"+workloadLabelKey(r.Resource)] = r.ClassificationSources
 		for _, image := range r.Images {
 			ref := r.Resource
 			ref.ContainerName = image.Name
@@ -236,18 +240,19 @@ func workloadLabelKey(ref model.ResourceRef) string {
 // a specific resource, given that resource's internet reachability.
 func scoreAsset(sc *scoring.Config, idx, nsLabels map[string]map[string]string, ref model.ResourceRef, finding model.Finding, internetReachable bool) (*model.Pain, *model.Remediation) {
 	res := sc.Score(scoring.Input{
-		CVSSVector:        finding.CVSSVector,
-		Severity:          finding.Severity,
-		Namespace:         ref.Namespace,
-		WorkloadName:      ref.Name,
-		WorkloadKind:      ref.Kind,
-		ImageRepository:   assetImageRepository(idx, ref, finding),
-		Labels:            idx[workloadLabelKey(ref)],
-		NamespaceLabels:   namespaceLabelsForRef(nsLabels, ref),
-		TechnicalImpact:   technicalImpactOf(finding.Vulnrichment),
-		EPSS:              epssScore(finding.EPSS),
-		Exploitation:      exploitationOf(finding.Vulnrichment),
-		InternetReachable: internetReachable,
+		ClassificationSources: idx["policy\x00"+workloadLabelKey(ref)],
+		CVSSVector:            finding.CVSSVector,
+		Severity:              finding.Severity,
+		Namespace:             ref.Namespace,
+		WorkloadName:          ref.Name,
+		WorkloadKind:          ref.Kind,
+		ImageRepository:       assetImageRepository(idx, ref, finding),
+		Labels:                idx[workloadLabelKey(ref)],
+		NamespaceLabels:       namespaceLabelsForRef(nsLabels, ref),
+		TechnicalImpact:       technicalImpactOf(finding.Vulnrichment),
+		EPSS:                  epssScore(finding.EPSS),
+		Exploitation:          exploitationOf(finding.Vulnrichment),
+		InternetReachable:     internetReachable,
 	})
 	pain := &model.Pain{
 		Tier:                              res.Tier,

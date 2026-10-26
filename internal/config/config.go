@@ -81,6 +81,7 @@ type Config struct {
 	HTMLOutput                   string
 	HTMLTemplate                 string
 	ScoringConfig                string
+	CloudConfig                  string
 	SecurityRequirementsCeiling  string
 	MinSeverity                  string
 	MinEPSS                      float64
@@ -237,6 +238,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.IntVar(&cfg.CacheMinFreePercent, "cache-min-free-percent", cfg.CacheMinFreePercent, "minimum free disk percentage before auto cache cleanup")
 	fs.StringVar(&cfg.HTMLOutput, "html-output", cfg.HTMLOutput, "write optional standalone HTML report to file")
 	fs.StringVar(&cfg.HTMLTemplate, "html-template", cfg.HTMLTemplate, "custom HTML report template path")
+	fs.StringVar(&cfg.CloudConfig, "cloud-config", cfg.CloudConfig, "optional vdr-cloud.yaml for standalone local or CI/CD ECS/Cloud Run scans; not required for stackArmor-managed scans, where the platform automatically associates cloud policy and recalculates scores")
 	fs.StringVar(&cfg.ScoringConfig, "scoring-config", cfg.ScoringConfig, "optional FedRAMP PAIN scoring config (YAML or JSON); built-in defaults are used when omitted")
 	fs.StringVar(&cfg.SecurityRequirementsCeiling, "security-requirements-ceiling", cfg.SecurityRequirementsCeiling, "optional system-and-agency CR/IR/AR ceiling for security-impact-profile PAIN scoring (for example cr-m_ir-m_ar-l)")
 	fs.StringVar(&cfg.MinSeverity, "min-severity", cfg.MinSeverity, "minimum severity")
@@ -602,6 +604,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	}
 	if cfg.Source != SourceCloudRun && cloudRunSpecificFlag != "" {
 		return Config{}, fmt.Errorf("--%s is only valid for source cloudrun", cloudRunSpecificFlag)
+	}
+	if cfg.CloudConfig != "" && cfg.Source != SourceECS && cfg.Source != SourceCloudRun {
+		return Config{}, errors.New("--cloud-config is only valid for sources ecs and cloudrun")
 	}
 	if len(cfg.Namespaces) > 0 && allNamespacesSet && cfg.AllNamespaces {
 		return Config{}, errors.New("cannot use --namespace with --all-namespaces")

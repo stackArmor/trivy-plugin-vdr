@@ -6,8 +6,23 @@ import (
 	"time"
 )
 
+type CloudPolicyAssignment struct {
+	ResourceUID           string            `json:"resourceUid"`
+	ProviderType          string            `json:"providerType"`
+	SecurityImpactProfile string            `json:"securityImpactProfile"`
+	Class                 string            `json:"class"`
+	MultiAgency           bool              `json:"multiAgency"`
+	Sources               map[string]string `json:"sources"`
+}
+
+type CloudPolicyEvidence struct {
+	SHA256      string                  `json:"sha256"`
+	Assignments []CloudPolicyAssignment `json:"assignments"`
+}
+
 type Inventory struct {
-	ContextName string `json:"contextName"`
+	CloudPolicy *CloudPolicyEvidence `json:"cloudPolicy,omitempty"`
+	ContextName string               `json:"contextName"`
 	// ClusterName is the managed Kubernetes cluster name, when it can be
 	// determined (currently from GKE and EKS kubeconfig context names).
 	ClusterName string              `json:"clusterName,omitempty"`
@@ -130,6 +145,7 @@ type ImageInventory struct {
 }
 
 type ResourceInventory struct {
+	ClassificationSources map[string]string `json:"-"`
 	// DirectNodeAccess prevents Service-only analysis from asserting a negative
 	// for hostNetwork/hostPort workloads; collected from the pod spec.
 	DirectNodeAccess bool              `json:"-"`
@@ -686,6 +702,7 @@ type Pain struct {
 }
 
 type Report struct {
+	CloudPolicy         *CloudPolicyEvidence  `json:"cloudPolicy,omitempty"`
 	ReportSchemaVersion string                `json:"reportSchemaVersion"`
 	GeneratedAt         time.Time             `json:"generatedAt"`
 	ScannerVersion      string                `json:"scannerVersion"`
