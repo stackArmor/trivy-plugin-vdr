@@ -310,6 +310,12 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			return err
 		}
 		warnings = append(warnings, exposureWarnings...)
+		for _, w := range exposureWarnings {
+			logger.Warn("%s", w)
+		}
+		if len(exposureWarnings) > 0 {
+			logger.Warn("ingress/gateway exposure discovery incomplete (%d error(s) above); workloads will not be reported as not internet-accessible", len(exposureWarnings))
+		}
 		for _, w := range objects.IgnoredRouteWarnings {
 			logger.Debug("%s (no Gateway listener accepts this route kind)", w)
 		}

@@ -61,7 +61,7 @@ func (c *Collector) CollectExposureObjectsWithWarnings(ctx context.Context, opts
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return exposure.Objects{}, nil, ctxErr
 			}
-			warnings = append(warnings, fmt.Sprintf("exposure analysis skipped Services in namespace %q: %v", namespace, err))
+			warnings = append(warnings, fmt.Sprintf("exposure analysis skipped Services in namespace %q: %s", namespace, describeAPIError(err)))
 		} else {
 			for _, svc := range services.Items {
 				if isExcludedNamespace(svc.Namespace, opts.ExcludeNamespaces) {
@@ -76,7 +76,7 @@ func (c *Collector) CollectExposureObjectsWithWarnings(ctx context.Context, opts
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return exposure.Objects{}, nil, ctxErr
 			}
-			warnings = append(warnings, fmt.Sprintf("exposure analysis skipped Ingresses in namespace %q: %v", namespace, err))
+			warnings = append(warnings, fmt.Sprintf("exposure analysis skipped Ingresses in namespace %q: %s", namespace, describeAPIError(err)))
 		} else {
 			for _, ing := range ingresses.Items {
 				if isExcludedNamespace(ing.Namespace, opts.ExcludeNamespaces) {
@@ -92,7 +92,7 @@ func (c *Collector) CollectExposureObjectsWithWarnings(ctx context.Context, opts
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return exposure.Objects{}, nil, ctxErr
 		}
-		warnings = append(warnings, fmt.Sprintf("exposure analysis skipped IngressClasses: %v", err))
+		warnings = append(warnings, fmt.Sprintf("exposure analysis skipped IngressClasses: %s", describeAPIError(err)))
 	} else {
 		objects.IngressClasses = append([]networkingv1.IngressClass(nil), classes.Items...)
 	}
@@ -108,6 +108,18 @@ func (c *Collector) CollectExposureObjectsWithWarnings(ctx context.Context, opts
 	// CRD is fine, but authorization/discovery warnings preclude negatives.
 	objects.CollectionComplete = len(warnings) == 0 && ctx.Err() == nil && opts.AllNamespaces && len(opts.ExcludeNamespaces) == 0
 	return objects, warnings, nil
+}
+
+// describeAPIError labels authentication and authorization failures so they
+// stand out in build logs.
+func describeAPIError(err error) string {
+	switch {
+	case apierrors.IsUnauthorized(err):
+		return fmt.Sprintf("authentication failed (HTTP 401 Unauthorized): %v", err)
+	case apierrors.IsForbidden(err):
+		return fmt.Sprintf("permission denied (HTTP 403 Forbidden): %v", err)
+	}
+	return err.Error()
 }
 
 // gatewayRouteKinds maps Gateway API route resources to their kinds.
@@ -154,7 +166,7 @@ func (c *Collector) collectUnstructuredExposureObjects(ctx context.Context, name
 					continue
 				}
 				if err != nil {
-					warning := fmt.Sprintf("exposure analysis skipped optional resource %s in namespace %q: %v", gvr.String(), namespace, err)
+					warning := fmt.Sprintf("exposure analysis skipped optional resource %s in namespace %q: %s", gvr.String(), namespace, describeAPIError(err))
 					if kind, isRoute := gatewayRouteKinds[resource.gvr.Resource]; isRoute && apierrors.IsForbidden(err) {
 						forbiddenRoutes[kind] = append(forbiddenRoutes[kind], warning)
 					} else {
