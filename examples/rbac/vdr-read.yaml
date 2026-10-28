@@ -1,0 +1,69 @@
+# Read-only access for `trivy vdr k8s`. This is the canonical permission set;
+# the README links here rather than repeating it. Bind it with the
+# ClusterRoleBinding below for cluster-wide scans, or with a RoleBinding per
+# namespace when using --namespace (cluster-scoped reads such as namespaces,
+# nodes, and ingressclasses are then unavailable).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vdr-read
+rules:
+  # Workload inventory and parent-controller enrichment.
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "replicationcontrollers", "services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list"]
+  # Optional fedramp-vdr-trivy/vdr-fedramp scoring ConfigMap.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+  # Optional: cloud provider, account, and region detection.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+  # Optional: image-pull Secrets for registry auth. This broad rule allows get on
+  # any Secret by name, never list or watch. For exact names, remove it and use
+  # vdr-image-pull-secret-reader.yaml instead; with --skip-registry-auth, omit it.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  # Exposure analysis: Ingress, NetworkPolicy posture, and Gateway API routes.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses", "networkpolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "tlsroutes", "udproutes", "referencegrants"]
+    verbs: ["get", "list"]
+  # Exposure analysis on GKE: IAP and backend metadata. Omit if unused.
+  - apiGroups: ["networking.gke.io"]
+    resources: ["gcpbackendpolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["cloud.google.com"]
+    resources: ["backendconfigs"]
+    verbs: ["get", "list"]
+  # Exposure analysis with the AWS Load Balancer Controller. Omit if unused.
+  - apiGroups: ["elbv2.k8s.aws"]
+    resources: ["ingressclassparams"]
+    verbs: ["get", "list"]
+  - apiGroups: ["gateway.k8s.aws"]
+    resources: ["loadbalancerconfigurations", "targetgroupconfigurations"]
+    verbs: ["get", "list"]
+---
+# Replace the subject with the ServiceAccount, user, or group that runs VDR.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vdr-read
+subjects:
+  - kind: ServiceAccount
+    name: vdr
+    namespace: vdr-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vdr-read
