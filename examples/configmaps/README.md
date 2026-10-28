@@ -33,8 +33,11 @@ The ConfigMap carries:
 - `multiAgency` — `"true"` if the cluster serves more than one agency.
 - `securityRequirementsCeiling` — optional system-and-agency ceiling such as
   `cr-m_ir-m_ar-l`. It caps each resolved profile objective before PAIN is
-  recalculated. Omit it to preserve profile scoring exactly; omission is not
-  a warning.
+  recalculated, but only when the scan runs with
+  `--security-requirements-ceiling configmap`; otherwise it is ignored. Use the
+  FIPS 199 / SP 800-60 values stackArmor confirms from your SSP or SDR.
+  ThreatAlert ignores this key and scores with the ceiling it holds for the
+  system. Omission is not a warning.
 - `scoring.yaml` — `nameRules` / `namespaceRules` assigning
   `securityImpactProfile` to the cloud-managed, shared-responsibility components
   (`kube-system`, `gke-managed-*`, `amazon-cloudwatch`, `azure-*`, …) that cannot

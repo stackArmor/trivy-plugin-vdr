@@ -14,6 +14,7 @@
 class: "B"            # your FedRAMP Certification Class: A, B, C or D
 multiAgency: "true"   # "true" if this swarm serves more than one agency
 # Optional system-and-agency ceiling; omit to leave profile scoring unchanged.
+# Applied only when the scan runs with --security-requirements-ceiling configmap.
 # securityRequirementsCeiling: cr-m_ir-m_ar-l
 
 # --- security impact profiles ---

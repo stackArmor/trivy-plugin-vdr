@@ -61,7 +61,7 @@ Keep the name `vdr-fedramp`; the scanner looks it up by that name.
 |---|---|
 | `class` | FedRAMP Certification Class (`A`/`B`/`C`/`D`). |
 | `multiAgency` | `"true"` if the swarm serves more than one agency. |
-| `securityRequirementsCeiling` | Optional system-and-agency CR/IR/AR ceiling, e.g. `cr-m_ir-m_ar-l`. |
+| `securityRequirementsCeiling` | Optional system-and-agency CR/IR/AR ceiling, e.g. `cr-m_ir-m_ar-l`. Applied only with `--security-requirements-ceiling configmap`; ThreatAlert ignores it and uses the ceiling it holds for the system. |
 | `scoring.yaml` | Profile rules. `imageRules` match the image repository basename (registry, tag and digest ignored); `nameRules` match `stack`/service name and win over `imageRules`. |
 | `exposure.yaml` | Internet-reachability declarations by stack, service name or image. A `false` needs a `justification`. |
 
