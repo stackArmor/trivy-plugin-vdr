@@ -16,14 +16,20 @@ import (
 type exposureResource struct {
 	gvr        schema.GroupVersionResource
 	namespaced bool
+	// fallbackVersions are tried in order when gvr.Version is not served.
+	// Gateway API v1.6 serves TCPRoute, TLSRoute, and UDPRoute only at v1 in
+	// the Standard channel; older and Experimental installs still serve the
+	// alpha versions.
+	fallbackVersions []string
 }
 
 var exposureResources = []exposureResource{
 	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}, namespaced: true},
 	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}, namespaced: true},
 	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "grpcroutes"}, namespaced: true},
-	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tcproutes"}, namespaced: true},
-	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tlsroutes"}, namespaced: true},
+	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "tcproutes"}, namespaced: true, fallbackVersions: []string{"v1alpha2"}},
+	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "tlsroutes"}, namespaced: true, fallbackVersions: []string{"v1alpha3", "v1alpha2"}},
+	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "udproutes"}, namespaced: true, fallbackVersions: []string{"v1alpha2"}},
 	{gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1beta1", Resource: "referencegrants"}, namespaced: true},
 	{gvr: schema.GroupVersionResource{Group: "networking.gke.io", Version: "v1", Resource: "gcpbackendpolicies"}, namespaced: true},
 	{gvr: schema.GroupVersionResource{Group: "cloud.google.com", Version: "v1", Resource: "backendconfigs"}, namespaced: true},
@@ -106,26 +112,39 @@ func (c *Collector) collectUnstructuredExposureObjects(ctx context.Context, name
 	var objects []unstructured.Unstructured
 	var warnings []string
 	for _, resource := range exposureResources {
+		scopes := []string{""}
 		if resource.namespaced {
-			for _, namespace := range namespaces {
-				items, warning := listUnstructured(ctx, c.Dynamic, resource.gvr, namespace, opts)
+			scopes = namespaces
+		}
+		// The first served version sticks for the remaining namespaces; a
+		// resource served at no version is an absent optional CRD.
+		versions := append([]string{resource.gvr.Version}, resource.fallbackVersions...)
+		for _, namespace := range scopes {
+			for len(versions) > 0 {
+				gvr := resource.gvr
+				gvr.Version = versions[0]
+				items, warning, served := listUnstructured(ctx, c.Dynamic, gvr, namespace, opts)
+				if !served {
+					versions = versions[1:]
+					continue
+				}
 				if warning != "" {
 					warnings = append(warnings, warning)
 				}
 				objects = append(objects, items...)
+				break
 			}
-			continue
+			if len(versions) == 0 {
+				break
+			}
 		}
-		items, warning := listUnstructured(ctx, c.Dynamic, resource.gvr, "", opts)
-		if warning != "" {
-			warnings = append(warnings, warning)
-		}
-		objects = append(objects, items...)
 	}
 	return objects, warnings
 }
 
-func listUnstructured(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, namespace string, opts Options) ([]unstructured.Unstructured, string) {
+// listUnstructured reports served=false when the API server does not serve the
+// resource at gvr's version.
+func listUnstructured(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, namespace string, opts Options) ([]unstructured.Unstructured, string, bool) {
 	var resource dynamic.ResourceInterface
 	if namespace == "" {
 		resource = client.Resource(gvr)
@@ -135,9 +154,9 @@ func listUnstructured(ctx context.Context, client dynamic.Interface, gvr schema.
 	list, err := resource.List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, ""
+			return nil, "", false
 		}
-		return nil, fmt.Sprintf("exposure analysis skipped optional resource %s in namespace %q: %v", gvr.String(), namespace, err)
+		return nil, fmt.Sprintf("exposure analysis skipped optional resource %s in namespace %q: %v", gvr.String(), namespace, err), true
 	}
 	var filtered []unstructured.Unstructured
 	for _, item := range list.Items {
@@ -146,5 +165,5 @@ func listUnstructured(ctx context.Context, client dynamic.Interface, gvr schema.
 		}
 		filtered = append(filtered, item)
 	}
-	return filtered, ""
+	return filtered, "", true
 }

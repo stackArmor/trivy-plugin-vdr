@@ -640,6 +640,90 @@ func TestCollectExposureObjectsCollectsTypedAndUnstructuredResources(t *testing.
 	}
 }
 
+func TestCollectExposureObjectsFallsBackToServedGatewayRouteVersion(t *testing.T) {
+	tcpRoutesV1 := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "tcproutes"}
+	tcpRoutesAlpha := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tcproutes"}
+	udpRoutesV1 := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "udproutes"}
+	for _, tc := range []struct {
+		name        string
+		v1Served    bool
+		alphaServed bool
+		want        []string
+	}{
+		// Gateway API v1.6 Standard channel serves only v1.
+		{name: "v1 only", v1Served: true, want: []string{"gateway.networking.k8s.io/v1"}},
+		// Pre-v1.6 installs serve only the alpha version.
+		{name: "alpha only", alphaServed: true, want: []string{"gateway.networking.k8s.io/v1alpha2"}},
+		{name: "not installed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			listKinds := exposureListKinds()
+			listKinds[tcpRoutesAlpha] = "TCPRouteList"
+			dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
+			dynamicClient.PrependReactor("list", "tcproutes", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+				version := action.GetResource().Version
+				if (version == "v1" && !tc.v1Served) || (version == "v1alpha2" && !tc.alphaServed) || version == "v1alpha3" {
+					return true, nil, apierrors.NewNotFound(action.GetResource().GroupResource(), "")
+				}
+				return false, nil, nil
+			})
+			for _, served := range []struct {
+				ok         bool
+				gvr        schema.GroupVersionResource
+				apiVersion string
+			}{
+				{tc.v1Served, tcpRoutesV1, "gateway.networking.k8s.io/v1"},
+				{tc.alphaServed, tcpRoutesAlpha, "gateway.networking.k8s.io/v1alpha2"},
+			} {
+				if !served.ok {
+					continue
+				}
+				if _, err := dynamicClient.Resource(served.gvr).Namespace("default").Create(
+					context.Background(),
+					unstructuredExposureObject(served.apiVersion, "TCPRoute", "default", "db"),
+					metav1.CreateOptions{},
+				); err != nil {
+					t.Fatalf("create TCPRoute fixture: %v", err)
+				}
+			}
+			if _, err := dynamicClient.Resource(udpRoutesV1).Namespace("default").Create(
+				context.Background(),
+				unstructuredExposureObject("gateway.networking.k8s.io/v1", "UDPRoute", "default", "dns"),
+				metav1.CreateOptions{},
+			); err != nil {
+				t.Fatalf("create UDPRoute fixture: %v", err)
+			}
+
+			objects, warnings, err := (&Collector{Client: fake.NewSimpleClientset(), Dynamic: dynamicClient}).CollectExposureObjectsWithWarnings(
+				context.Background(),
+				Options{Namespaces: []string{"default", "other"}},
+			)
+			if err != nil {
+				t.Fatalf("CollectExposureObjectsWithWarnings() error = %v", err)
+			}
+			if len(warnings) != 0 {
+				t.Fatalf("warnings = %v, want none for an unserved version", warnings)
+			}
+			var tcpVersions []string
+			udpRoutes := 0
+			for _, object := range objects.Unstructured {
+				switch object.GetKind() {
+				case "TCPRoute":
+					tcpVersions = append(tcpVersions, object.GetAPIVersion())
+				case "UDPRoute":
+					udpRoutes++
+				}
+			}
+			if strings.Join(tcpVersions, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("TCPRoute apiVersions = %v, want %v", tcpVersions, tc.want)
+			}
+			if udpRoutes != 1 {
+				t.Fatalf("UDPRoutes collected = %d, want 1", udpRoutes)
+			}
+		})
+	}
+}
+
 func TestCollectExposureObjectsWarnsAndContinuesOnOptionalDynamicErrors(t *testing.T) {
 	client := fake.NewSimpleClientset(serviceForExposure("default", "web-svc"))
 	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), exposureListKinds())
@@ -1054,6 +1138,8 @@ func resourceListKind(resource string) string {
 		return "TCPRouteList"
 	case "tlsroutes":
 		return "TLSRouteList"
+	case "udproutes":
+		return "UDPRouteList"
 	case "referencegrants":
 		return "ReferenceGrantList"
 	case "gcpbackendpolicies":

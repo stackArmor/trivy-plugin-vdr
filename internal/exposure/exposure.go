@@ -779,7 +779,7 @@ func indexAWSTargetGroupConfigurations(objects []unstructured.Unstructured) map[
 
 func isGatewayRouteKind(kind string) bool {
 	switch kind {
-	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute":
 		return true
 	default:
 		return false
