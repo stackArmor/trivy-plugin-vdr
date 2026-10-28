@@ -18,10 +18,14 @@ type Objects struct {
 	// CollectionComplete requires successful cluster-wide discovery of all
 	// supported route families. Partial or skipped discovery proves no negative.
 	CollectionComplete bool
-	Services           []corev1.Service
-	Ingresses          []networkingv1.Ingress
-	IngressClasses     []networkingv1.IngressClass
-	Unstructured       []unstructured.Unstructured
+	// IgnoredRouteWarnings are route-listing failures that cannot affect
+	// exposure because no collected Gateway listener accepts that route kind.
+	// They do not count against CollectionComplete.
+	IgnoredRouteWarnings []string
+	Services             []corev1.Service
+	Ingresses            []networkingv1.Ingress
+	IngressClasses       []networkingv1.IngressClass
+	Unstructured         []unstructured.Unstructured
 	// InternetAccessible*Classes and NotInternetAccessible*Classes are class
 	// names an operator declared reachable or not-reachable in the cluster
 	// ConfigMap. Negative lists override positive lists and built-in class

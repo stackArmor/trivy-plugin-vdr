@@ -310,6 +310,9 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 			return err
 		}
 		warnings = append(warnings, exposureWarnings...)
+		for _, w := range objects.IgnoredRouteWarnings {
+			logger.Debug("%s (no Gateway listener accepts this route kind)", w)
+		}
 		var exposureConflicts []string
 		objects.InternetAccessibleIngressClasses, objects.InternetAccessibleGatewayClasses,
 			objects.NotInternetAccessibleIngressClasses, objects.NotInternetAccessibleGatewayClasses,
