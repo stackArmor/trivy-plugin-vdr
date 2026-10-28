@@ -724,6 +724,75 @@ func TestCollectExposureObjectsFallsBackToServedGatewayRouteVersion(t *testing.T
 	}
 }
 
+func TestCollectExposureObjectsIgnoresForbiddenRoutesNoGatewayAccepts(t *testing.T) {
+	type listener map[string]any
+	for _, tc := range []struct {
+		name              string
+		listeners         []listener // nil: no Gateway
+		gatewaysForbidden bool
+		wantWarning       bool
+	}{
+		{name: "no gateways"},
+		{name: "HTTP listener only", listeners: []listener{{"name": "web", "protocol": "HTTP", "port": int64(80)}}},
+		{name: "UDP listener", listeners: []listener{{"name": "dns", "protocol": "UDP", "port": int64(53)}}, wantWarning: true},
+		{name: "non-standard protocol", listeners: []listener{{"name": "x", "protocol": "example.com/QUIC", "port": int64(443)}}, wantWarning: true},
+		{name: "allowedRoutes names UDPRoute", listeners: []listener{{"name": "web", "protocol": "HTTP", "port": int64(80), "allowedRoutes": map[string]any{"kinds": []any{map[string]any{"kind": "UDPRoute"}}}}}, wantWarning: true},
+		{name: "gateways unreadable", gatewaysForbidden: true, wantWarning: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), exposureListKinds())
+			dynamicClient.PrependReactor("list", "udproutes", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewForbidden(action.GetResource().GroupResource(), "", nil)
+			})
+			if tc.gatewaysForbidden {
+				dynamicClient.PrependReactor("list", "gateways", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+					return true, nil, apierrors.NewForbidden(action.GetResource().GroupResource(), "", nil)
+				})
+			}
+			if tc.listeners != nil {
+				gateway := unstructuredExposureObject("gateway.networking.k8s.io/v1", "Gateway", "default", "gw")
+				var listeners []any
+				for _, l := range tc.listeners {
+					listeners = append(listeners, map[string]any(l))
+				}
+				gateway.Object["spec"] = map[string]any{"gatewayClassName": "public", "listeners": listeners}
+				if _, err := dynamicClient.Resource(schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}).Namespace("default").Create(
+					context.Background(), gateway, metav1.CreateOptions{},
+				); err != nil {
+					t.Fatalf("create Gateway fixture: %v", err)
+				}
+			}
+
+			objects, warnings, err := (&Collector{Client: fake.NewSimpleClientset(), Dynamic: dynamicClient}).CollectExposureObjectsWithWarnings(
+				context.Background(),
+				Options{AllNamespaces: true},
+			)
+			if err != nil {
+				t.Fatalf("CollectExposureObjectsWithWarnings() error = %v", err)
+			}
+			udpWarned := false
+			for _, w := range warnings {
+				if strings.Contains(w, "udproutes") {
+					udpWarned = true
+				}
+			}
+			if udpWarned != tc.wantWarning {
+				t.Fatalf("udproutes warning = %v, want %v; warnings = %v", udpWarned, tc.wantWarning, warnings)
+			}
+			if !tc.wantWarning {
+				if !objects.CollectionComplete {
+					t.Fatal("CollectionComplete = false, want true when no listener accepts UDPRoute")
+				}
+				if len(objects.IgnoredRouteWarnings) != 1 || !strings.Contains(objects.IgnoredRouteWarnings[0], "udproutes") {
+					t.Fatalf("IgnoredRouteWarnings = %v, want the udproutes warning", objects.IgnoredRouteWarnings)
+				}
+			} else if objects.CollectionComplete {
+				t.Fatal("CollectionComplete = true, want false when the forbidden route kind could be exposed")
+			}
+		})
+	}
+}
+
 func TestCollectExposureObjectsWarnsAndContinuesOnOptionalDynamicErrors(t *testing.T) {
 	client := fake.NewSimpleClientset(serviceForExposure("default", "web-svc"))
 	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), exposureListKinds())
