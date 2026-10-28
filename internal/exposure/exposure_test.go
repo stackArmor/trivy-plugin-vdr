@@ -731,7 +731,7 @@ func TestAnalyzeUnstructuredKindCollisionsIgnoreUnexpectedAPIGroups(t *testing.T
 }
 
 func TestAnalyzeGatewayRouteKindsResolveBackendRefs(t *testing.T) {
-	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 		t.Run(kind, func(t *testing.T) {
 			inv := inventoryWithWorkload("default", "api", map[string]string{"app": "api"}, containerImage("api", "api:v1"))
 			objects := Objects{

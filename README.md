@@ -194,7 +194,7 @@ trivy vdr helm ./charts/payments \
   --ingress-namespace edge-system
 ```
 
-The two rendered streams are merged before topology analysis. This allows VDR to resolve Ingress and Gateway routes through Services to application workloads, including HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, and cross-namespace ReferenceGrant relationships. A duplicate API version/kind/namespace/name across the two releases is rejected because the same collision would not be independently installable in Kubernetes.
+The two rendered streams are merged before topology analysis. This allows VDR to resolve Ingress and Gateway routes through Services to application workloads, including HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, and cross-namespace ReferenceGrant relationships. A duplicate API version/kind/namespace/name across the two releases is rejected because the same collision would not be independently installable in Kubernetes.
 
 Helm exposure has `assessmentBasis: "declared"`. It represents deployment intent derived from rendered classes, schemes, annotations, Services, routes, and policies; it does **not** claim that a load balancer was provisioned or that the resources are currently serving traffic. Live `k8s` scans retain their observed-status behavior. For custom Ingress or Gateway classes whose external edge cannot be inferred from the manifests, provide `internetAccessibleIngressClasses` / `internetAccessibleGatewayClasses`, or the corresponding `notInternetAccessible*Classes` list when upstream IP allowlisting makes the class non-internet-reachable, in the VDR ConfigMap.
 
@@ -317,7 +317,7 @@ rules:
     resources: ["gateways", "httproutes", "grpcroutes", "referencegrants"]
     verbs: ["list"]
   - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["tcproutes", "tlsroutes"]
+    resources: ["tcproutes", "tlsroutes", "udproutes"]
     verbs: ["list"]
   - apiGroups: ["networking.gke.io"]
     resources: ["gcpbackendpolicies"]
@@ -341,6 +341,7 @@ Notes:
 - Use `--skip-registry-auth` or `--reachability-only` to avoid reading Secrets entirely.
 - `configmaps/get` is used for the optional `fedramp-vdr-trivy/vdr-fedramp` scoring ConfigMap.
 - Exposure resources are optional for vulnerability scan reports. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis. `--reachability-only` requires exposure resources and cannot be combined with `--skip-exposure`.
+- TCPRoute, TLSRoute, and UDPRoute are read at `gateway.networking.k8s.io/v1`, which Gateway API v1.6 and later serve in the Standard channel, and fall back to the alpha versions that earlier and Experimental-channel installs serve. A route type served at no version is treated as an absent optional CRD.
 - If you never use AWS ALB/Gateway resources, the `elbv2.k8s.aws` and `gateway.k8s.aws` rules can be omitted. If you never use GKE ingress/gateway IAP metadata, the `cloud.google.com/backendconfigs` and `networking.gke.io/gcpbackendpolicies` rules can be omitted.
 - `k8s-compliance` also requires read access to every resource type Trivy evaluates. The Pod, ReplicationController, Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob list permissions above provide VDR's parent-controller enrichment; other resource permissions depend on the built-in Trivy checks and APIs installed in the cluster.
 
@@ -450,7 +451,7 @@ rules:
     resources: ["ingresses", "ingressclasses"]
     verbs: ["get", "list"]
   - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "tlsroutes", "referencegrants"]
+    resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "tlsroutes", "udproutes", "referencegrants"]
     verbs: ["get", "list"]
   - apiGroups: ["networking.gke.io"]
     resources: ["gcpbackendpolicies"]
