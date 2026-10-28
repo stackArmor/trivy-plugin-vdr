@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -770,13 +771,8 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 			logger.Info("applied cluster FedRAMP defaults (class=%s, default security-impact profile=%s)", scoringConfig.Defaults.Class, scoringConfig.DefaultSecurityImpactProfile())
 		}
 	}
-	if cfg.SecurityRequirementsCeiling != "" {
-		if err := scoringConfig.SetRuntimeSecurityRequirementsCeiling(cfg.SecurityRequirementsCeiling); err != nil {
-			return fmt.Errorf("invalid --security-requirements-ceiling: %w", err)
-		}
-		logger.Info("applied runtime security requirements ceiling %s", scoringConfig.SecurityRequirementsCeiling)
-	} else if scoringConfig.SecurityRequirementsCeiling != "" {
-		logger.Info("applied configured security requirements ceiling %s", scoringConfig.SecurityRequirementsCeiling)
+	if err := applySecurityRequirementsCeiling(cfg.SecurityRequirementsCeiling, scoringConfig, logger); err != nil {
+		return err
 	}
 
 	if cfg.CloudConfig != "" {
@@ -869,6 +865,39 @@ func logAvailableUpdate(logger *log.Logger, wait func() (updatecheck.Result, boo
 		return
 	}
 	logger.Warn("trivy-plugin-vdr %s is available (running %s); upgrade with 'trivy plugin upgrade vdr'. Release notes: %s", result.Latest, result.Current, result.URL)
+}
+
+// applySecurityRequirementsCeiling resolves --security-requirements-ceiling
+// against the loaded scoring config. A vector overrides every other source;
+// configmap applies the vdr-fedramp ConfigMap's securityRequirementsCeiling.
+// Without the flag the ConfigMap ceiling is ignored: ThreatAlert scores with the
+// ceiling it holds for the system, so a local scan does not cap by the
+// in-cluster copy unless asked to.
+func applySecurityRequirementsCeiling(flagValue string, scoringConfig *scoring.Config, logger *log.Logger) error {
+	switch ceiling := strings.TrimSpace(flagValue); {
+	case strings.EqualFold(ceiling, config.SecurityRequirementsCeilingConfigMap):
+		if scoringConfig.SecurityRequirementsCeilingFromConfigMap() {
+			logger.Info("applied ConfigMap security requirements ceiling %s", scoringConfig.SecurityRequirementsCeiling)
+		} else {
+			logger.Warn("--security-requirements-ceiling configmap was passed but the ConfigMap declares no securityRequirementsCeiling")
+			if scoringConfig.SecurityRequirementsCeiling != "" {
+				logger.Info("applied configured security requirements ceiling %s", scoringConfig.SecurityRequirementsCeiling)
+			}
+		}
+	case ceiling != "":
+		if err := scoringConfig.SetRuntimeSecurityRequirementsCeiling(ceiling); err != nil {
+			return fmt.Errorf("invalid --security-requirements-ceiling: %w", err)
+		}
+		logger.Info("applied runtime security requirements ceiling %s", scoringConfig.SecurityRequirementsCeiling)
+	default:
+		if discarded := scoringConfig.DiscardConfigMapSecurityRequirementsCeiling(); discarded != "" {
+			logger.Info("ignoring ConfigMap securityRequirementsCeiling %s; pass --security-requirements-ceiling configmap to apply it", discarded)
+		}
+		if scoringConfig.SecurityRequirementsCeiling != "" {
+			logger.Info("applied configured security requirements ceiling %s", scoringConfig.SecurityRequirementsCeiling)
+		}
+	}
+	return nil
 }
 
 func logIncompatibleClusterConfig(logger *log.Logger, err error) {

@@ -27,6 +27,11 @@ const (
 	// a manager node.
 	DefaultSwarmManagerTag = "swarm-node-type=manager"
 
+	// SecurityRequirementsCeilingConfigMap is the --security-requirements-ceiling
+	// value that applies the securityRequirementsCeiling declared in the
+	// vdr-fedramp ConfigMap instead of an explicit vector.
+	SecurityRequirementsCeilingConfigMap = "configmap"
+
 	FormatJSON      = "json"
 	FormatTable     = "table"
 	FormatCycloneDX = "cyclonedx"
@@ -240,7 +245,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.HTMLTemplate, "html-template", cfg.HTMLTemplate, "custom HTML report template path")
 	fs.StringVar(&cfg.CloudConfig, "cloud-config", cfg.CloudConfig, "optional vdr-cloud.yaml for standalone local or CI/CD ECS/Cloud Run scans; not required for stackArmor-managed scans, where the platform automatically associates cloud policy and recalculates scores")
 	fs.StringVar(&cfg.ScoringConfig, "scoring-config", cfg.ScoringConfig, "optional FedRAMP PAIN scoring config (YAML or JSON); built-in defaults are used when omitted")
-	fs.StringVar(&cfg.SecurityRequirementsCeiling, "security-requirements-ceiling", cfg.SecurityRequirementsCeiling, "optional system-and-agency CR/IR/AR ceiling for security-impact-profile PAIN scoring (for example cr-m_ir-m_ar-l)")
+	fs.StringVar(&cfg.SecurityRequirementsCeiling, "security-requirements-ceiling", cfg.SecurityRequirementsCeiling, "optional system-and-agency CR/IR/AR ceiling for security-impact-profile PAIN scoring: a vector (for example cr-m_ir-m_ar-l), or configmap to apply the vdr-fedramp ConfigMap's securityRequirementsCeiling; the ConfigMap value is ignored unless configmap is passed")
 	fs.StringVar(&cfg.MinSeverity, "min-severity", cfg.MinSeverity, "minimum severity")
 	fs.StringVar(&minEPSS, "min-epss", minEPSS, "minimum EPSS score from 0 to 1")
 	fs.BoolVar(&cfg.SkipEnrichment, "skip-enrichment", cfg.SkipEnrichment, "skip EPSS and Vulnrichment enrichment")

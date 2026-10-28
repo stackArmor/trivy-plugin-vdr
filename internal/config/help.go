@@ -372,7 +372,7 @@ func helpValueName(name string) string {
 		"release-name":                    "NAME",
 		"repo":                            "URL",
 		"scoring-config":                  "FILE",
-		"security-requirements-ceiling":   "VECTOR",
+		"security-requirements-ceiling":   "VECTOR|configmap",
 		"timeout":                         "DURATION",
 		"values":                          "FILE",
 		"vex-oci-registries":              "PREFIXES",

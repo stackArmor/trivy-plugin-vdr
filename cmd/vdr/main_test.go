@@ -20,6 +20,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/swarm"
 )
 
@@ -108,6 +109,44 @@ func TestRunK8sSetsExcludeNamespacesInK8sOptions(t *testing.T) {
 
 	if !found {
 		t.Fatal("runK8s does not set ExcludeNamespaces in k8s.Options")
+	}
+}
+
+func TestApplySecurityRequirementsCeilingSelectsSource(t *testing.T) {
+	configMap := map[string]string{"securityRequirementsCeiling": "cr-m_ir-m_ar-m"}
+	for _, tc := range []struct {
+		name        string
+		flag        string
+		configMap   map[string]string
+		wantCeiling string
+		wantLog     string
+	}{
+		{name: "default ignores ConfigMap", configMap: configMap, wantCeiling: "", wantLog: "ignoring ConfigMap securityRequirementsCeiling cr-m_ir-m_ar-m"},
+		{name: "configmap applies ConfigMap", flag: "configmap", configMap: configMap, wantCeiling: "cr-m_ir-m_ar-m", wantLog: "applied ConfigMap security requirements ceiling"},
+		{name: "configmap is case-insensitive", flag: " ConfigMap ", configMap: configMap, wantCeiling: "cr-m_ir-m_ar-m"},
+		{name: "configmap without ConfigMap ceiling warns", flag: "configmap", configMap: map[string]string{"class": "C"}, wantCeiling: "", wantLog: "declares no securityRequirementsCeiling"},
+		{name: "vector overrides ConfigMap", flag: "CR:H/IR:M/AR:L", configMap: configMap, wantCeiling: "cr-h_ir-m_ar-l", wantLog: "applied runtime security requirements ceiling"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scoringConfig := scoring.Default()
+			if err := scoringConfig.ApplyClusterDefaults(tc.configMap); err != nil {
+				t.Fatalf("ApplyClusterDefaults: %v", err)
+			}
+			var output bytes.Buffer
+			if err := applySecurityRequirementsCeiling(tc.flag, scoringConfig, log.NewWithWriter(&output, log.LevelInfo)); err != nil {
+				t.Fatalf("applySecurityRequirementsCeiling: %v", err)
+			}
+			if scoringConfig.SecurityRequirementsCeiling != tc.wantCeiling {
+				t.Fatalf("ceiling = %q, want %q", scoringConfig.SecurityRequirementsCeiling, tc.wantCeiling)
+			}
+			if !strings.Contains(output.String(), tc.wantLog) {
+				t.Fatalf("log output missing %q:\n%s", tc.wantLog, output.String())
+			}
+		})
+	}
+
+	if err := applySecurityRequirementsCeiling("high", scoring.Default(), log.NewWithWriter(io.Discard, log.LevelQuiet)); err == nil {
+		t.Fatal("invalid vector accepted")
 	}
 }
 

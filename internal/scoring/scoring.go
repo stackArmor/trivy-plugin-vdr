@@ -149,6 +149,12 @@ type Config struct {
 	classOrigin       string
 	multiAgencyOrigin string
 	ceilingOrigin     string
+
+	// preClusterCeiling/preClusterCeilingOrigin hold the ceiling in effect before
+	// ApplyClusterDefaults, so a ConfigMap ceiling the run did not opt into can
+	// be discarded without losing a --scoring-config value.
+	preClusterCeiling       string
+	preClusterCeilingOrigin string
 }
 
 // Input describes one finding-on-asset to be scored.
@@ -341,6 +347,7 @@ func (c *Config) ApplyClusterDefaults(data map[string]string) error {
 	savedThresholds := c.WordThresholds
 	pre := c.Defaults
 	preCeiling := c.SecurityRequirementsCeiling
+	c.preClusterCeiling, c.preClusterCeilingOrigin = c.SecurityRequirementsCeiling, c.ceilingOrigin
 	embeddedCeilingPresent := false
 	for _, key := range []string{"scoring.yaml", "scoring", "config.yaml", "config"} {
 		doc, ok := data[key]
@@ -424,6 +431,26 @@ func (c *Config) SetRuntimeSecurityRequirementsCeiling(value string) error {
 	c.SecurityRequirementsCeiling = parsed.WireValue()
 	c.ceilingOrigin = "runtime"
 	return nil
+}
+
+// SecurityRequirementsCeilingFromConfigMap reports whether the ceiling in
+// effect was supplied by the in-cluster ConfigMap.
+func (c *Config) SecurityRequirementsCeilingFromConfigMap() bool {
+	return c.ceilingOrigin == "configMap" && c.SecurityRequirementsCeiling != ""
+}
+
+// DiscardConfigMapSecurityRequirementsCeiling drops a ConfigMap-supplied
+// ceiling and restores whatever was in effect before the ConfigMap was applied.
+// The ConfigMap ceiling is a local approximation of the system's FIPS 199
+// categorization, so a run applies it only when explicitly asked to. It returns
+// the discarded ceiling, or "" when the ConfigMap supplied none.
+func (c *Config) DiscardConfigMapSecurityRequirementsCeiling() string {
+	if c.ceilingOrigin != "configMap" {
+		return ""
+	}
+	discarded := c.SecurityRequirementsCeiling
+	c.SecurityRequirementsCeiling, c.ceilingOrigin = c.preClusterCeiling, c.preClusterCeilingOrigin
+	return discarded
 }
 
 func (c *Config) validate() error {

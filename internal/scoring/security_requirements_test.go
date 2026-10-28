@@ -117,6 +117,56 @@ func TestInvalidDeclaredCeilingIsRejected(t *testing.T) {
 	}
 }
 
+func TestDiscardConfigMapCeilingRestoresPriorCeiling(t *testing.T) {
+	cfg := Default()
+	if err := cfg.ApplyClusterDefaults(map[string]string{
+		"securityRequirementsCeiling": "cr-m_ir-m_ar-m",
+	}); err != nil {
+		t.Fatalf("ApplyClusterDefaults: %v", err)
+	}
+	if !cfg.SecurityRequirementsCeilingFromConfigMap() {
+		t.Fatal("ConfigMap ceiling not attributed to the ConfigMap")
+	}
+	if got := cfg.DiscardConfigMapSecurityRequirementsCeiling(); got != "cr-m_ir-m_ar-m" {
+		t.Fatalf("discarded ceiling = %q", got)
+	}
+	if cfg.SecurityRequirementsCeiling != "" || cfg.SecurityRequirementsCeilingFromConfigMap() {
+		t.Fatalf("ceiling after discard = %q, want none", cfg.SecurityRequirementsCeiling)
+	}
+	if result := cfg.Score(Input{}); result.SecurityRequirementsCeiling != "" || result.SecurityRequirementsCeilingSource != "" {
+		t.Fatalf("discarded ceiling still scored: %+v", result)
+	}
+
+	fromFile := Default()
+	fromFile.SecurityRequirementsCeiling = "cr-h_ir-h_ar-l"
+	fromFile.ceilingOrigin = "scoringConfig"
+	if err := fromFile.ApplyClusterDefaults(map[string]string{
+		"securityRequirementsCeiling": "cr-l_ir-l_ar-l",
+	}); err != nil {
+		t.Fatalf("ApplyClusterDefaults: %v", err)
+	}
+	fromFile.DiscardConfigMapSecurityRequirementsCeiling()
+	if result := fromFile.Score(Input{}); result.SecurityRequirementsCeiling != "CR:H/IR:H/AR:L" ||
+		result.SecurityRequirementsCeilingSource != "scoringConfig" {
+		t.Fatalf("scoring-config ceiling not restored: %+v", result)
+	}
+}
+
+func TestDiscardConfigMapCeilingLeavesOtherSourcesAlone(t *testing.T) {
+	cfg := Default()
+	cfg.SecurityRequirementsCeiling = "cr-m_ir-m_ar-l"
+	cfg.ceilingOrigin = "scoringConfig"
+	if err := cfg.ApplyClusterDefaults(map[string]string{"class": "C"}); err != nil {
+		t.Fatalf("ApplyClusterDefaults: %v", err)
+	}
+	if got := cfg.DiscardConfigMapSecurityRequirementsCeiling(); got != "" {
+		t.Fatalf("discarded %q from a ConfigMap that declared no ceiling", got)
+	}
+	if cfg.SecurityRequirementsCeiling != "cr-m_ir-m_ar-l" {
+		t.Fatalf("scoring-config ceiling = %q", cfg.SecurityRequirementsCeiling)
+	}
+}
+
 func TestEmbeddedConfigMapCeilingIsNormalizedAndAttributed(t *testing.T) {
 	cfg := Default()
 	cfg.SecurityRequirementsCeiling = "cr-m_ir-l_ar-h"
