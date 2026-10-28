@@ -286,75 +286,47 @@ Without it, no service is reported as an observed negative.
 
 ## Required permissions
 
-`vdr` uses read-only access. Registry authentication and exposure analysis add optional reads; when those optional reads are denied, the run records warnings and continues where possible.
+`vdr` is read-only against orchestrator and cloud APIs. Registry authentication and exposure analysis add optional reads; when those optional reads are denied, the run records warnings and continues where possible.
 
-### Kubernetes native RBAC
+### Kubernetes RBAC
 
-For Kubernetes inventory in selected namespaces:
+Grant the identity running `trivy vdr k8s` the read-only ClusterRole in [`examples/rbac/vdr-read.yaml`](examples/rbac/vdr-read.yaml). That file is the canonical permission set, with a comment on what each rule is for, and a test keeps it in step with the API reads the plugin makes. Copy it rather than retyping the rules.
 
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: vdr-read
-rules:
-  - apiGroups: [""]
-    resources: ["namespaces", "pods", "replicationcontrollers", "services", "configmaps"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
-    verbs: ["list"]
-  - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
-    verbs: ["list"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "ingressclasses"]
-    verbs: ["list"]
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["gateways", "httproutes", "grpcroutes", "referencegrants"]
-    verbs: ["list"]
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["tcproutes", "tlsroutes", "udproutes"]
-    verbs: ["list"]
-  - apiGroups: ["networking.gke.io"]
-    resources: ["gcpbackendpolicies"]
-    verbs: ["list"]
-  - apiGroups: ["cloud.google.com"]
-    resources: ["backendconfigs"]
-    verbs: ["list"]
-  - apiGroups: ["elbv2.k8s.aws"]
-    resources: ["ingressclassparams"]
-    verbs: ["list"]
-  - apiGroups: ["gateway.k8s.aws"]
-    resources: ["loadbalancerconfigurations", "targetgroupconfigurations"]
-    verbs: ["list"]
-```
+| Rules | Used for | Required |
+|---|---|---|
+| `namespaces`, `pods`, `replicationcontrollers`, `services`; `apps` and `batch` workloads | Workload inventory and parent-controller enrichment | Yes |
+| `configmaps/get` | The optional `fedramp-vdr-trivy/vdr-fedramp` scoring ConfigMap | Yes, when the ConfigMap is used |
+| `nodes/list` | Cloud provider, account, and region detection | Optional |
+| `secrets/get` | Image-pull Secrets for registry authentication | Optional; see below |
+| `ingresses`, `ingressclasses`, `networkpolicies`; Gateway API resources | Exposure analysis and NetworkPolicy posture | For exposure analysis |
+| `networking.gke.io`, `cloud.google.com` resources | GKE IAP and backend metadata | Only on GKE with those resources |
+| `elbv2.k8s.aws`, `gateway.k8s.aws` resources | AWS Load Balancer Controller exposure | Only with that controller |
+
+Bind it with a `ClusterRoleBinding` for all namespaces, or a `RoleBinding` per namespace when using `--namespace` and you do not need cluster-scoped resources such as `namespaces`, `nodes`, and `ingressclasses`.
 
 Notes:
 
 - Choose one of these Secret-access options when registry authentication from Kubernetes `imagePullSecrets` is enabled:
-  - **Any referenced Secret:** keep the `secrets/get` ClusterRole rule above. VDR can get any Secret by name, but it still cannot list or watch Secrets.
-  - **Only approved Secret names:** omit the `secrets/get` rule above and apply the namespace-scoped [`vdr-image-pull-secret-reader` example](examples/rbac/vdr-image-pull-secret-reader.yaml), customized with the exact `imagePullSecret` names. Repeat it in each scanned namespace.
-- Use `--skip-registry-auth` or `--reachability-only` to avoid reading Secrets entirely.
-- `configmaps/get` is used for the optional `fedramp-vdr-trivy/vdr-fedramp` scoring ConfigMap.
+  - **Any referenced Secret:** keep the `secrets/get` rule. VDR can get any Secret by name, but it still cannot list or watch Secrets.
+  - **Only approved Secret names:** remove the `secrets/get` rule and apply the namespace-scoped [`vdr-image-pull-secret-reader` example](examples/rbac/vdr-image-pull-secret-reader.yaml), customized with the exact `imagePullSecret` names. Repeat it in each scanned namespace.
+- Use `--skip-registry-auth` or `--reachability-only` to avoid reading Secrets entirely; otherwise unreadable pull Secrets are reported as warnings and affected private images may fail to scan.
 - Exposure resources are optional for vulnerability scan reports. If `--skip-exposure` is set, `services`, `ingresses`, `ingressclasses`, Gateway API resources, GKE BackendConfig/GCPBackendPolicy, and AWS ALB/Gateway custom resources are not needed for exposure analysis. `--reachability-only` requires exposure resources and cannot be combined with `--skip-exposure`.
+- A denied exposure read is reported as a warning and marks exposure collection incomplete, so the run reports no internet-reachability negatives (NIRV) for that cluster. A denied NetworkPolicy read only leaves the NetworkPolicy posture fields unset.
 - TCPRoute, TLSRoute, and UDPRoute are read at `gateway.networking.k8s.io/v1`, which Gateway API v1.6 and later serve in the Standard channel, and fall back to the alpha versions that earlier and Experimental-channel installs serve. A route type served at no version is treated as an absent optional CRD. If the scanning identity is forbidden from listing a route type that no collected Gateway listener can accept (by listener protocol or `allowedRoutes.kinds`), the error is logged at debug level and does not mark exposure collection incomplete; a listener with a non-standard protocol is assumed to accept every route kind.
-- If you never use AWS ALB/Gateway resources, the `elbv2.k8s.aws` and `gateway.k8s.aws` rules can be omitted. If you never use GKE ingress/gateway IAP metadata, the `cloud.google.com/backendconfigs` and `networking.gke.io/gcpbackendpolicies` rules can be omitted.
-- `k8s-compliance` also requires read access to every resource type Trivy evaluates. The Pod, ReplicationController, Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob list permissions above provide VDR's parent-controller enrichment; other resource permissions depend on the built-in Trivy checks and APIs installed in the cluster.
+- `k8s-compliance` also requires read access to every resource type Trivy evaluates. The workload list permissions above provide VDR's parent-controller enrichment; other resource permissions depend on the built-in Trivy checks and APIs installed in the cluster.
 
 ### GKE IAM alternative
 
-When accessing GKE through Google IAM instead of a Kubernetes service account, the caller still needs Kubernetes API authorization after authentication. The broad managed role `roles/container.developer` is usually enough to read Kubernetes API objects through GKE credentials, but a narrower setup is preferred:
+When accessing GKE through Google IAM instead of a Kubernetes service account, the caller still needs Kubernetes API authorization after authentication:
 
 - Google IAM: `roles/container.clusterViewer` on the project or cluster, so the caller can discover and authenticate to the cluster.
-- Kubernetes RBAC: bind the native `ClusterRole` above to the Google principal or Google group.
+- Kubernetes RBAC: bind the `vdr-read` ClusterRole to the Google principal or Google group. This is the preferred setup because it can grant `get` on Secrets without broad write access.
+
+Alternatively, `roles/container.viewer` covers the workload, namespace, Service, Ingress, Gateway, ConfigMap, and GKE exposure metadata reads, but not Secret reads. Reading image-pull Secrets through GKE IAM requires a role containing `container.secrets.get`, such as `roles/container.developer` or a narrower custom role.
 
 ### Cloud Run IAM
 
-For Cloud Run inventory and exposure analysis, grant a custom Google Cloud IAM role with these permissions on the scanned project:
+The Cloud Run source uses Google Cloud APIs rather than Kubernetes RBAC. For inventory and exposure analysis, grant the identity running `trivy vdr cloudrun` a custom role with these permissions on the scanned project, or broader predefined roles such as `roles/run.viewer` and `roles/compute.networkViewer` together with `resourcemanager.projects.get`:
 
 ```text
 run.services.list
@@ -383,6 +355,28 @@ Notes:
 - Cloud Run jobs are always treated as not internet reachable, but `run.jobs.list` is required to inventory and scan their images.
 - `--reachability-only` uses the same Cloud Run and Compute read permissions, but skips registry authentication, Trivy image scans, EPSS, and Vulnrichment.
 - For private Google Artifact Registry/GCR images, the local `gcloud` identity used for `gcloud auth print-access-token` must also be able to read those images, for example with `roles/artifactregistry.reader` on the relevant repositories or project.
+
+### AWS ECS IAM
+
+The ECS source uses AWS APIs rather than Kubernetes RBAC. The identity running `trivy vdr ecs` should have read-only permissions in each scanned region:
+
+- `ecs:ListTaskDefinitions`
+- `ecs:DescribeTaskDefinition`
+- `ecs:ListClusters`
+- `ecs:ListServices`
+- `ecs:DescribeServices`
+- `ecs:ListTasks`
+- `ecs:DescribeTasks`
+- `elasticloadbalancing:DescribeTargetGroups`
+- `elasticloadbalancing:DescribeLoadBalancers`
+- `ec2:DescribeNetworkInterfaces`
+- `ec2:DescribeSecurityGroups`
+- `secretsmanager:GetSecretValue` when task definitions use `repositoryCredentials`
+- ECR token access through the existing AWS CLI auth path (`aws ecr get-login-password`)
+
+Task-definition `repositoryCredentials` secret values are used only to build scan-time Docker auth and are not written to inventory, reports, logs, or evidence. ECR auth can be disabled with `--no-ecr-auth`; all automatic registry auth can be disabled with `--skip-registry-auth`.
+
+ECS resources include a `runtime` object in resource-view JSON. Runtime status is based on ECS service desired/running counts and currently observed running tasks. `defined_only` task definitions are not treated as internet-reachable by default.
 
 ## Enrichment cache
 
@@ -416,91 +410,7 @@ Flags:
 - `--aws-role-arn <arn>` assumes the AWS role for every AWS call the plugin makes: ECS and EC2 APIs, SSM (swarm), and the `aws` CLI's ECR token fetch.
 - `--aws-profile <name>` selects the base credentials the role is assumed from (or used directly without a role). Without it the standard AWS chain applies: environment variables, `AWS_PROFILE`, web identity, container credentials (CodeBuild, ECS), then EC2 instance metadata.
 
-This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces. For Cloud Run and standalone image scans, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
-
-## Required permissions
-
-`vdr` is read-only against orchestrator and cloud APIs. It needs enough access to list workloads and routing objects, read the optional FedRAMP ConfigMap, read image-pull credentials when registry auth is enabled, and inspect exposure controls.
-
-### Kubernetes RBAC
-
-For Kubernetes clusters, grant the identity running `trivy vdr k8s` a read-only ClusterRole like this:
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: vdr-reader
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services", "namespaces", "configmaps"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["list"] # optional: cloud provider/account/region detection
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets"]
-    verbs: ["get", "list"]
-  - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "ingressclasses"]
-    verbs: ["get", "list"]
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "tlsroutes", "udproutes", "referencegrants"]
-    verbs: ["get", "list"]
-  - apiGroups: ["networking.gke.io"]
-    resources: ["gcpbackendpolicies"]
-    verbs: ["get", "list"]
-  - apiGroups: ["cloud.google.com"]
-    resources: ["backendconfigs"]
-    verbs: ["get", "list"]
-  - apiGroups: ["elbv2.k8s.aws"]
-    resources: ["ingressclassparams"]
-    verbs: ["get", "list"]
-  - apiGroups: ["gateway.k8s.aws"]
-    resources: ["loadbalancerconfigurations", "targetgroupconfigurations"]
-    verbs: ["get", "list"]
-```
-
-Bind it with a `ClusterRoleBinding` for all namespaces, or a `RoleBinding` per namespace when using `--namespace` and when you do not need cluster-scoped resources such as `namespaces` and `ingressclasses`. The displayed `secrets/get` rule is the broad option: it permits getting any Secret by name but not listing or watching Secrets. For exact-name access, omit that rule and apply the namespace-scoped [`vdr-image-pull-secret-reader` example](examples/rbac/vdr-image-pull-secret-reader.yaml). If `--skip-registry-auth` is set, Secret access can be omitted entirely; otherwise unreadable pull Secrets are reported as warnings and affected private images may fail to scan.
-
-For GKE IAM-based Kubernetes API access, `roles/container.viewer` is enough for workload, namespace, Service, Ingress, Gateway, ConfigMap, and GKE exposure metadata reads, but it does not include Secret reads. Reading image-pull Secrets through GKE IAM requires a role containing `container.secrets.get` such as `roles/container.developer`, or a narrower custom role. Prefer Kubernetes RBAC when possible because it can grant `get` on Secrets without broad write access.
-
-### Cloud Run IAM
-
-The planned Cloud Run source uses Google Cloud APIs rather than Kubernetes RBAC. The identity running `trivy vdr cloudrun` should have these project-level predefined roles, or a custom role with the listed permissions:
-
-- `roles/run.viewer` for Cloud Run inventory and IAM policy checks. Required permissions include `run.services.list`, `run.services.get`, `run.services.getIamPolicy`, `run.jobs.list`, `run.jobs.get`, and `run.locations.list`.
-- `roles/compute.networkViewer` for load balancer exposure analysis when a service uses `internal-and-cloud-load-balancing` ingress. Required permissions include reads for global and regional forwarding rules, target HTTP(S) proxies, URL maps, backend services, and network endpoint groups, plus backend service IAP settings.
-
-Cloud Run jobs are treated as not internet reachable and do not need load balancer analysis. Cloud Run services are considered internet reachable only when `allUsers` has `roles/run.invoker` and ingress is `all`, or when `internal-and-cloud-load-balancing` ingress is fronted by a public HTTP(S) load balancer whose Cloud Run backend is not IAP-protected.
-
-### AWS ECS IAM
-
-The ECS source uses AWS APIs rather than Kubernetes RBAC. The identity running `trivy vdr ecs` should have read-only permissions in each scanned region:
-
-- `ecs:ListTaskDefinitions`
-- `ecs:DescribeTaskDefinition`
-- `ecs:ListClusters`
-- `ecs:ListServices`
-- `ecs:DescribeServices`
-- `ecs:ListTasks`
-- `ecs:DescribeTasks`
-- `elasticloadbalancing:DescribeTargetGroups`
-- `elasticloadbalancing:DescribeLoadBalancers`
-- `ec2:DescribeNetworkInterfaces`
-- `ec2:DescribeSecurityGroups`
-- `secretsmanager:GetSecretValue` when task definitions use `repositoryCredentials`
-- ECR token access through the existing AWS CLI auth path (`aws ecr get-login-password`)
-
-Task-definition `repositoryCredentials` secret values are used only to build scan-time Docker auth and are not written to inventory, reports, logs, or evidence. ECR auth can be disabled with `--no-ecr-auth`; all automatic registry auth can be disabled with `--skip-registry-auth`.
-
-ECS resources include a `runtime` object in resource-view JSON. Runtime status is based on ECS service desired/running counts and currently observed running tasks. `defined_only` task definitions are not treated as internet-reachable by default.
+This adds one Kubernetes RBAC requirement beyond inventory collection: `get` on `secrets` in the scanned namespaces (see [Kubernetes RBAC](#kubernetes-rbac)). For Cloud Run and standalone image scans, no Kubernetes Secrets are read. The optional `gcloud` and `aws` CLIs must be installed and authenticated on the machine running the plugin.
 
 ## VEX attestations
 
