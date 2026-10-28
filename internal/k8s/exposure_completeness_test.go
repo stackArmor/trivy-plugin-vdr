@@ -10,6 +10,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
+	"strings"
 	"testing"
 )
 
@@ -72,5 +73,22 @@ func TestInventoryCapturesDirectNodeAccess(t *testing.T) {
 				t.Fatal("direct node access was not captured")
 			}
 		})
+	}
+}
+
+func TestDescribeAPIErrorLabelsAuthFailures(t *testing.T) {
+	resource := schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "gateways"}
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{apierrors.NewUnauthorized("token expired"), "authentication failed (HTTP 401 Unauthorized): "},
+		{apierrors.NewForbidden(resource, "", nil), "permission denied (HTTP 403 Forbidden): "},
+		{apierrors.NewServiceUnavailable("apiserver down"), "apiserver down"},
+	}
+	for _, tt := range tests {
+		if got := describeAPIError(tt.err); !strings.HasPrefix(got, tt.want) {
+			t.Errorf("describeAPIError(%v) = %q, want prefix %q", tt.err, got, tt.want)
+		}
 	}
 }
