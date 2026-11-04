@@ -6,11 +6,24 @@
 
 For a Docker Swarm cluster, `trivy-plugin-vdr` reads its cluster-wide FedRAMP
 metadata, security impact profiles and internet-reachability declarations from
-a Swarm config object named **`vdr-fedramp`**. It plays the same role as the
+a Swarm config object named **`vdr-fedramp`** by default. Use
+`--swarm-config-name <name>` to select another config when collecting over SSM.
+It plays the same role as the
 `vdr-fedramp` ConfigMap on Kubernetes ([`../configmaps`](../configmaps)).
 
 [`vdr-fedramp.yaml`](vdr-fedramp.yaml) is a starter file for a generic SaaS
-application.
+application. [`vdr-fedramp.extended.yaml`](vdr-fedramp.extended.yaml) is a larger
+fictional example with 68 image rules, decision-trace profiles, and reachability
+declarations. Its `example-*` image names and profile assignments are illustrative;
+replace them and verify the declarations against your deployment before use.
+
+To use the extended example under a custom Docker config name:
+
+```sh
+docker config create vdr-fedramp-example vdr-fedramp.extended.yaml
+trivy vdr swarm --region us-gov-west-1 --context-name swarm/example \
+  --swarm-config-name vdr-fedramp-example --output tcs-vdr.json
+```
 
 ## Deploy it into the cluster, don't mount it
 
@@ -43,7 +56,18 @@ docker config rm vdr-fedramp
 docker config create vdr-fedramp vdr-fedramp.yaml
 ```
 
-Keep the name `vdr-fedramp`; the scanner looks it up by that name.
+Keep the configured name, or create a new version and select it explicitly:
+
+```sh
+docker config create vdr-fedramp-v2 vdr-fedramp.yaml
+trivy vdr swarm --region us-gov-west-1 --context-name swarm/prod \
+  --swarm-config-name vdr-fedramp-v2 --output tcs-vdr.json
+```
+
+This also lets scans keep using the old config until the new one exists.
+`--swarm-config <file>` still overrides the collected config's contents. For
+offline scans with `--services-file`, use `--swarm-config` rather than
+`--swarm-config-name`.
 
 - `docker config rm` refuses to delete a config that a service uses. Because
   `vdr-fedramp` is never mounted, removal always succeeds. If it fails with

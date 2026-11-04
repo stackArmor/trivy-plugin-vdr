@@ -479,16 +479,17 @@ func TestRunSwarmCollectsOverSSM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gotTag, gotRegion, gotProfile, gotRole string
+	var gotTag, gotRegion, gotProfile, gotRole, gotConfigName string
 	original := collectSwarmViaSSM
 	collectSwarmViaSSM = func(_ context.Context, cfg config.Config) (swarm.Collected, error) {
 		gotTag, gotRegion, gotProfile, gotRole = cfg.SwarmSSMManagerTag, cfg.Regions[0], cfg.AWSProfile, cfg.AWSRoleARN
+		gotConfigName = cfg.SwarmConfigName
 		return swarm.Collected{InstanceID: "i-1", Services: services, FedRAMPConfig: []byte("class: C\n")}, nil
 	}
 	t.Cleanup(func() { collectSwarmViaSSM = original })
 
 	cfg, err := config.Parse([]string{"swarm", "--ssm-manager-tag", "swarm-node-type=manager", "--region", "us-gov-west-1",
-		"--aws-profile", "p", "--aws-role-arn", "arn:aws-us-gov:iam::111111111111:role/r", "--context-name", "swarm/test", "--reachability-only"})
+		"--aws-profile", "p", "--aws-role-arn", "arn:aws-us-gov:iam::111111111111:role/r", "--context-name", "swarm/test", "--reachability-only", "--swarm-config-name", "platform-vdr-v2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,12 +500,63 @@ func TestRunSwarmCollectsOverSSM(t *testing.T) {
 	if gotTag != "swarm-node-type=manager" || gotRegion != "us-gov-west-1" || gotProfile != "p" || gotRole != "arn:aws-us-gov:iam::111111111111:role/r" {
 		t.Fatalf("collector got tag=%q region=%q profile=%q role=%q", gotTag, gotRegion, gotProfile, gotRole)
 	}
+	if gotConfigName != "platform-vdr-v2" {
+		t.Fatalf("collector got config name %q", gotConfigName)
+	}
 	var report model.Report
 	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
 	if len(report.Resources) != 6 || report.Class != "C" {
 		t.Fatalf("resources=%d class=%q, want the collected inventory and config", len(report.Resources), report.Class)
+	}
+}
+
+func TestRunSwarmNamedConfigFallbackAndOverride(t *testing.T) {
+	services, err := os.ReadFile("../../internal/swarm/testdata/services.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, collected, local, wantClass string
+		wantWarning                       bool
+	}{
+		{name: "missing config", collected: "[]", wantClass: "B", wantWarning: true},
+		{name: "local override", collected: "class: C\n", local: "class: D\n", wantClass: "D"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := collectSwarmViaSSM
+			collectSwarmViaSSM = func(context.Context, config.Config) (swarm.Collected, error) {
+				return swarm.Collected{InstanceID: "i-1", Services: services, FedRAMPConfig: []byte(tc.collected)}, nil
+			}
+			t.Cleanup(func() { collectSwarmViaSSM = original })
+			args := []string{"swarm", "--region", "us-gov-west-1", "--context-name", "swarm/test", "--swarm-config-name", "platform-vdr-v2", "--reachability-only"}
+			if tc.local != "" {
+				path := filepath.Join(t.TempDir(), "override.yaml")
+				if err := os.WriteFile(path, []byte(tc.local), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				args = append(args, "--swarm-config", path)
+			}
+			cfg, err := config.Parse(args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output, logs bytes.Buffer
+			if err := runSwarm(context.Background(), cfg, log.NewWithWriter(&logs, log.LevelInfo), &output); err != nil {
+				t.Fatal(err)
+			}
+			var report model.Report
+			if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+				t.Fatal(err)
+			}
+			if report.Class != tc.wantClass {
+				t.Fatalf("class=%q, want %q", report.Class, tc.wantClass)
+			}
+			if tc.wantWarning && !strings.Contains(logs.String(), "platform-vdr-v2 config does not exist") {
+				t.Fatalf("missing config warning must name the selected config: %s", logs.String())
+			}
+		})
 	}
 }
 

@@ -110,6 +110,8 @@ type Config struct {
 	SwarmServicesFile string
 	// SwarmConfigFile is the vdr-fedramp Swarm config (docker config inspect output or plain YAML).
 	SwarmConfigFile string
+	// SwarmConfigName selects the Docker config collected from the manager over SSM.
+	SwarmConfigName string
 	// SwarmSSMManagerTag (key=value) collects the swarm inventory over SSM Run
 	// Command from a running EC2 manager node instead of --services-file.
 	SwarmSSMManagerTag string
@@ -270,6 +272,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&cfg.SwarmServicesFile, "services-file", cfg.SwarmServicesFile, "offline alternative to collecting from the cluster: docker service inspect output (JSON array, or {services, networks})")
 	fs.StringVar(&cfg.SwarmSSMManagerTag, "ssm-manager-tag", cfg.SwarmSSMManagerTag, "EC2 tag (key=value) of the swarm manager node the inventory is collected from over SSM (default swarm-node-type=manager)")
 	fs.StringVar(&cfg.SwarmConfigFile, "swarm-config", cfg.SwarmConfigFile, "vdr-fedramp Swarm config: docker config inspect output or the plain YAML file")
+	fs.StringVar(&cfg.SwarmConfigName, "swarm-config-name", cfg.SwarmConfigName, "Docker config name to read from the Swarm manager over SSM (default vdr-fedramp); --swarm-config overrides its contents")
 	fs.BoolVar(&cfg.SkipUpdateCheck, "skip-update-check", cfg.SkipUpdateCheck, "skip the check for a newer plugin release (also VDR_NO_UPDATE_CHECK=1)")
 	fs.Var(&valuesFiles, "values", "Helm values file for the application chart; may be repeated, rightmost file wins")
 	fs.StringVar(&cfg.ReleaseName, "release-name", cfg.ReleaseName, "Helm release name used to render the application chart")
@@ -337,6 +340,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	cloudRunSpecificFlag := ""
 	swarmSpecificFlag := ""
 	ssmTagSet := false
+	swarmConfigNameSet := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "all-namespaces":
@@ -365,10 +369,13 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			k8sSpecificFlag = f.Name
 		case "include-functions":
 			cloudRunSpecificFlag = f.Name
-		case "services-file", "swarm-config", "ssm-manager-tag":
+		case "services-file", "swarm-config", "swarm-config-name", "ssm-manager-tag":
 			swarmSpecificFlag = f.Name
 			if f.Name == "ssm-manager-tag" {
 				ssmTagSet = true
+			}
+			if f.Name == "swarm-config-name" {
+				swarmConfigNameSet = true
 			}
 		}
 		if source == SourceK8sCompliance && !complianceFlagAllowed(f.Name) && complianceUnsupportedFlag == "" {
@@ -490,6 +497,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		}
 	}
 	if cfg.Source == SourceSwarm {
+		if strings.TrimSpace(cfg.SwarmConfigName) == "" {
+			return Config{}, errors.New("--swarm-config-name cannot be empty")
+		}
 		if namespaceSet {
 			return Config{}, errors.New("--namespace is only valid for source k8s")
 		}
@@ -508,6 +518,9 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		// By default the inventory is collected from the cluster over SSM;
 		// --services-file is the offline alternative.
 		if strings.TrimSpace(cfg.SwarmServicesFile) != "" {
+			if swarmConfigNameSet {
+				return Config{}, errors.New("--swarm-config-name is only valid when collecting from the cluster (without --services-file); use --swarm-config for a local file")
+			}
 			if ssmTagSet {
 				return Config{}, errors.New("use either --services-file or --ssm-manager-tag for source swarm, not both")
 			}
@@ -666,6 +679,7 @@ func Default() Config {
 		CacheMinFreeGB:        10,
 		CacheMinFreePercent:   10,
 		MinEPSS:               -1,
+		SwarmConfigName:       "vdr-fedramp",
 	}
 }
 

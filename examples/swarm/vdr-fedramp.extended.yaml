@@ -1,0 +1,171 @@
+# Extended Docker Swarm configuration example for a fictional SaaS platform.
+# All image names are illustrative placeholders; replace them for your environment.
+# Profile assignments illustrate policy decision traces, not an assessed system.
+# Review each profile and reachability declaration before production use.
+#
+# Create on a manager: docker config create vdr-fedramp-example vdr-fedramp.extended.yaml
+# Scan: trivy vdr swarm --region us-gov-west-1 --context-name swarm/example \
+#         --swarm-config-name vdr-fedramp-example
+# The config is read directly from the manager and need not be mounted in a service.
+
+class: "C"            # Illustrative FedRAMP Certification Class
+multiAgency: "true"   # Illustrative multi-agency deployment
+# securityRequirementsCeiling: cr-h_ir-h_ar-h
+
+scoring.yaml: |
+  # Match image repository basenames, ignoring registry, tag and digest.
+  # First match wins; keep specific names above overlapping globs.
+  imageRules:
+    - match: example-administration-api
+      securityImpactProfile: privileged-access.identity-control.shared-critical-path
+    - match: example-authentication-api
+      securityImpactProfile: root-secrets.identity-control.shared-degradation
+    - match: example-authentication-worker
+      securityImpactProfile: root-secrets.identity-control.shared-degradation
+    - match: example-identity-api
+      securityImpactProfile: root-secrets.identity-control.shared-degradation
+    - match: example-provisioning-api
+      securityImpactProfile: privileged-access.identity-control.bounded-service
+    - match: example-authorization-api
+      securityImpactProfile: privileged-access.identity-control.shared-degradation
+    - match: example-credential-reader
+      securityImpactProfile: privileged-access.identity-control.deferrable-work
+    - match: example-tenant-boundary-api
+      securityImpactProfile: privileged-access.security-enforcement.shared-critical-path
+    - match: example-tenant-management-api
+      securityImpactProfile: control-metadata.config-control.operations-support
+    - match: example-audit-records-api
+      securityImpactProfile: restricted-evidence.authoritative-record.operations-support
+    - match: example-resource-admin-api
+      securityImpactProfile: privileged-access.config-control.bounded-service
+    - match: example-portal-api
+      securityImpactProfile: privileged-access.identity-control.shared-degradation
+    - match: example-public-gateway
+      securityImpactProfile: service-content.security-enforcement.shared-critical-path
+    - match: example-integration-gateway
+      securityImpactProfile: service-content.security-enforcement.shared-critical-path
+    - match: example-endpoint-gateway
+      securityImpactProfile: service-content.security-enforcement.bounded-service
+    - match: example-desktop-gateway
+      securityImpactProfile: service-content.security-enforcement.bounded-service
+    - match: example-mobile-gateway
+      securityImpactProfile: service-content.security-enforcement.bounded-service
+    - match: example-console-gateway
+      securityImpactProfile: service-content.scoped-write.bounded-service
+    - match: example-entitlement-api
+      securityImpactProfile: control-metadata.authoritative-record.bounded-service
+    - match: example-entitlement-gateway
+      securityImpactProfile: control-metadata.security-enforcement.bounded-service
+    - match: example-records-api
+      securityImpactProfile: federal-records.scoped-write.bounded-service
+    - match: example-records-processor
+      securityImpactProfile: federal-records.scoped-write.bounded-service
+    - match: example-annotation-api
+      securityImpactProfile: federal-records.scoped-write.bounded-service
+    - match: example-records-storage
+      securityImpactProfile: federal-records.scoped-write.mission-essential
+    - match: example-submission-api
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: example-submission-queue
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: example-resource-catalog-api
+      securityImpactProfile: ops-metadata.authoritative-record.bounded-service
+    - match: example-deferred-task-api
+      securityImpactProfile: service-content.scoped-write.bounded-service
+    - match: example-remote-submission-api
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: example-task-holding-api
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: example-protocol-gateway
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: example-remote-gateway
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: example-resource-gateway
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: example-registration-api
+      securityImpactProfile: ops-metadata.authoritative-record.bounded-service
+    - match: example-statistics-api
+      securityImpactProfile: routing-metadata.record-keeping.deferrable-work
+    - match: example-statistics-worker
+      securityImpactProfile: routing-metadata.bounded-processing.deferrable-work
+    - match: example-processing-api
+      securityImpactProfile: federal-records.authoritative-record.mission-essential
+    - match: example-hierarchy-api
+      securityImpactProfile: service-content.authoritative-record.bounded-service
+    - match: example-console-ui
+      securityImpactProfile: service-content.bounded-processing.deferrable-work
+    - match: example-portal-cdn
+      securityImpactProfile: public-content.opaque-forwarding.bounded-service
+    - match: example-assets-cdn
+      securityImpactProfile: public-content.opaque-forwarding.bounded-service
+    - match: example-portal-ui-*
+      securityImpactProfile: service-content.bounded-processing.deferrable-work
+    - match: example-assets-ui-*
+      securityImpactProfile: service-content.bounded-processing.deferrable-work
+    - match: example-workflow-api
+      securityImpactProfile: service-content.authoritative-record.bounded-service
+    - match: example-workflow-worker
+      securityImpactProfile: service-content.authoritative-record.bounded-service
+    - match: example-workflow-gateway
+      securityImpactProfile: service-content.authoritative-record.bounded-service
+    - match: example-workflow-engine
+      securityImpactProfile: service-content.authoritative-record.bounded-service
+    - match: example-routing-engine
+      securityImpactProfile: routing-metadata.bounded-processing.bounded-service
+    - match: example-event-bus
+      securityImpactProfile: service-content.authoritative-record.shared-degradation
+    - match: example-analytics-gateway
+      securityImpactProfile: service-content.record-keeping.deferrable-work
+    - match: example-reporting-gateway
+      securityImpactProfile: service-content.record-keeping.deferrable-work
+    - match: example-usage-api
+      securityImpactProfile: routing-metadata.record-keeping.deferrable-work
+    - match: example-telemetry-collector
+      securityImpactProfile: ops-metadata.bounded-processing.deferrable-work
+    - match: example-quota-api
+      securityImpactProfile: routing-metadata.scoped-write.bounded-service
+    - match: example-settings-store
+      securityImpactProfile: routing-metadata.scoped-write.deferrable-work
+    - match: example-integration-worker
+      securityImpactProfile: service-content.bounded-processing.bounded-service
+    - match: example-message-dispatcher
+      securityImpactProfile: service-content.bounded-processing.bounded-service
+    - match: example-notification-worker
+      securityImpactProfile: opaque-transit.bounded-processing.deferrable-work
+    - match: example-email-worker
+      securityImpactProfile: service-content.bounded-processing.deferrable-work
+    - match: example-status-worker
+      securityImpactProfile: routing-metadata.record-keeping.deferrable-work
+    - match: example-scheduled-tasks
+      securityImpactProfile: opaque-transit.disposable-state.deferrable-work
+    - match: example-feature-flags
+      securityImpactProfile: routing-metadata.coordination-state.bounded-service
+    - match: example-conversion-utility
+      securityImpactProfile: opaque-transit.disposable-state.deferrable-work
+    - match: example-health-endpoint
+      securityImpactProfile: public-content.advisory-output.deferrable-work
+    - match: example-build-orchestrator
+      securityImpactProfile: control-metadata.coordination-state.change-deferred
+    - match: example-infrastructure-controller
+      securityImpactProfile: control-metadata.foundation-control.operations-support
+    - match: example-edge-proxy
+      securityImpactProfile: service-content.security-enforcement.shared-critical-path
+    - match: example-manager-proxy
+      securityImpactProfile: service-content.security-enforcement.operations-support
+
+# Reachability declarations are illustrative and must match deployment evidence.
+# Service labels take precedence over these rules. A false declaration needs a
+# justification. Unmatched services with published ports or proxy routes are
+# reported as unassessed.
+exposure.yaml: |
+  proxyLabelPrefixes:
+    - traefik.http.routers.
+  rules:
+    - image: example-edge-proxy
+      internetReachable: true
+    # Add each service verified as routed from the public edge, for example:
+    # - image: example-public-gateway
+    #   internetReachable: true
+    - image: example-telemetry-collector
+      internetReachable: false
+      justification: "Illustrative private telemetry service with no published ports or proxy route; verify against deployment evidence."

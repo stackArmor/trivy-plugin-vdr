@@ -533,6 +533,7 @@ var collectSwarmViaSSM = func(ctx context.Context, cfg config.Config) (swarm.Col
 	return swarm.CollectViaSSM(ctx, ssm.NewFromConfig(awsCfg), ec2.NewFromConfig(awsCfg), swarm.SSMOptions{
 		ManagerTagKey:   key,
 		ManagerTagValue: value,
+		ConfigName:      cfg.SwarmConfigName,
 	})
 }
 
@@ -576,7 +577,11 @@ func runSwarm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout
 			return fmt.Errorf("%s: %w", configSource, err)
 		}
 		if len(data) == 0 {
-			logger.Warn("swarm config from %s is empty or the %s config does not exist; using built-in defaults (Class B, single-agency)", configSource, swarm.FedRAMPConfigName)
+			configName := cfg.SwarmConfigName
+			if configName == "" {
+				configName = swarm.FedRAMPConfigName
+			}
+			logger.Warn("swarm config from %s is empty or the %s config does not exist; using built-in defaults (Class B, single-agency)", configSource, configName)
 		}
 		// A supplied config fails the run instead of silently falling back
 		// to defaults, as --sip-config-map does.

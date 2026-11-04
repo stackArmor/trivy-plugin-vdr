@@ -222,8 +222,10 @@ command output at 24,000 characters. It needs `ec2:DescribeInstances`,
 `ssm:SendCommand` (on the manager and the `AWS-RunShellScript` document),
 `ssm:GetCommandInvocation`, and ECR pull access for ECR images; no S3 bucket.
 Credentials come from the standard AWS chain; add `--aws-profile` and/or
-`--aws-role-arn` to pick them. `--swarm-config` overrides the collected
-`vdr-fedramp` config.
+`--aws-role-arn` to pick them. Use `--swarm-config-name <name>` to read a
+different Docker config instead of `vdr-fedramp`, for example
+`--swarm-config-name vdr-fedramp-v2`. `--swarm-config <file>` overrides the
+collected config's contents with a local file.
 
 **Offline alternative.** For a swarm the plugin cannot reach over SSM, collect
 the objects on a manager node and pass them as files instead of `--region`:
@@ -243,12 +245,14 @@ stack (`com.docker.stack.namespace`, or `swarm` when deployed without a stack)
 as the namespace, and its single container named after the service.
 `--context-name` is required and names the cluster in the report.
 
-**Metadata** comes from a Swarm config object named `vdr-fedramp`, deployed
+**Metadata** comes from a Swarm config object named `vdr-fedramp` by default
+(override with `--swarm-config-name`), deployed
 into the swarm but never mounted into a service, and from per-service labels.
 It uses the same keys as the Kubernetes ConfigMap (`class`, `multiAgency`,
 `securityRequirementsCeiling`, `scoring.yaml`) plus `exposure.yaml`. Swarm
 configs cannot be edited, so update it by removing and recreating it under the
-same name. See [`examples/swarm`](examples/swarm) for a starter file and the
+same name, or create a new config and scan with `--swarm-config-name <new-name>`.
+See [`examples/swarm`](examples/swarm) for a starter file and the
 deploy and update steps. An explicitly supplied `--swarm-config` that does not
 validate fails the run; an empty one (`[]`) falls back to the built-in defaults
 with a warning.

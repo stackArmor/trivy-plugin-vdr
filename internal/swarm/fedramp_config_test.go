@@ -111,19 +111,29 @@ func TestLoadFedRAMPConfigMalformedPart(t *testing.T) {
 }
 
 func TestExampleConfigParses(t *testing.T) {
-	data, exposure, err := LoadFedRAMPConfig("../../examples/swarm/vdr-fedramp.yaml")
-	if err != nil {
-		t.Fatalf("example config: %v", err)
-	}
-	sc := scoring.Default()
-	if err := sc.ApplyClusterDefaults(data); err != nil {
-		t.Fatalf("example scoring.yaml does not validate: %v", err)
-	}
-	if len(sc.ImageRules) != 19 || len(sc.NameRules) != 1 {
-		t.Fatalf("example rules: %d image, %d name; want 19 and 1", len(sc.ImageRules), len(sc.NameRules))
-	}
-	if len(exposure.Rules) != 4 {
-		t.Fatalf("example exposure rules = %d, want 4", len(exposure.Rules))
+	for _, tc := range []struct {
+		file                                 string
+		imageRules, nameRules, exposureRules int
+	}{
+		{file: "vdr-fedramp.yaml", imageRules: 19, nameRules: 1, exposureRules: 4},
+		{file: "vdr-fedramp.extended.yaml", imageRules: 68, exposureRules: 2},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			data, exposure, err := LoadFedRAMPConfig("../../examples/swarm/" + tc.file)
+			if err != nil {
+				t.Fatalf("example config: %v", err)
+			}
+			sc := scoring.Default()
+			if err := sc.ApplyClusterDefaults(data); err != nil {
+				t.Fatalf("example scoring.yaml does not validate: %v", err)
+			}
+			if len(sc.ImageRules) != tc.imageRules || len(sc.NameRules) != tc.nameRules {
+				t.Fatalf("example rules: %d image, %d name; want %d and %d", len(sc.ImageRules), len(sc.NameRules), tc.imageRules, tc.nameRules)
+			}
+			if len(exposure.Rules) != tc.exposureRules {
+				t.Fatalf("example exposure rules = %d, want %d", len(exposure.Rules), tc.exposureRules)
+			}
+		})
 	}
 }
 

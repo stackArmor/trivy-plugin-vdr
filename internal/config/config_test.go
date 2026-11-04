@@ -1158,7 +1158,7 @@ func TestParseSwarmRequiresServicesFileAndContextName(t *testing.T) {
 }
 
 func TestSwarmFlagsRejectedForOtherSources(t *testing.T) {
-	for _, flagName := range []string{"--services-file", "--swarm-config"} {
+	for _, flagName := range []string{"--services-file", "--swarm-config", "--swarm-config-name"} {
 		_, err := Parse([]string{"k8s", flagName, "x.json"})
 		if err == nil || !strings.Contains(err.Error(), "only valid for source swarm") {
 			t.Fatalf("%s with k8s: err = %v", flagName, err)
@@ -1184,7 +1184,7 @@ func TestSwarmHelpListsFlags(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected flag.ErrHelp")
 	}
-	for _, want := range []string{"--services-file", "--swarm-config", "--context-name"} {
+	for _, want := range []string{"--services-file", "--swarm-config", "--swarm-config-name NAME", "--context-name"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("swarm help missing %s:\n%s", want, out.String())
 		}
@@ -1231,6 +1231,9 @@ func TestParseSwarmDefaultsToClusterCollection(t *testing.T) {
 	if cfg.SwarmSSMManagerTag != DefaultSwarmManagerTag || DefaultSwarmManagerTag != "swarm-node-type=manager" {
 		t.Fatalf("manager tag = %q, want the default %q", cfg.SwarmSSMManagerTag, "swarm-node-type=manager")
 	}
+	if cfg.SwarmConfigName != "vdr-fedramp" {
+		t.Fatalf("config name = %q, want vdr-fedramp", cfg.SwarmConfigName)
+	}
 	cfg, err = Parse([]string{"swarm", "--region", "us-gov-west-1", "--ssm-manager-tag", "role=swarm-manager", "--context-name", "swarm/prod"})
 	if err != nil || cfg.SwarmSSMManagerTag != "role=swarm-manager" {
 		t.Fatalf("explicit tag: cfg=%+v err=%v", cfg, err)
@@ -1238,5 +1241,25 @@ func TestParseSwarmDefaultsToClusterCollection(t *testing.T) {
 	cfg, err = Parse([]string{"swarm", "--services-file", "s.json", "--context-name", "swarm/prod"})
 	if err != nil || cfg.SwarmSSMManagerTag != "" {
 		t.Fatalf("a services file must not collect over SSM: cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestParseSwarmConfigName(t *testing.T) {
+	base := []string{"swarm", "--region", "us-gov-west-1", "--context-name", "swarm/test"}
+	cfg, err := Parse(append(base, "--swarm-config-name", "platform-vdr-v2", "--swarm-config", "override.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SwarmConfigName != "platform-vdr-v2" || cfg.SwarmConfigFile != "override.yaml" {
+		t.Fatalf("config name=%q file=%q", cfg.SwarmConfigName, cfg.SwarmConfigFile)
+	}
+	for _, name := range []string{"", "   "} {
+		if _, err := Parse(append(base, "--swarm-config-name", name)); err == nil || !strings.Contains(err.Error(), "--swarm-config-name cannot be empty") {
+			t.Fatalf("name %q: err = %v", name, err)
+		}
+	}
+	_, err = Parse([]string{"swarm", "--services-file", "services.json", "--context-name", "swarm/test", "--swarm-config-name", "platform-vdr-v2"})
+	if err == nil || !strings.Contains(err.Error(), "without --services-file") {
+		t.Fatalf("offline config name: err = %v", err)
 	}
 }

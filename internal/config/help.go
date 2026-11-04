@@ -145,6 +145,7 @@ func sourceExamples(source string) string {
 		return `  vdr swarm --region us-gov-west-1 --context-name swarm/prod --output tcs-vdr.json --html-output vdr.html
   vdr swarm --region us-gov-west-1 --aws-role-arn ROLE_ARN --context-name swarm/prod --reachability-only
   vdr swarm --region us-gov-west-1 --ssm-manager-tag role=swarm-manager --context-name swarm/prod
+  vdr swarm --region us-gov-west-1 --swarm-config-name vdr-fedramp-v2 --context-name swarm/prod
   vdr swarm --services-file services.json --context-name swarm/prod`
 	default:
 		return ""
@@ -164,7 +165,7 @@ func sourceHelpNote(source string) string {
 	case SourceCloudRun, SourceImage:
 		return "Credentials are loaded automatically from the local Docker config and supported cloud CLIs."
 	case SourceSwarm:
-		return "The inventory and the vdr-fedramp config are read from the first running EC2 instance tagged swarm-node-type=manager (override with --ssm-manager-tag). Offline: collect SERVICES.json on a manager with docker service inspect $(docker service ls -q) and pass --services-file."
+		return "The inventory and the vdr-fedramp config (override with --swarm-config-name) are read from the first running EC2 instance tagged swarm-node-type=manager (override with --ssm-manager-tag). Offline: collect SERVICES.json on a manager with docker service inspect $(docker service ls -q) and pass --services-file."
 	default:
 		return ""
 	}
@@ -206,7 +207,7 @@ func sourceHelpSections(source string) []helpSection {
 	case SourceSwarm:
 		sections = append(sections, helpSection{
 			title: "Swarm source",
-			flags: []string{"region", "context-name", "ssm-manager-tag", "swarm-config", "services-file"},
+			flags: []string{"region", "context-name", "ssm-manager-tag", "swarm-config-name", "swarm-config", "services-file"},
 		})
 	case SourceHelm:
 		sections = append(sections,
@@ -341,6 +342,7 @@ func helpValueName(name string) string {
 		"services-file":                   "FILE",
 		"ssm-manager-tag":                 "KEY=VALUE",
 		"swarm-config":                    "FILE",
+		"swarm-config-name":               "NAME",
 		"aws-role-arn":                    "ARN",
 		"aws-profile":                     "PROFILE",
 		"cache-cleanup":                   "POLICY",

@@ -112,7 +112,10 @@ func CollectViaSSM(ctx context.Context, client SSMClient, ec2Client EC2Client, o
 	}
 	// For a missing config docker prints "[]" and exits non-zero; || true
 	// keeps that output without adding to it.
-	config, err := runner.fetch(ctx, fmt.Sprintf("docker config inspect %s 2>/dev/null || true", opts.ConfigName))
+	// The name is user-supplied: pass it as one literal shell argument and
+	// terminate option parsing so it cannot become a command or a Docker flag.
+	configName := "'" + strings.ReplaceAll(opts.ConfigName, "'", "'\"'\"'") + "'"
+	config, err := runner.fetch(ctx, fmt.Sprintf("docker config inspect -- %s 2>/dev/null || true", configName))
 	if err != nil {
 		return Collected{}, fmt.Errorf("collect %s config from %s: %w", opts.ConfigName, instanceID, err)
 	}

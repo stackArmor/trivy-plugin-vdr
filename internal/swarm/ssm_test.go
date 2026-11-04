@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -211,6 +212,41 @@ func TestCollectViaSSMMissingConfigIsEmptyInspect(t *testing.T) {
 	data, _, err := ParseFedRAMPConfig(collected.FedRAMPConfig)
 	if err != nil || len(data) != 0 {
 		t.Fatalf("data = %v, err = %v", data, err)
+	}
+}
+
+func TestCollectViaSSMConfigName(t *testing.T) {
+	for _, name := range []string{"", "platform-vdr-v2", "name with spaces", "-option", "x'; printf injected; #$(printf expanded)", "name\nwith-newline"} {
+		t.Run(name, func(t *testing.T) {
+			client, state := newFakeSSM(t, "[]", "[]")
+			opts := testSSMOptions()
+			opts.ConfigName = name
+			if _, err := CollectViaSSM(context.Background(), client, &fakeEC2{ids: []string{"i-1"}}, opts); err != nil {
+				t.Fatal(err)
+			}
+			var producer string
+			for _, script := range state.commands {
+				if _, after, ok := strings.Cut(script, "{ docker config inspect"); ok {
+					producer, _, _ = strings.Cut("docker config inspect"+after, " ; } | gzip")
+				}
+			}
+			if producer == "" {
+				t.Fatal("no docker config inspect command was sent")
+			}
+			// Execute the generated shell command with a fake Docker function:
+			// the config name must arrive as one literal argument, after --.
+			output, err := exec.Command("sh", "-c", `docker() { printf '%s\000' "$@"; }; `+producer).Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantName := name
+			if wantName == "" {
+				wantName = FedRAMPConfigName
+			}
+			if want := "config\x00inspect\x00--\x00" + wantName + "\x00"; string(output) != want {
+				t.Fatalf("Docker arguments = %q, want %q", output, want)
+			}
+		})
 	}
 }
 

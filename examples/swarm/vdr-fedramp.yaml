@@ -5,6 +5,7 @@
 # a manager node with `docker config inspect vdr-fedramp`. See README.md in this
 # directory for deploy and update steps. Swarm configs cannot be edited, so an
 # update means deleting and recreating the config under the same name.
+# To use a different Docker config name, pass --swarm-config-name <name>.
 #
 # The keys match the Kubernetes vdr-fedramp ConfigMap (class, multiAgency,
 # securityRequirementsCeiling, scoring.yaml), plus exposure.yaml, because Swarm
