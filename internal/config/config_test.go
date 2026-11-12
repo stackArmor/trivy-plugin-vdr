@@ -1263,3 +1263,25 @@ func TestParseSwarmConfigName(t *testing.T) {
 		t.Fatalf("offline config name: err = %v", err)
 	}
 }
+
+func TestKubernetesDebugBundleFlag(t *testing.T) {
+	cfg, err := Parse([]string{"k8s", "--debug-bundle", "support.zip", "--namespace", "default"})
+	if err != nil || cfg.DebugBundle != "support.zip" || cfg.AllNamespaces {
+		t.Fatalf("config=%+v err=%v", cfg, err)
+	}
+	for _, args := range [][]string{
+		{"image", "--debug-bundle", "support.zip", "alpine:latest"},
+		{"k8s-compliance", "--debug-bundle", "support.zip"},
+		{"k8s", "--debug-bundle", "report.json", "--output", "./report.json"},
+		{"k8s", "--debug-bundle", "report.html", "--html-output", "./report.html"},
+	} {
+		if _, err := Parse(args); err == nil {
+			t.Errorf("accepted %v", args)
+		}
+	}
+	var help bytes.Buffer
+	_, err = ParseWithOutput([]string{"k8s", "--help"}, &help)
+	if !errors.Is(err, flag.ErrHelp) || !strings.Contains(help.String(), "--debug-bundle") {
+		t.Fatalf("help missing flag: %s %v", help.String(), err)
+	}
+}

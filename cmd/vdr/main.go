@@ -17,6 +17,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudpolicy"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/cloudrun"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/config"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/diagnostics"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/ecs"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich/epss"
@@ -244,8 +245,41 @@ func runHelm(ctx context.Context, cfg config.Config, logger *log.Logger, stdout 
 	return scanAndReport(ctx, cfg, logger, stdout, inventory, warnings, dockerConfigDir, registryAuths, exposures)
 }
 
-func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) error {
-	collector, contextName, err := k8s.NewForCurrentContext(cfg.ContextName)
+func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout io.Writer) (runErr error) {
+	var bundle *diagnostics.Bundle
+	if cfg.DebugBundle != "" {
+		var err error
+		bundle, err = diagnostics.New(cfg.DebugBundle)
+		if err != nil {
+			return fmt.Errorf("create debug bundle: %w", err)
+		}
+		bundle.SetScope(cfg.Namespaces, cfg.ExcludeNamespaces)
+		ctx = diagnostics.WithBundle(ctx, bundle)
+		bundle.AddJSON("scan/settings.json", map[string]any{
+			"pluginVersion": buildinfo.PluginVersion, "source": cfg.Source, "contextName": cfg.ContextName,
+			"namespaces": cfg.Namespaces, "allNamespaces": cfg.AllNamespaces, "excludeNamespaces": cfg.ExcludeNamespaces,
+			"includeZeroDaemonSets": cfg.IncludeZeroDaemonSets, "skipExposure": cfg.SkipExposure,
+			"reachabilityOnly": cfg.ReachabilityOnly, "scanReachabilityOnly": cfg.ScanReachabilityOnly,
+			"skipRegistryAuth": cfg.SkipRegistryAuth, "imageSrc": cfg.ImageSrc, "timeout": cfg.Timeout.String(),
+		})
+		defer func() {
+			outcome := "success"
+			if runErr != nil {
+				bundle.AddJSON("scan/error.json", map[string]any{"message": runErr.Error()})
+				outcome = "scan error; report may be incomplete"
+			}
+			if errors.Is(runErr, errCompletedWithFailures) {
+				outcome = "completed with image scan failures"
+			}
+			if err := bundle.Finish(outcome); err != nil {
+				logger.Error("could not finish Kubernetes debug bundle: %v", err)
+				runErr = errors.Join(runErr, fmt.Errorf("finish debug bundle: %w", err))
+			} else {
+				logger.Info("Kubernetes debug bundle written to %s", cfg.DebugBundle)
+			}
+		}()
+	}
+	collector, contextName, err := k8s.NewForCurrentContextWithBundle(cfg.ContextName, bundle)
 	if err != nil {
 		return err
 	}
@@ -264,16 +298,28 @@ func runK8s(ctx context.Context, cfg config.Config, logger *log.Logger, stdout i
 		k8sOptions.ClusterDefaultsOverride = clusterDefaults
 		logger.Info("loaded Kubernetes SIP ConfigMap from %s; overriding the in-cluster ConfigMap", cfg.SIPConfigMap)
 	}
+	if bundle != nil {
+		bundle.AddJSON("scan/context.json", map[string]any{"contextName": contextName})
+		logger.Info("collecting supporting Kubernetes diagnostics")
+		collector.CollectDiagnostics(ctx, k8sOptions, bundle)
+	}
 	logger.Info("collecting Kubernetes inventory from context %q", contextName)
 	inventory, err := collector.Collect(ctx, k8sOptions)
 	if err != nil {
 		return err
 	}
+	if bundle != nil {
+		bundle.AddJSON("scan/inventory.json", inventory)
+	}
 	logger.Info("inventory: %d workloads, %d unique images", len(inventory.Resources), len(inventory.Images))
 	if cloud := inventory.Cloud; cloud != nil {
 		logger.Info("cloud scope: provider=%s %s=%s regions=%v", cloud.Provider, cloud.AccountType, cloud.AccountID, cloud.Regions)
 	}
-	if runtimeIssues, runtimeErr := collector.CollectPodRuntimeIssues(ctx, k8sOptions); runtimeErr != nil {
+	runtimeIssues, runtimeErr := collector.CollectPodRuntimeIssues(ctx, k8sOptions)
+	if bundle != nil && runtimeErr == nil {
+		bundle.AddJSON("scan/runtime-issues.json", runtimeIssues)
+	}
+	if runtimeErr != nil {
 		// Runtime status is operational context only. It must not prevent an
 		// inventory and image-vulnerability report when the status read fails.
 		logger.Warn("could not inspect Kubernetes pod runtime status: %v", runtimeErr)
@@ -807,6 +853,9 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 	if cfg.Format == config.FormatCycloneDX {
 		primaryView = report.ViewResources
 	}
+	if bundle := diagnostics.FromContext(ctx); bundle != nil {
+		bundle.AddJSON("scan/scoring-config.json", scoringConfig)
+	}
 	scannerVersion, scannerMetadata, versionErr := (scanner.TrivyRunner{CacheDir: cfg.CacheDir}).VersionMetadata(ctx)
 	var scannerMetadataPtr *model.ScannerMetadata
 	if versionErr != nil {
@@ -831,6 +880,9 @@ func reportInventory(ctx context.Context, cfg config.Config, logger *log.Logger,
 		FailedImages:         failedImages,
 		SkippedImages:        skippedImages,
 	})
+	if bundle := diagnostics.FromContext(ctx); bundle != nil {
+		bundle.AddJSON("scan/report.json", primary)
+	}
 	if err := writePrimaryReport(stdout, cfg.Output, cfg.Format, primary); err != nil {
 		return err
 	}

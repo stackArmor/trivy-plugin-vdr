@@ -495,6 +495,58 @@ A transient image pull or scan failure is retried twice before it is treated as 
 
 Completed standalone Kubernetes Jobs are still scanned. If the registry returns `MANIFEST_UNKNOWN` for an image referenced only by Jobs with `Complete=True` and no active pods, VDR records a warning and counts the image as skipped (`summary.imageScans.skipped` / `skippedImages`), without failing the run. Skipped images are not counted as successfully scanned. Images also used by active workloads, and authentication, network, or other scan errors, retain normal failure behavior.
 
+For customer troubleshooting, add `--debug-bundle support.zip` to a Kubernetes scan:
+
+```bash
+trivy vdr k8s --all-namespaces --debug-bundle support.zip --output vdr.json
+```
+
+The optional ZIP includes timestamped, redacted YAML snapshots of the Kubernetes
+API responses read during the scan, plus supporting reads for Pods, Jobs,
+CronJobs, parent workload controllers, events, Services, Ingress/Gateway routes,
+NetworkPolicies, PodDisruptionBudgets, EndpointSlices, nodes, namespaces,
+ServiceAccounts, ConfigMaps, PVCs, quotas, autoscalers and RBAC configuration.
+This includes controller-owned Pods and CronJob-owned Jobs that the image
+inventory normally collapses into their parent workload. Owner references,
+creation times, image references, Pod waiting/termination details, Job conditions,
+deadlines, TTLs and CronJob history limits remain available for investigation.
+
+`manifest.json` indexes each response by API path, timestamp, status and archive
+file, and records denied reads, unavailable APIs, timeouts and size limits.
+`scan/` contains selected scan settings, runtime issues, the inventory, effective
+scoring configuration and report when those phases are reached. A partial ZIP is
+still written when inventory collection or an image scan fails. The scan retains
+its normal exit status; a bundle creation/finalization error is also reported.
+Existing ZIP paths are never overwritten.
+
+Diagnostics use the same credentials and namespace selections/exclusions as the
+scan, with additional GET/list requests and no cluster changes. Cluster-scoped
+resources remain included. Supporting reads have a two-minute budget and a
+ten-second deadline per paginated resource/scope; captured responses are limited
+to 16 MiB each and archive payloads to 128 MiB / 10,000 records. See the optional
+[diagnostics RBAC example](examples/rbac/vdr-diagnostics-read.yaml) for supporting
+reads beyond the [standard scanner permissions](examples/rbac/vdr-read.yaml).
+Forbidden reads reduce the evidence collected rather than stopping diagnostics.
+
+Secret and ConfigMap values, literal environment values, command/argument
+contents, HTTP header values and managed fields are redacted or removed.
+Annotation values are preserved except identified credential fields or credential
+material within their contents. Embedded JSON annotations, including kubectl's
+last-applied manifest, receive the same structural redaction as API objects.
+Secret references and operational annotations, including Helm hook metadata, remain.
+Kubeconfig, authentication request headers,
+local credentials and container logs are not collected. Names, labels, images,
+internal addresses, events and status messages remain useful evidence; review the
+ZIP before sharing it externally. It contains current observations and cannot
+recover expired events or establish when an ECR image was deleted.
+
+For collection without image scans or exposure analysis, use:
+
+```bash
+trivy vdr k8s --all-namespaces --reachability-only --skip-exposure \
+  --debug-bundle support.zip --output inventory.json
+```
+
 Standalone image scans (`trivy vdr image IMAGE...`) never run internet reachability analysis and do not include exposure metadata. They do include EPSS and CISA Vulnrichment enrichment by default, unless `--skip-enrichment` is set.
 
 Cache cleanup runs once after the image scan phase completes:

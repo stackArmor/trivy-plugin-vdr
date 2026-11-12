@@ -116,6 +116,7 @@ type Config struct {
 	// Command from a running EC2 manager node instead of --services-file.
 	SwarmSSMManagerTag string
 	Quiet              bool
+	DebugBundle        string
 	Debug              bool
 	SkipUpdateCheck    bool
 }
@@ -269,6 +270,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "suppress progress logging (warnings and errors only)")
 	fs.BoolVar(&cfg.Quiet, "q", cfg.Quiet, "alias for --quiet")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug, "enable debug logging")
+	fs.StringVar(&cfg.DebugBundle, "debug-bundle", cfg.DebugBundle, "write a redacted Kubernetes diagnostics ZIP (existing files are not overwritten)")
 	fs.StringVar(&cfg.SwarmServicesFile, "services-file", cfg.SwarmServicesFile, "offline alternative to collecting from the cluster: docker service inspect output (JSON array, or {services, networks})")
 	fs.StringVar(&cfg.SwarmSSMManagerTag, "ssm-manager-tag", cfg.SwarmSSMManagerTag, "EC2 tag (key=value) of the swarm manager node the inventory is collected from over SSM (default swarm-node-type=manager)")
 	fs.StringVar(&cfg.SwarmConfigFile, "swarm-config", cfg.SwarmConfigFile, "vdr-fedramp Swarm config: docker config inspect output or the plain YAML file")
@@ -365,7 +367,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			formatSet = true
 		case "values", "release-name", "chart-version", "repo", "ingress-chart", "ingress-chart-version", "ingress-repo", "ingress-values", "ingress-release-name", "ingress-namespace", "config-map", "kube-version", "api-versions", "include-crds":
 			helmSpecificFlag = f.Name
-		case "sip-config-map":
+		case "sip-config-map", "debug-bundle":
 			k8sSpecificFlag = f.Name
 		case "include-functions":
 			cloudRunSpecificFlag = f.Name
@@ -616,6 +618,18 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		}
 	} else if helmSpecificFlag != "" {
 		return Config{}, fmt.Errorf("--%s is only valid for source helm", helmSpecificFlag)
+	}
+	if cfg.DebugBundle != "" {
+		for _, output := range []string{cfg.Output, cfg.HTMLOutput} {
+			if output == "" {
+				continue
+			}
+			bundlePath, _ := filepath.Abs(cfg.DebugBundle)
+			outputPath, _ := filepath.Abs(output)
+			if bundlePath == outputPath {
+				return Config{}, errors.New("--debug-bundle must differ from report output paths")
+			}
+		}
 	}
 	if cfg.Source != SourceK8s && k8sSpecificFlag != "" {
 		return Config{}, fmt.Errorf("--%s is only valid for source k8s", k8sSpecificFlag)

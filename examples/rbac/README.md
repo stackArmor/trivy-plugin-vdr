@@ -27,3 +27,11 @@ Before applying it:
 
 For exact-name enforcement, ensure the VDR identity is not also bound to another
 role that grants broader Secret access.
+
+For `--debug-bundle`, [`vdr-diagnostics-read.yaml`](vdr-diagnostics-read.yaml)
+adds optional supporting reads to the standard `vdr-read` permissions. Bind it
+to the same scanner identity only if those additional snapshots are wanted.
+It grants no writes, Secret access, container logs, or exec access. The flag also
+works without this role: the ZIP manifest records denied reads and retains the
+evidence the identity can access. Namespace RoleBindings limit namespaced reads;
+use matching `--namespace` flags, and expect cluster-scoped reads to be denied.

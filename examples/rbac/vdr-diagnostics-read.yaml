@@ -1,0 +1,26 @@
+# Optional supporting reads for --debug-bundle, in addition to vdr-read.yaml.
+# Bind this role to the scanner identity using a ClusterRoleBinding or, for
+# namespaced resources only, RoleBindings in the requested namespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vdr-diagnostics-read
+rules:
+  - apiGroups: [""]
+    resources: ["events", "serviceaccounts", "configmaps", "persistentvolumeclaims", "resourcequotas", "limitranges"]
+    verbs: ["list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["list"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["list"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gatewayclasses"]
+    verbs: ["list"]

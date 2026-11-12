@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/distribution/reference"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/diagnostics"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -104,6 +105,11 @@ func apiServerHost(raw string) string {
 // configuration, falling back to in-cluster credentials when no kubeconfig is
 // present. explicitContextName, when non-empty, overrides the report identity.
 func NewForCurrentContext(explicitContextName string) (*Collector, string, error) {
+	return NewForCurrentContextWithBundle(explicitContextName, nil)
+}
+
+// NewForCurrentContextWithBundle captures redacted API responses when enabled.
+func NewForCurrentContextWithBundle(explicitContextName string, bundle *diagnostics.Bundle) (*Collector, string, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	rawConfig, err := loadingRules.Load()
 	if err != nil {
@@ -116,6 +122,13 @@ func NewForCurrentContext(explicitContextName string) (*Collector, string, error
 	).ClientConfig()
 	if err != nil {
 		return nil, "", err
+	}
+
+	if bundle != nil {
+		// JSON supports structured redaction; protobuf bytes must never enter the archive.
+		config.ContentType = "application/json"
+		config.AcceptContentTypes = "application/json"
+		config.Wrap(bundle.WrapTransport)
 	}
 
 	client, err := kubernetes.NewForConfig(config)
