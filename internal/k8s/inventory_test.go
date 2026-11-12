@@ -1403,3 +1403,30 @@ func TestCollectExposureObjectsWithExcludeNamespaces(t *testing.T) {
 	}
 }
 
+func TestCollectRecordsCompletedStandaloneJobs(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		status    batchv1.JobStatus
+		completed bool
+	}{
+		{name: "completed", status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}}, completed: true},
+		{name: "active", status: batchv1.JobStatus{Active: 1}},
+		{name: "complete-with-active-pods", status: batchv1.JobStatus{Active: 1, Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}}},
+		{name: "failed", status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}}},
+		{name: "completion-not-true", status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionFalse}}}},
+		{name: "succeeded-count-only", status: batchv1.JobStatus{Succeeded: 1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			j := job("default", "migration", podSpec(container("runner", "example.com/job:old")))
+			j.Status = tt.status
+			inv, err := (&Collector{Client: fake.NewSimpleClientset(j)}).Collect(context.Background(), Options{AllNamespaces: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireImage(t, inv, "example.com/job:old")
+			if len(inv.Resources) != 1 || inv.Resources[0].JobCompleted != tt.completed {
+				t.Fatalf("resources=%+v, want completed=%v", inv.Resources, tt.completed)
+			}
+		})
+	}
+}

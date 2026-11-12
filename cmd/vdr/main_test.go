@@ -20,6 +20,7 @@ import (
 	"github.com/stackArmor/trivy-plugin-vdr/internal/enrich"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/log"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/model"
+	"github.com/stackArmor/trivy-plugin-vdr/internal/scanner"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/scoring"
 	"github.com/stackArmor/trivy-plugin-vdr/internal/swarm"
 )
@@ -344,7 +345,7 @@ func TestReportInventoryIncludesEnrichmentWarnings(t *testing.T) {
 		Format: config.FormatJSON,
 	}
 	var output bytes.Buffer
-	err := reportInventory(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output, inventory, findings, warnings, nil, nil)
+	err := reportInventory(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output, inventory, findings, warnings, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("reportInventory returned error: %v", err)
 	}
@@ -577,5 +578,91 @@ func TestRunSwarmValidatesConfigAgainstScoringConfig(t *testing.T) {
 	}
 	if err := runSwarm(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), io.Discard); err != nil {
 		t.Fatalf("a swarm config referencing an archetype from --scoring-config must validate: %v", err)
+	}
+}
+
+func TestSkippedImageWarningsDoNotCountAsFailures(t *testing.T) {
+	warnings := []scanner.Warning{
+		{ImageRef: "pruned:v1", Message: "completed Job image unavailable; scan skipped", Skipped: true},
+		{ImageRef: "active:v1", Message: "image scan failed"},
+		{Message: "cache warning"},
+	}
+	failed, skipped := failedImageRefs(warnings), skippedImageRefs(warnings)
+	if len(failed) != 1 || failed[0] != "active:v1" || len(skipped) != 1 || skipped[0] != "pruned:v1" {
+		t.Fatalf("failed=%v skipped=%v", failed, skipped)
+	}
+	messages := scannerWarnings(warnings)
+	if len(messages) != 3 || !strings.Contains(messages[0], "pruned:v1") || !strings.Contains(messages[0], "scan skipped") {
+		t.Fatalf("report warnings lost skip detail: %v", messages)
+	}
+	if len(failedImageRefs(warnings[:1])) != 0 {
+		t.Fatal("warning-only skip would cause a nonzero exit")
+	}
+}
+
+func TestScanAndReportCompletedJobMissingImageExitStatus(t *testing.T) {
+	binDir := t.TempDir()
+	fakeTrivy := `#!/bin/sh
+if [ "$1" = "version" ]; then
+  echo '{"Version":"0.test"}'
+  exit 0
+fi
+for arg in "$@"; do
+  case "$arg" in
+    --download-db-only|--download-java-db-only) exit 0 ;;
+  esac
+  last="$arg"
+done
+if [ "$last" = "old:v1" ]; then
+  echo "$VDR_TEST_SCAN_ERROR" >&2
+  exit 1
+fi
+echo '{"Results":[]}'
+`
+	if err := os.WriteFile(filepath.Join(binDir, "trivy"), []byte(fakeTrivy), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, tt := range []struct {
+		name      string
+		completed bool
+		pullError string
+		wantFail  bool
+	}{
+		{"completed-pruned", true, "MANIFEST_UNKNOWN: image not found", false},
+		{"active-pruned", false, "MANIFEST_UNKNOWN: image not found", true},
+		{"completed-auth-error", true, "UNAUTHORIZED: authentication required", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("VDR_TEST_SCAN_ERROR", tt.pullError)
+			ref := model.ResourceRef{APIVersion: "batch/v1", Kind: "Job", Namespace: "default", Name: "migration"}
+			inv := &model.Inventory{
+				Resources: []model.ResourceInventory{{Resource: ref, JobCompleted: tt.completed}},
+				Images: []model.ImageInventory{
+					{ImageRef: "old:v1", Resources: []model.ResourceRef{ref}},
+					{ImageRef: "current:v1"},
+				},
+			}
+			var output bytes.Buffer
+			cfg := config.Config{Format: config.FormatJSON, CacheDir: t.TempDir(), CacheCleanup: "never", ParallelScans: 1, SkipEnrichment: true}
+			err := scanAndReport(context.Background(), cfg, log.NewWithWriter(io.Discard, log.LevelQuiet), &output, inv, nil, "", nil, nil)
+			if tt.wantFail && err != errCompletedWithFailures || !tt.wantFail && err != nil {
+				t.Fatalf("scanAndReport error=%v, wantFail=%v", err, tt.wantFail)
+			}
+			var got model.Report
+			if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			scans := got.Summary.ImageScans
+			if scans.Total != 2 || scans.Succeeded != 1 {
+				t.Fatalf("report scan summary=%+v", scans)
+			}
+			if tt.wantFail && (scans.Failed != 1 || scans.Skipped != 0) || !tt.wantFail && (scans.Failed != 0 || scans.Skipped != 1) {
+				t.Fatalf("report scan summary=%+v", scans)
+			}
+			if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "old:v1") {
+				t.Fatalf("report warnings=%v", got.Warnings)
+			}
+		})
 	}
 }

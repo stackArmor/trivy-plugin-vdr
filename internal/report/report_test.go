@@ -1119,3 +1119,20 @@ func TestImageRulesUseTheResourcesOwnImage(t *testing.T) {
 		t.Fatalf("pain = %+v, want the pi imageRule", pain)
 	}
 }
+
+func TestBuildSummarySeparatesSkippedCompletedJobImages(t *testing.T) {
+	ref := model.ResourceRef{APIVersion: "batch/v1", Kind: "Job", Namespace: "default", Name: "migration", ContainerType: "container", ContainerName: "runner"}
+	inventory := &model.Inventory{Images: []model.ImageInventory{
+		{ImageRef: "current:v1"},
+		{ImageRef: "broken:v1"},
+		{ImageRef: "pruned:v1", Resources: []model.ResourceRef{ref}},
+	}}
+	report := Build(inventory, nil, nil, Options{FailedImages: []string{"broken:v1"}, SkippedImages: []string{"pruned:v1"}})
+	got := report.Summary.ImageScans
+	if got.Total != 3 || got.Succeeded != 1 || got.Failed != 1 || got.Skipped != 1 || got.SucceededPercent != 33.33 {
+		t.Fatalf("scan counts = %+v", got)
+	}
+	if len(got.SkippedImages) != 1 || got.SkippedImages[0].ImageRef != "pruned:v1" || !reflect.DeepEqual(got.SkippedImages[0].AffectedResources, []string{"default.Job.migration.container.runner"}) {
+		t.Fatalf("skipped image context = %+v", got.SkippedImages)
+	}
+}

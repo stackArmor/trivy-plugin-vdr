@@ -423,6 +423,8 @@ const (
 )
 
 type Warning struct {
+	// Skipped marks an unavailable image used only by completed Jobs; it is not a scan failure.
+	Skipped  bool
 	ImageRef string
 	Message  string
 }
@@ -499,6 +501,7 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	defer cancel()
 
 	total := len(images)
+	completedJobs := completedJobResources(inventory)
 	var done atomic.Int64
 
 	scanIndex := func(index int) {
@@ -506,6 +509,7 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 		options.Logger.Info("scanning %s", image.ImageRef)
 		findings, err := scanInventoryImageWithRetry(ctx, runner, image, options.Timeout, retryDelays, options.Logger)
 		result := scanResult{findings: findings, err: err, completed: err == nil}
+		result.skipped = missingCompletedJobImage(err, image, completedJobs)
 		if err == nil {
 			for i := range result.findings {
 				result.findings[i].ImageRef = image.ImageRef
@@ -519,7 +523,9 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 		// A single image failure is recorded and surfaced as a warning; it does
 		// not cancel sibling scans or abort the run.
 		n := done.Add(1)
-		if err != nil {
+		if result.skipped {
+			options.Logger.Warn("[%d/%d] %s: %s", n, total, image.ImageRef, skippedCompletedJobMessage)
+		} else if err != nil {
 			options.Logger.Warn("[%d/%d] %s failed: %v", n, total, image.ImageRef, err)
 		} else {
 			options.Logger.Info("[%d/%d] %s: %d findings", n, total, image.ImageRef, len(findings))
@@ -582,9 +588,14 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	var warnings []Warning
 	for index, result := range results {
 		if result.err != nil {
+			message := fmt.Sprintf("image scan failed: %v", result.err)
+			if result.skipped {
+				message = skippedCompletedJobMessage
+			}
 			warnings = append(warnings, Warning{
 				ImageRef: images[index].ImageRef,
-				Message:  fmt.Sprintf("image scan failed: %v", result.err),
+				Message:  message,
+				Skipped:  result.skipped,
 			})
 			continue
 		}
@@ -593,6 +604,40 @@ func ScanInventoryWithOptions(ctx context.Context, inventory *model.Inventory, r
 	}
 	warnings = append(warnings, cleanupWarnings...)
 	return findings, warnings, nil
+}
+
+const skippedCompletedJobMessage = "image unavailable in registry (manifest unknown); referenced only by completed standalone Jobs; scan skipped"
+
+func workloadRef(ref model.ResourceRef) model.ResourceRef {
+	ref.ContainerName, ref.ContainerType, ref.RestartPolicy = "", "", ""
+	return ref
+}
+
+func completedJobResources(inventory *model.Inventory) map[model.ResourceRef]bool {
+	completed := make(map[model.ResourceRef]bool)
+	for _, resource := range inventory.Resources {
+		ref := workloadRef(resource.Resource)
+		completed[ref] = ref.APIVersion == "batch/v1" && ref.Kind == "Job" && resource.JobCompleted
+	}
+	return completed
+}
+
+func missingCompletedJobImage(err error, image inventoryImage, completed map[model.ResourceRef]bool) bool {
+	if err == nil || isContextError(err) || len(image.Resources) == 0 {
+		return false
+	}
+	// Require the registry's explicit missing-manifest response. Generic 404s,
+	// authorization errors, and unavailable repositories are not sufficient.
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "manifest_unknown") && !strings.Contains(message, "manifest unknown") {
+		return false
+	}
+	for _, ref := range image.Resources {
+		if !completed[workloadRef(ref)] {
+			return false
+		}
+	}
+	return true
 }
 
 func completedScanCount(results []scanResult) int {
@@ -614,6 +659,7 @@ type scanResult struct {
 	warnings  []Warning
 	err       error
 	completed bool
+	skipped   bool
 }
 
 type inventoryImage struct {

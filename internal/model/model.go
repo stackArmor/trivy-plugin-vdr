@@ -145,6 +145,9 @@ type ImageInventory struct {
 }
 
 type ResourceInventory struct {
+	// JobCompleted is true only for a standalone Kubernetes Job with Complete=True
+	// and no active pods at inventory time.
+	JobCompleted          bool              `json:"jobCompleted,omitempty"`
 	ClassificationSources map[string]string `json:"-"`
 	// DirectNodeAccess prevents Service-only analysis from asserting a negative
 	// for hostNetwork/hostPort workloads; collected from the pod spec.
@@ -823,6 +826,9 @@ type ImageScanSummary struct {
 	Failed           int               `json:"failed"`
 	SucceededPercent float64           `json:"succeededPercent"`
 	FailedImages     []FailedImageScan `json:"failedImages,omitempty"`
+	Skipped          int               `json:"skipped,omitempty"`
+	// SkippedImages are unavailable images referenced only by completed Jobs.
+	SkippedImages []FailedImageScan `json:"skippedImages,omitempty"`
 }
 
 // FailedImageScan identifies an image Trivy failed to scan and the resources

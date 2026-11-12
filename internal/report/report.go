@@ -50,6 +50,8 @@ type Options struct {
 	// FailedImages lists the image refs Trivy failed to scan, for every scan
 	// type. Feeds Summary.ImageScans.
 	FailedImages []string
+	// SkippedImages lists missing manifests referenced only by completed Jobs.
+	SkippedImages []string
 }
 
 func Build(inventory *model.Inventory, findings []model.Finding, exposures map[model.ResourceRef]model.Exposure, options Options) model.Report {
@@ -117,7 +119,7 @@ func Build(inventory *model.Inventory, findings []model.Finding, exposures map[m
 	}
 	transitions := chainanalysis.FindReportTransitions(active, resourceReports, catalog)
 	summary := buildSummary(inventory, active, resourceReports)
-	summary.ImageScans = buildImageScanSummary(inventory, summary.Images, options.FailedImages)
+	summary.ImageScans = buildImageScanSummary(inventory, summary.Images, options.FailedImages, options.SkippedImages)
 	chainanalysis.AddTransitionSummary(summary.ChainTaxonomy, transitions)
 	report := model.Report{
 		ReportSchemaVersion: ReportSchemaVersion,
@@ -701,8 +703,8 @@ func buildSummary(inventory *model.Inventory, findings []model.Finding, resource
 // images. It returns nil when there is nothing to report (no images and no
 // failures), so an image-less scan (e.g. classification-only Kubernetes
 // compliance runs) does not emit a misleading zero-image summary.
-func buildImageScanSummary(inventory *model.Inventory, total int, failedImages []string) *model.ImageScanSummary {
-	if total == 0 && len(failedImages) == 0 {
+func buildImageScanSummary(inventory *model.Inventory, total int, failedImages, skippedImages []string) *model.ImageScanSummary {
+	if total == 0 && len(failedImages) == 0 && len(skippedImages) == 0 {
 		return nil
 	}
 	refs := append([]string(nil), failedImages...)
@@ -715,7 +717,16 @@ func buildImageScanSummary(inventory *model.Inventory, total int, failedImages [
 			AffectedResources: dottedResourceLabels(imageResources[ref]),
 		})
 	}
-	succeeded := total - len(refs)
+	skippedImages = append([]string(nil), skippedImages...)
+	sort.Strings(skippedImages)
+	var skipped []model.FailedImageScan
+	for _, ref := range skippedImages {
+		skipped = append(skipped, model.FailedImageScan{
+			ImageRef:          ref,
+			AffectedResources: dottedResourceLabels(imageResources[ref]),
+		})
+	}
+	succeeded := total - len(refs) - len(skipped)
 	var percent float64
 	if total > 0 {
 		percent = math.Round(float64(succeeded)/float64(total)*10000) / 100
@@ -726,6 +737,8 @@ func buildImageScanSummary(inventory *model.Inventory, total int, failedImages [
 		Failed:           len(refs),
 		SucceededPercent: percent,
 		FailedImages:     failed,
+		Skipped:          len(skipped),
+		SkippedImages:    skipped,
 	}
 }
 

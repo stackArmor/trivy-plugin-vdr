@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -1459,4 +1460,70 @@ func (r *blockingImageRunner) activeCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.active
+}
+
+func TestScanCompletedJobMissingImages(t *testing.T) {
+	job := model.ResourceRef{APIVersion: "batch/v1", Kind: "Job", Namespace: "default", Name: "migration"}
+	active := model.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api"}
+	otherJob := job
+	otherJob.Name = "other"
+	for _, tt := range []struct {
+		name      string
+		scanErr   error
+		completed bool
+		extra     *model.ResourceRef
+		noRefs    bool
+		wantSkip  bool
+	}{
+		{name: "pruned-completed-job", scanErr: errors.New("GET /manifests/old: MANIFEST_UNKNOWN: Requested image not found"), completed: true, wantSkip: true},
+		{name: "manifest-unknown-text", scanErr: errors.New("manifest unknown"), completed: true, wantSkip: true},
+		{name: "multiple-completed-jobs", scanErr: errors.New("MANIFEST_UNKNOWN"), completed: true, extra: &otherJob, wantSkip: true},
+		{name: "active-job", scanErr: errors.New("MANIFEST_UNKNOWN")},
+		{name: "shared-active-workload", scanErr: errors.New("MANIFEST_UNKNOWN"), completed: true, extra: &active},
+		{name: "auth-error", scanErr: errors.New("UNAUTHORIZED: authentication required"), completed: true},
+		{name: "network-error", scanErr: errors.New("connection reset"), completed: true},
+		{name: "generic-not-found", scanErr: errors.New("404 Not Found"), completed: true},
+		{name: "missing-repository", scanErr: errors.New("NAME_UNKNOWN"), completed: true},
+		{name: "no-resource-evidence", scanErr: errors.New("MANIFEST_UNKNOWN"), completed: true, noRefs: true},
+		{name: "available-completed-job", completed: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ref := job
+			ref.ContainerName, ref.ContainerType = "runner", "initContainer"
+			refs := []model.ResourceRef{ref}
+			resources := []model.ResourceInventory{{Resource: job, JobCompleted: tt.completed}}
+			if tt.extra != nil {
+				refs = append(refs, *tt.extra)
+				resources = append(resources, model.ResourceInventory{Resource: *tt.extra, JobCompleted: tt.extra.Kind == "Job"})
+			}
+			if tt.noRefs {
+				refs = nil
+			}
+			inv := &model.Inventory{Resources: resources, Images: []model.ImageInventory{{ImageRef: "old:v1", Resources: refs}, {ImageRef: "current:v1"}}}
+			runner := &errImageRunner{findings: map[string][]model.Finding{"current:v1": {{ID: "CVE-current"}}, "old:v1": {{ID: "CVE-old"}}}, errs: map[string]error{}}
+			if tt.scanErr != nil {
+				runner.errs["old:v1"] = tt.scanErr
+			}
+			var logs bytes.Buffer
+			findings, warnings, err := ScanInventoryWithOptions(context.Background(), inv, runner, ScanOptions{CacheCleanup: CleanupNever, RetryDelays: []time.Duration{}, Logger: log.NewWithWriter(&logs, log.LevelInfo), ParallelScans: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.images) != 2 {
+				t.Fatalf("did not attempt all images: %v", runner.images)
+			}
+			if tt.scanErr == nil {
+				if len(warnings) != 0 || len(findings) != 2 {
+					t.Fatalf("available image not scanned: findings=%v warnings=%v", findings, warnings)
+				}
+				return
+			}
+			if len(findings) != 1 || len(warnings) != 1 || warnings[0].Skipped != tt.wantSkip {
+				t.Fatalf("findings=%v warnings=%+v wantSkip=%v", findings, warnings, tt.wantSkip)
+			}
+			if tt.wantSkip && (strings.Contains(logs.String(), "failed") || strings.Contains(warnings[0].Message, "failed")) {
+				t.Fatalf("skip logged as failure: %s / %+v", logs.String(), warnings)
+			}
+		})
+	}
 }

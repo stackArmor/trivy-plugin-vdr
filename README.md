@@ -493,6 +493,8 @@ Scan defaults:
 
 A transient image pull or scan failure is retried twice before it is treated as failed. A single image that still cannot be pulled or scanned does not abort the run: the failure is logged inline and recorded as a warning in the report, the remaining images are still scanned and enriched, and a summary of failed images is printed at the end. If any image fails, `vdr` exits with a non-zero status after writing the report.
 
+Completed standalone Kubernetes Jobs are still scanned. If the registry returns `MANIFEST_UNKNOWN` for an image referenced only by Jobs with `Complete=True` and no active pods, VDR records a warning and counts the image as skipped (`summary.imageScans.skipped` / `skippedImages`), without failing the run. Skipped images are not counted as successfully scanned. Images also used by active workloads, and authentication, network, or other scan errors, retain normal failure behavior.
+
 Standalone image scans (`trivy vdr image IMAGE...`) never run internet reachability analysis and do not include exposure metadata. They do include EPSS and CISA Vulnrichment enrichment by default, unless `--skip-enrichment` is set.
 
 Cache cleanup runs once after the image scan phase completes:

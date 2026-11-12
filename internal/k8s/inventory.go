@@ -436,7 +436,13 @@ func (c *Collector) collectJobs(ctx context.Context, namespace string, opts Opti
 			continue
 		}
 		ref := workloadRef("batch/v1", "Job", job.Namespace, job.Name)
-		builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations, job.Labels, job.Spec.Template.Labels, nil)
+		if resource := builder.addResource(ref, job.Spec.Template.Spec, job.Spec.Template.Annotations, job.Labels, job.Spec.Template.Labels, nil); resource != nil && job.Status.Active == 0 {
+			for _, condition := range job.Status.Conditions {
+				if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
+					resource.JobCompleted = true
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -484,7 +490,7 @@ type inventoryBuilder struct {
 // template labels. They are merged into ResourceInventory.Labels with the pod
 // template winning on conflict, so VDR security-impact-profile labels applied at either level
 // (Helm values.labels render to the workload object) are visible to scoring.
-func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string, replicas *int32) {
+func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.PodSpec, annotations, workloadLabels, templateLabels map[string]string, replicas *int32) *model.ResourceInventory {
 	resourceInventory := model.ResourceInventory{
 		DirectNodeAccess: spec.HostNetwork,
 		Resource:         resource,
@@ -500,7 +506,9 @@ func (b *inventoryBuilder) addResource(resource model.ResourceRef, spec corev1.P
 	}
 	if len(resourceInventory.Images) > 0 {
 		b.inventory.Resources = append(b.inventory.Resources, resourceInventory)
+		return &b.inventory.Resources[len(b.inventory.Resources)-1]
 	}
+	return nil
 }
 
 func (b *inventoryBuilder) addContainer(resourceInventory *model.ResourceInventory, resource model.ResourceRef, spec corev1.PodSpec, annotations map[string]string, c corev1.Container, containerType string) {
