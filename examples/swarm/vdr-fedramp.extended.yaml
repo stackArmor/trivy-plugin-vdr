@@ -155,8 +155,9 @@ scoring.yaml: |
 
 # Reachability declarations are illustrative and must match deployment evidence.
 # Service labels take precedence over these rules. A false declaration needs a
-# justification. Unmatched services with published ports or proxy routes are
-# reported as unassessed.
+# justification. Unmatched services with active proxy labels (traefik.* unless
+# traefik.enable=false, or proxyLabelPrefixes) are observed internet-reachable;
+# unmatched services with published ports or host networking are unassessed.
 exposure.yaml: |
   proxyLabelPrefixes:
     - traefik.http.routers.

@@ -275,11 +275,16 @@ or the rule's `justification`), carried as a `justification: ` evidence item;
 without one it is ignored and the service stays unassessed. Without a
 declaration:
 
-- a service that publishes ports (ingress routing mesh or host mode), carries
-  any edge-proxy label (every `traefik.*` label by default, including
-  `traefik.enable` and TCP/UDP routers; `proxyLabelPrefixes` adds prefixes for
-  other proxies such as `caddy`), or runs on the host network is
-  `unassessed`, with that evidence, and is named in a run warning;
+- a service that carries any active edge-proxy label (every `traefik.*` label
+  by default, including `traefik.enable` and TCP/UDP routers, unless
+  `traefik.enable` is `"false"`; setting `proxyLabelPrefixes` in `exposure.yaml`
+  replaces that default, and `proxyLabelPrefixes: []` disables proxy-label
+  inference) is reported as internet-reachable (`assessed`, `observed`), with
+  the matched proxy labels in `evidence`. Use an explicit `false` declaration
+  (with justification) to opt out individual internal-only proxy routes;
+- a service that publishes ports (ingress routing mesh or host mode) or runs on
+  the host network without a declaration or proxy label is `unassessed`, with
+  that evidence, and services with published ports are named in a run warning;
 - any other service is an observed negative (`assessed`, `observed`).
 
 `docker service inspect` names networks by ID, so host networking is only

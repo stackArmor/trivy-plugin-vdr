@@ -16,7 +16,8 @@ import (
 const FedRAMPConfigName = "vdr-fedramp"
 
 // DefaultProxyLabelPrefix marks a service as routed by Traefik: any traefik.*
-// label, including traefik.enable and TCP/UDP routers.
+// label, including traefik.enable and TCP/UDP routers (unless traefik.enable is
+// explicitly "false").
 const DefaultProxyLabelPrefix = "traefik."
 
 // exposureKey is the vdr-fedramp key holding the exposure declarations. Every
@@ -87,7 +88,7 @@ func ParseFedRAMPConfig(raw []byte) (map[string]string, ExposureConfig, error) {
 
 	if doc := data[exposureKey]; strings.TrimSpace(doc) != "" {
 		var declared struct {
-			ProxyLabelPrefixes []string `yaml:"proxyLabelPrefixes"`
+			ProxyLabelPrefixes *[]string `yaml:"proxyLabelPrefixes"`
 			Rules              []struct {
 				Stack             string `yaml:"stack"`
 				Name              string `yaml:"name"`
@@ -99,11 +100,16 @@ func ParseFedRAMPConfig(raw []byte) (map[string]string, ExposureConfig, error) {
 		if err := yaml.Unmarshal([]byte(doc), &declared); err != nil {
 			return nil, exposure, fmt.Errorf("parse %s config (%s): %w", FedRAMPConfigName, exposureKey, err)
 		}
-		// Configured prefixes extend the Traefik default; they never drop it.
-		for _, prefix := range declared.ProxyLabelPrefixes {
-			if prefix = strings.TrimSpace(prefix); prefix != "" && !containsString(exposure.ProxyLabelPrefixes, prefix) {
-				exposure.ProxyLabelPrefixes = append(exposure.ProxyLabelPrefixes, prefix)
+		if declared.ProxyLabelPrefixes != nil {
+			// An explicit proxyLabelPrefixes list replaces the Traefik default;
+			// an empty list disables proxy-label inference.
+			prefixes := make([]string, 0, len(*declared.ProxyLabelPrefixes))
+			for _, prefix := range *declared.ProxyLabelPrefixes {
+				if prefix = strings.TrimSpace(prefix); prefix != "" && !containsString(prefixes, prefix) {
+					prefixes = append(prefixes, prefix)
+				}
 			}
+			exposure.ProxyLabelPrefixes = prefixes
 		}
 		for i, rule := range declared.Rules {
 			if rule.InternetReachable == nil {

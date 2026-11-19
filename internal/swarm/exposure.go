@@ -32,10 +32,12 @@ const (
 //  1. a vdr.fedramp.io/internet-reachable service label,
 //  2. the first matching exposure.yaml rule,
 //
-// declare it (basis "attested"). Without a declaration, a service that
-// publishes ports, carries proxy labels, or runs on the host network is
-// left unassessed with that evidence; one with none of those, whose networks
-// are all known, is an observed negative. Exposures are keyed by ContainerRef.
+// declare it (basis "attested"). Without a declaration, a service carrying
+// active edge-proxy labels (traefik.* unless traefik.enable=false, plus any
+// configured proxyLabelPrefixes) is marked internet-accessible (basis
+// "observed"); one that publishes ports or runs on the host network is left
+// unassessed with that evidence; one with none of those, whose networks are
+// all known, is an observed negative. Exposures are keyed by ContainerRef.
 func AnalyzeExposure(contextName string, services []Service, cfg ExposureConfig) (map[model.ResourceRef]model.Exposure, []string) {
 	exposures := make(map[model.ResourceRef]model.Exposure, len(services))
 	var warnings, undeclared []string
@@ -67,8 +69,16 @@ func AnalyzeExposure(contextName string, services []Service, cfg ExposureConfig)
 		}
 
 		switch {
+		case hasProxyRoute(service, cfg.ProxyLabelPrefixes):
+			exposures[ref] = model.Exposure{
+				InternetAccessible: true,
+				AssessmentStatus:   statusAssessed,
+				AssessmentBasis:    basisObserved,
+				Provider:           Provider,
+				Evidence:           signals,
+			}
 		case len(signals) > 0:
-			if len(service.Ports) > 0 || hasProxyRoute(service, cfg.ProxyLabelPrefixes) {
+			if len(service.Ports) > 0 {
 				undeclared = append(undeclared, service.Name)
 			}
 			exposures[ref] = unassessed(signals)
@@ -86,7 +96,7 @@ func AnalyzeExposure(contextName string, services []Service, cfg ExposureConfig)
 	}
 	if len(undeclared) > 0 {
 		sort.Strings(undeclared)
-		warnings = append(warnings, fmt.Sprintf("%d Swarm service(s) publish ports or proxy routes without an internet-reachability declaration, so their exposure is unassessed; set %s or add exposure.yaml rules: %s", len(undeclared), ReachableLabel, strings.Join(undeclared, ", ")))
+		warnings = append(warnings, fmt.Sprintf("%d Swarm service(s) publish ports without an internet-reachability declaration, so their exposure is unassessed; set %s or add exposure.yaml rules: %s", len(undeclared), ReachableLabel, strings.Join(undeclared, ", ")))
 	}
 	return exposures, warnings
 }
@@ -157,11 +167,27 @@ func exposureSignals(service Service, proxyPrefixes []string) []string {
 	return signals
 }
 
-const maxProxyLabelEvidence = 10
+const (
+	maxProxyLabelEvidence = 10
+	traefikEnableLabel    = "traefik.enable"
+)
+
+func traefikDisabled(service Service) bool {
+	value, present := service.Labels[traefikEnableLabel]
+	return present && strings.EqualFold(strings.TrimSpace(value), "false")
+}
+
+func isTraefikLabel(key string) bool {
+	return strings.HasPrefix(key, DefaultProxyLabelPrefix) || key == strings.TrimSuffix(DefaultProxyLabelPrefix, ".")
+}
 
 func proxyLabels(service Service, proxyPrefixes []string) []string {
+	disableTraefik := traefikDisabled(service)
 	var keys []string
 	for key := range service.Labels {
+		if disableTraefik && isTraefikLabel(key) {
+			continue
+		}
 		if hasAnyPrefix(key, proxyPrefixes) {
 			keys = append(keys, key)
 		}

@@ -112,12 +112,15 @@ func TestPublishedPortsWithoutDeclarationAreUnassessed(t *testing.T) {
 	}
 }
 
-func TestTraefikRouteWithoutDeclarationIsUnassessed(t *testing.T) {
+func TestTraefikRouteWithoutDeclarationIsInternetAccessible(t *testing.T) {
 	services := fixtureWithNetworks(t)
-	exposures, _ := AnalyzeExposure(testContext, services, defaultExposureConfig())
+	exposures, warnings := AnalyzeExposure(testContext, services, defaultExposureConfig())
 	got := exposureFor(t, exposures, serviceNamed(t, services, "app_web"))
-	if got.AssessmentStatus != "unassessed" || !hasEvidence(got, "Host(`app.example.com`)") {
-		t.Fatalf("app_web = %+v", got)
+	if !got.InternetAccessible || got.AssessmentStatus != "assessed" || got.AssessmentBasis != "observed" || got.Provider != Provider || !hasEvidence(got, "Host(`app.example.com`)") {
+		t.Fatalf("app_web = %+v, want observed internet-accessible with router rule evidence", got)
+	}
+	if strings.Contains(strings.Join(warnings, "\n"), "app_web") {
+		t.Fatalf("warnings = %v, must not warn on proxy-routed app_web", warnings)
 	}
 }
 
@@ -160,7 +163,7 @@ func TestHostModePortIsEvidence(t *testing.T) {
 	}
 }
 
-func TestAnyProxyLabelIsExposureEvidence(t *testing.T) {
+func TestAnyProxyLabelMarksInternetAccessible(t *testing.T) {
 	services := []Service{
 		// Routed by Traefik's defaultRule: enabled, no explicit rule.
 		{Name: "app_default", Stack: "app", Image: "a:1", NetworksResolved: true, Labels: map[string]string{
@@ -175,27 +178,161 @@ func TestAnyProxyLabelIsExposureEvidence(t *testing.T) {
 			"caddy": "app.example.com", "caddy.reverse_proxy": "{{upstreams 80}}",
 		}},
 	}
-	data, exposureConfig, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  proxyLabelPrefixes:\n    - caddy\n"))
+	data, exposureConfig, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  proxyLabelPrefixes:\n    - traefik.\n    - caddy\n"))
 	if err != nil || len(data) != 0 {
 		t.Fatal(err)
 	}
 	exposures, warnings := AnalyzeExposure(testContext, services, exposureConfig)
 	for _, service := range services {
-		if got := exposureFor(t, exposures, service); got.AssessmentStatus != "unassessed" {
-			t.Fatalf("%s = %+v, want unassessed: a proxy label must never become an observed negative", service.Name, got)
+		got := exposureFor(t, exposures, service)
+		if !got.InternetAccessible || got.AssessmentStatus != "assessed" || got.AssessmentBasis != "observed" || got.Provider != Provider {
+			t.Fatalf("%s = %+v, want observed internet-accessible", service.Name, got)
 		}
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "app_default") || !strings.Contains(warnings[0], "app_caddy") {
-		t.Fatalf("warnings = %v", warnings)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none for proxy-routed services", warnings)
 	}
 }
 
-func TestConfiguredProxyPrefixesExtendTheDefault(t *testing.T) {
-	_, exposureConfig, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  proxyLabelPrefixes:\n    - caddy\n"))
+func TestTraefikDisableOptOutIsNotInternetAccessible(t *testing.T) {
+	services := []Service{
+		{Name: "app_disabled", Stack: "app", Image: "a:1", NetworksResolved: true, Labels: map[string]string{
+			"traefik.enable":              "false",
+			"traefik.http.routers.a.rule": "Host(`stale.example.com`)",
+		}},
+		{Name: "app_disabled_upper", Stack: "app", Image: "b:1", NetworksResolved: true, Labels: map[string]string{
+			"traefik.enable": " FALSE ",
+		}},
+		// Non-Traefik proxy labels still apply even when traefik.enable=false.
+		{Name: "app_caddy_only", Stack: "app", Image: "c:1", NetworksResolved: true, Labels: map[string]string{
+			"traefik.enable": "false",
+			"caddy":          "app.example.com",
+		}},
+	}
+	_, exposureConfig, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  proxyLabelPrefixes:\n    - traefik.\n    - caddy\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(exposureConfig.ProxyLabelPrefixes, ",") != DefaultProxyLabelPrefix+",caddy" {
-		t.Fatalf("prefixes = %v, want the Traefik default kept", exposureConfig.ProxyLabelPrefixes)
+	exposures, warnings := AnalyzeExposure(testContext, services, exposureConfig)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	for _, name := range []string{"app_disabled", "app_disabled_upper"} {
+		var svc Service
+		for _, s := range services {
+			if s.Name == name {
+				svc = s
+			}
+		}
+		got := exposureFor(t, exposures, svc)
+		if got.InternetAccessible || got.AssessmentStatus != "assessed" || got.AssessmentBasis != "observed" {
+			t.Fatalf("%s = %+v, want observed negative when traefik.enable=false", name, got)
+		}
+	}
+	caddy := exposureFor(t, exposures, services[2])
+	if !caddy.InternetAccessible || caddy.AssessmentStatus != "assessed" || caddy.AssessmentBasis != "observed" {
+		t.Fatalf("app_caddy_only = %+v, want observed internet-accessible via caddy label", caddy)
+	}
+}
+
+func TestAttestedFalseOverridesTraefikLabels(t *testing.T) {
+	services := []Service{
+		{Name: "app_internal_label", Stack: "app", Image: "internal:1", NetworksResolved: true, Labels: map[string]string{
+			"traefik.enable":                  "true",
+			"traefik.http.routers.i.rule":     "Host(`internal.corp`)",
+			ReachableLabel:                    "false",
+			JustificationLabel:                "Internal Traefik entrypoint only.",
+		}},
+		{Name: "app_internal_rule", Stack: "app", Image: "admin:1", NetworksResolved: true, Labels: map[string]string{
+			"traefik.enable":              "true",
+			"traefik.http.routers.a.rule": "Host(`admin.corp`)",
+		}},
+	}
+	cfg := defaultExposureConfig()
+	cfg.Rules = []ExposureRule{{Image: "admin", InternetReachable: false, Justification: "VPN-only entrypoint."}}
+	exposures, warnings := AnalyzeExposure(testContext, services, cfg)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	for _, svc := range services {
+		got := exposureFor(t, exposures, svc)
+		if got.InternetAccessible || got.AssessmentStatus != "assessed" || got.AssessmentBasis != "attested" {
+			t.Fatalf("%s = %+v, want attested false overriding traefik labels", svc.Name, got)
+		}
+		if !hasEvidence(got, "proxy label traefik.enable=true") {
+			t.Fatalf("%s evidence = %v, want proxy label preserved in evidence", svc.Name, got.Evidence)
+		}
+	}
+}
+
+func TestTraefikRouteWithUnresolvedNetworksIsStillInternetAccessible(t *testing.T) {
+	services := parseFixture(t)
+	exposures, _ := AnalyzeExposure(testContext, services, defaultExposureConfig())
+	got := exposureFor(t, exposures, serviceNamed(t, services, "app_web"))
+	if !got.InternetAccessible || got.AssessmentStatus != "assessed" || got.AssessmentBasis != "observed" {
+		t.Fatalf("app_web = %+v, want observed internet-accessible even without network list", got)
+	}
+}
+
+func TestTraefikRouteWithPublishedPortIsInternetAccessible(t *testing.T) {
+	service := Service{
+		Name: "printercloud_agent-api", Stack: "printercloud", Image: "agent-api:1", NetworksResolved: true,
+		Ports: []PublishedPort{{Protocol: "tcp", TargetPort: 80, PublishedPort: 11780, PublishMode: "ingress"}},
+		Labels: map[string]string{
+			"traefik.enable":                      "true",
+			"traefik.http.routers.agent-api.rule": "Host(`agent-api.example.com`)",
+		},
+	}
+	exposures, warnings := AnalyzeExposure(testContext, []Service{service}, defaultExposureConfig())
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	got := exposureFor(t, exposures, service)
+	if !got.InternetAccessible || got.AssessmentStatus != "assessed" || got.AssessmentBasis != "observed" {
+		t.Fatalf("agent-api = %+v, want observed internet-accessible", got)
+	}
+	if !hasEvidence(got, "publishes 11780/tcp") || !hasEvidence(got, "Host(`agent-api.example.com`)") {
+		t.Fatalf("evidence = %v, want both port and proxy label signals", got.Evidence)
+	}
+}
+
+func TestConfiguredProxyPrefixesReplaceTheDefault(t *testing.T) {
+	// Omitting proxyLabelPrefixes keeps the built-in Traefik default.
+	_, omitted, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  rules:\n    - image: edge\n      internetReachable: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(omitted.ProxyLabelPrefixes, ",") != DefaultProxyLabelPrefix {
+		t.Fatalf("omitted prefixes = %v, want [%s]", omitted.ProxyLabelPrefixes, DefaultProxyLabelPrefix)
+	}
+
+	// Setting proxyLabelPrefixes replaces the default instead of appending.
+	_, custom, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  proxyLabelPrefixes:\n    - caddy\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(custom.ProxyLabelPrefixes, ",") != "caddy" {
+		t.Fatalf("custom prefixes = %v, want [caddy]", custom.ProxyLabelPrefixes)
+	}
+
+	// An empty proxyLabelPrefixes list disables proxy-label inference.
+	_, disabled, err := ParseFedRAMPConfig([]byte("exposure.yaml: |\n  proxyLabelPrefixes: []\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(disabled.ProxyLabelPrefixes) != 0 {
+		t.Fatalf("disabled prefixes = %v, want empty", disabled.ProxyLabelPrefixes)
+	}
+	service := Service{
+		Name: "app_internal_traefik", Stack: "app", Image: "web:1", NetworksResolved: true,
+		Labels: map[string]string{"traefik.enable": "true", "traefik.http.routers.web.rule": "Host(`internal.corp`)"},
+	}
+	exposures, warnings := AnalyzeExposure(testContext, []Service{service}, disabled)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	got := exposureFor(t, exposures, service)
+	if got.InternetAccessible || got.AssessmentStatus != "assessed" || got.AssessmentBasis != "observed" {
+		t.Fatalf("exposure with proxyLabelPrefixes: [] = %+v, want observed negative", got)
 	}
 }

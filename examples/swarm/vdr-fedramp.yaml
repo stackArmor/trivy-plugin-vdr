@@ -95,14 +95,18 @@ scoring.yaml: |
 #   vdr.fedramp.io/internet-reachable-justification: "<why>"   # required for "false"
 #
 # For services matched by no rule and no label:
-#   - publishes ports or carries edge-proxy labels -> unassessed, with a warning
+#   - carries active edge-proxy labels (traefik.* unless traefik.enable=false,
+#     or proxyLabelPrefixes) -> observed internet reachable
+#   - publishes ports or runs on the host network -> unassessed (ports warn)
 #   - no published ports, no proxy labels, not on the host network
 #     -> observed not internet reachable
 # A "false" without a justification is ignored and reported as unassessed.
 exposure.yaml: |
-  # Extra label prefixes that mark a service as routed by an edge proxy. Every
-  # traefik.* label always counts; list other proxies here.
+  # Label prefixes that mark a service as routed by an edge proxy. Defaults to
+  # ["traefik."] when omitted; setting this list replaces the default (use []
+  # to disable proxy-label inference).
   proxyLabelPrefixes:
+    - traefik.
     - caddy
   # stack, name and image are globs; an omitted field matches anything.
   rules:

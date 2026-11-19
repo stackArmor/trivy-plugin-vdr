@@ -462,16 +462,19 @@ func TestRunSwarmReportsExposure(t *testing.T) {
 		t.Fatalf("decode report: %v", err)
 	}
 	statuses := map[string]string{}
+	reachable := map[string]bool{}
 	for _, resource := range report.Resources {
 		if resource.Exposure != nil {
 			statuses[resource.Resource.Name] = resource.Exposure.AssessmentBasis + "/" + resource.Exposure.AssessmentStatus
+			reachable[resource.Resource.Name] = resource.Exposure.InternetAccessible
 		}
 	}
-	if statuses["edge_traefik"] != "attested/assessed" || statuses["app_web"] != "/unassessed" {
-		t.Fatalf("exposure statuses = %v", statuses)
+	if statuses["edge_traefik"] != "attested/assessed" || statuses["app_web"] != "observed/assessed" || !reachable["app_web"] || statuses["mon_node-exporter"] != "/unassessed" {
+		t.Fatalf("exposure statuses = %v reachable = %v", statuses, reachable)
 	}
-	if !strings.Contains(strings.Join(report.Warnings, "\n"), "app_web") {
-		t.Fatalf("warnings = %v, want the undeclared app_web named", report.Warnings)
+	warningsText := strings.Join(report.Warnings, "\n")
+	if !strings.Contains(warningsText, "mon_node-exporter") || strings.Contains(warningsText, "app_web") {
+		t.Fatalf("warnings = %v, want undeclared mon_node-exporter named and proxy-routed app_web omitted", report.Warnings)
 	}
 }
 
