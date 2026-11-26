@@ -236,7 +236,7 @@ func sourceHelpSections(source string) []helpSection {
 	sections = append(sections,
 		helpSection{
 			title: "Vulnerability scanning",
-			flags: []string{"image-src", "parallel-scans", "timeout"},
+			flags: []string{"image-src", "parallel-scans", "timeout", "go-binary-filter"},
 		},
 		helpSection{
 			title: "Filtering, enrichment, and scoring",

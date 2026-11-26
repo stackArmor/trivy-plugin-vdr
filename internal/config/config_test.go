@@ -51,6 +51,9 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.ImageSrc != "remote" {
 		t.Fatalf("ImageSrc = %q, want remote", cfg.ImageSrc)
 	}
+	if !cfg.GoBinaryFilter {
+		t.Fatal("GoBinaryFilter = false, want true by default")
+	}
 	if cfg.ParallelScans != 5 {
 		t.Fatalf("ParallelScans = %d, want 5", cfg.ParallelScans)
 	}
@@ -93,6 +96,9 @@ func TestParseK8sComplianceDefaultsToTableAndSeparateOutputContract(t *testing.T
 	}
 	if cfg.Format != FormatTable {
 		t.Fatalf("Format = %q, want %q", cfg.Format, FormatTable)
+	}
+	if cfg.GoBinaryFilter {
+		t.Fatal("GoBinaryFilter = true for a compliance scan")
 	}
 	if !cfg.AllNamespaces {
 		t.Fatal("AllNamespaces = false, want true")
@@ -233,6 +239,7 @@ func TestParseScanAndCacheFlags(t *testing.T) {
 	cfg, err := Parse([]string{
 		"k8s",
 		"--image-src", "remote,local",
+		"--go-binary-filter=false",
 		"--parallel-scans", "3",
 		"--cache-cleanup", "always",
 		"--cache-min-free-gb", "0",
@@ -244,6 +251,9 @@ func TestParseScanAndCacheFlags(t *testing.T) {
 
 	if cfg.ImageSrc != "remote,local" {
 		t.Fatalf("ImageSrc = %q, want remote,local", cfg.ImageSrc)
+	}
+	if cfg.GoBinaryFilter {
+		t.Fatal("GoBinaryFilter = true, want false with --go-binary-filter=false")
 	}
 	if cfg.ParallelScans != 3 {
 		t.Fatalf("ParallelScans = %d, want 3", cfg.ParallelScans)
@@ -634,6 +644,9 @@ func TestParseReachabilityOnly(t *testing.T) {
 	}
 	if !cfg.ReachabilityOnly {
 		t.Fatal("ReachabilityOnly = false, want true")
+	}
+	if cfg.GoBinaryFilter {
+		t.Fatal("GoBinaryFilter = true for a reachability-only report")
 	}
 	if cfg.View != ViewResources {
 		t.Fatalf("View = %q, want resources", cfg.View)

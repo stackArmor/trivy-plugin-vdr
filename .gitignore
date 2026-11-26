@@ -4,6 +4,7 @@ docs/superpowers/
 # Build output
 /vdr
 /vdr.exe
+/govulncheck
 /dist/
 
 # Scan output artifacts

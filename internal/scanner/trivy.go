@@ -45,6 +45,7 @@ type CommandRunner interface {
 type TrivyRunner struct {
 	Binary          string
 	ImageSrc        string
+	GoBinaryFilter  *GoBinaryFilter
 	CacheDir        string
 	DockerConfigDir string
 	// RegistryAuths provides normalized host-scoped credentials. Each image scan
@@ -250,16 +251,24 @@ func (r TrivyRunner) scanOnce(ctx context.Context, cacheDir, image string, timeo
 		}
 	}
 	args = append(args, "--timeout", timeout.String(), image)
+	if r.GoBinaryFilter != nil && timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	stdout, stderr, err := r.imageCommandRunner(image).Run(ctx, r.binary(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("trivy image scan failed for %q: %w: %s", image, err, string(bytes.TrimSpace(stderr)))
 	}
 
-	findings, err := parseTrivyFindings(stdout, image)
-	if err != nil {
-		return nil, err
+	var report trivyReport
+	if err := json.Unmarshal(stdout, &report); err != nil {
+		return nil, fmt.Errorf("parse trivy JSON for %q: %w", image, err)
 	}
-	return findings, nil
+	if r.GoBinaryFilter != nil {
+		r.filterGoBinaryFindings(ctx, image, &report)
+	}
+	return report.findings(image), nil
 }
 
 // useOCIVEX reports whether image opted into OCI CycloneDX VEX lookup. VEX is
@@ -793,12 +802,7 @@ func mergeStrings(existing, added []string) []string {
 	return result
 }
 
-func parseTrivyFindings(data []byte, image string) ([]model.Finding, error) {
-	var report trivyReport
-	if err := json.Unmarshal(data, &report); err != nil {
-		return nil, fmt.Errorf("parse trivy JSON for %q: %w", image, err)
-	}
-
+func (report trivyReport) findings(image string) []model.Finding {
 	var findings []model.Finding
 	for _, result := range report.Results {
 		for _, vulnerability := range result.Vulnerabilities {
@@ -819,7 +823,7 @@ func parseTrivyFindings(data []byte, image string) ([]model.Finding, error) {
 			findings = append(findings, finding)
 		}
 	}
-	return findings, nil
+	return findings
 }
 
 func findingFromTrivyVulnerability(vulnerability trivyVulnerability, image string, result trivyResult) model.Finding {
@@ -866,7 +870,8 @@ func findingFromTrivyVulnerability(vulnerability trivyVulnerability, image strin
 }
 
 type trivyReport struct {
-	Results []trivyResult `json:"Results"`
+	Metadata trivyImageMetadata `json:"Metadata"`
+	Results  []trivyResult      `json:"Results"`
 }
 
 type trivyResult struct {
@@ -879,12 +884,15 @@ type trivyResult struct {
 }
 
 type trivyVulnerability struct {
-	VulnerabilityID  string               `json:"VulnerabilityID"`
-	VendorIDs        []string             `json:"VendorIDs"`
-	PkgID            string               `json:"PkgID"`
-	PkgName          string               `json:"PkgName"`
-	PkgPath          string               `json:"PkgPath"`
-	PkgIdentifier    trivyPkgIdentifier   `json:"PkgIdentifier"`
+	VulnerabilityID string             `json:"VulnerabilityID"`
+	VendorIDs       []string           `json:"VendorIDs"`
+	PkgID           string             `json:"PkgID"`
+	PkgName         string             `json:"PkgName"`
+	PkgPath         string             `json:"PkgPath"`
+	PkgIdentifier   trivyPkgIdentifier `json:"PkgIdentifier"`
+	Layer           struct {
+		Digest string `json:"Digest"`
+	} `json:"Layer"`
 	InstalledVersion string               `json:"InstalledVersion"`
 	FixedVersion     string               `json:"FixedVersion"`
 	Severity         string               `json:"Severity"`

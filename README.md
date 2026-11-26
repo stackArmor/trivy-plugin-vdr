@@ -480,6 +480,19 @@ WARN	trivy-plugin-vdr 4.12.0 is available (running 4.11.0); upgrade with 'trivy 
 
 The lookup is bounded to 3 seconds, never fails or delays a scan beyond that, and is skipped for development builds. A failed lookup (offline, blocked egress, rate limit) is only reported with `--debug`. Disable it with `--skip-update-check` or `VDR_NO_UPDATE_CHECK=1`, for example on air-gapped runners.
 
+## Go binary filtering
+
+VDR filters Go binary findings by default in image vulnerability scans. Release archives and `make install-local` include a pinned `govulncheck` executable. VDR looks beside its own executable first, then on `PATH`. The build worker needs access to the Go vulnerability database. Pass `--go-binary-filter=false` to include the original Trivy findings.
+
+Up to two image workers at a time fetch layers and check Go binaries. They share a 5 GiB temporary file budget, honor the configured free disk thresholds on the temporary filesystem, and remove each binary after checking it. Waiting, downloading, and checking use the time left in the image attempt's `--timeout`. If a check cannot finish or the layer cannot be verified, VDR keeps the corresponding Trivy findings. The log summarizes omissions, skips, peak reserved space, and cumulative filter time across images.
+
+```sh
+trivy vdr k8s --namespace sentinelone --format json
+trivy vdr image --go-binary-filter=false --format json registry.example.com/app:latest
+```
+
+VDR uses the image digest, platform, and layer reported by Trivy to analyze the same executable with `govulncheck` in binary mode. It omits a finding when the advisory and installed module version match and the binary scan finds no vulnerable symbols, or the advisory explicitly excludes the binary's build platform. Findings without enough evidence stay in the report. A missing scanner or an inaccessible image layer also leaves the findings in place and produces a warning on stderr. Both settings use the same JSON schema.
+
 ## Image scanning and Trivy cache cleanup
 
 `vdr` scans each unique full image reference once and fans findings back out to every Kubernetes, Cloud Run, or standalone image resource that uses that image. Scan results are returned in deterministic image-reference order, independent of the order in which concurrent scans finish.

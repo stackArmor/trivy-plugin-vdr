@@ -726,6 +726,10 @@ func scanAndReport(ctx context.Context, cfg config.Config, logger *log.Logger, s
 		VEXOCIRegistries: cfg.VEXOCIRegistries,
 		Logger:           logger,
 	}
+	if cfg.GoBinaryFilter {
+		trivyRunner.GoBinaryFilter = scanner.NewGoBinaryFilter(cfg.CacheMinFreeGB, cfg.CacheMinFreePercent)
+		defer trivyRunner.GoBinaryFilter.LogSummary(logger)
+	}
 	logger.Info("downloading Trivy vulnerability and Java databases")
 	if dbErr := trivyRunner.EnsureDatabases(ctx); dbErr != nil {
 		logger.Error("database download failed: %v", dbErr)

@@ -1,4 +1,4 @@
-.PHONY: build test install-local chain-catalog
+.PHONY: build govulncheck test install-local chain-catalog
 
 BINARY := vdr
 PLUGIN_VERSION := $(shell awk '/^version:/ {print $$2; exit}' plugin.yaml)
@@ -18,7 +18,11 @@ chain-catalog:
 		--attack "$(ATTACK)" \
 		--output internal/chaincatalog/data/catalog.json
 
-install-local: build
+govulncheck:
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o govulncheck golang.org/x/vuln/cmd/govulncheck
+
+install-local: build govulncheck
 	mkdir -p $(HOME)/.trivy/plugins/vdr
 	cp plugin.yaml $(HOME)/.trivy/plugins/vdr/plugin.yaml
 	cp $(BINARY) $(HOME)/.trivy/plugins/vdr/$(BINARY)
+	cp govulncheck $(HOME)/.trivy/plugins/vdr/govulncheck

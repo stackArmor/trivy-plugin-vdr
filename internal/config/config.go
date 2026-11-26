@@ -79,6 +79,7 @@ type Config struct {
 	CacheDir                     string
 	Timeout                      time.Duration
 	ImageSrc                     string
+	GoBinaryFilter               bool
 	ParallelScans                int
 	CacheCleanup                 string
 	CacheMinFreeGB               int
@@ -240,6 +241,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	fs.StringVar(&timeout, "timeout", timeout, "scan timeout")
 	fs.StringVar(&timeout, "t", timeout, "alias for --timeout")
 	fs.StringVar(&cfg.ImageSrc, "image-src", cfg.ImageSrc, "Trivy image source")
+	fs.BoolVar(&cfg.GoBinaryFilter, "go-binary-filter", cfg.GoBinaryFilter, "omit Go binary findings when govulncheck confirms vulnerable code is absent or the platform is unaffected")
 	fs.IntVar(&cfg.ParallelScans, "parallel-scans", cfg.ParallelScans, "maximum concurrent image scans")
 	fs.StringVar(&cfg.CacheCleanup, "cache-cleanup", cfg.CacheCleanup, "Trivy scan cache cleanup policy: auto, always, or never")
 	fs.IntVar(&cfg.CacheMinFreeGB, "cache-min-free-gb", cfg.CacheMinFreeGB, "minimum free disk space in GB before auto cache cleanup")
@@ -336,6 +338,7 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 	htmlTemplateSet := false
 	minEPSSSet := false
 	formatSet := false
+	goBinaryFilterSet := false
 	complianceUnsupportedFlag := ""
 	helmSpecificFlag := ""
 	k8sSpecificFlag := ""
@@ -365,6 +368,8 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 			minEPSSSet = true
 		case "format", "f":
 			formatSet = true
+		case "go-binary-filter":
+			goBinaryFilterSet = true
 		case "values", "release-name", "chart-version", "repo", "ingress-chart", "ingress-chart-version", "ingress-repo", "ingress-values", "ingress-release-name", "ingress-namespace", "config-map", "kube-version", "api-versions", "include-crds":
 			helmSpecificFlag = f.Name
 		case "sip-config-map", "debug-bundle":
@@ -422,8 +427,13 @@ func ParseWithOutput(args []string, output io.Writer) (Config, error) {
 		if cfg.Format == FormatCycloneDX {
 			return Config{}, errors.New("--format cyclonedx is not supported for source k8s-compliance; use table or json")
 		}
+		cfg.GoBinaryFilter = false
 	}
 	if cfg.ReachabilityOnly {
+		if goBinaryFilterSet && cfg.GoBinaryFilter {
+			return Config{}, errors.New("--go-binary-filter requires an image scan")
+		}
+		cfg.GoBinaryFilter = false
 		if cfg.ScanReachabilityOnly {
 			return Config{}, errors.New("--reachability-only cannot be used with --scan-reachability-only")
 		}
@@ -688,6 +698,7 @@ func Default() Config {
 		CacheDir:              filepath.Join(home, ".cache", "trivy", "vdr"),
 		Timeout:               30 * time.Minute,
 		ImageSrc:              "remote",
+		GoBinaryFilter:        true,
 		ParallelScans:         5,
 		CacheCleanup:          CacheCleanupAuto,
 		CacheMinFreeGB:        10,
